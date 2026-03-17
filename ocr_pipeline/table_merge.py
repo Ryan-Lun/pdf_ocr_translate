@@ -3,41 +3,29 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-
+import pdfplumber
 
 def is_chinese(text):
     return re.search(r"[\u4e00-\u9fff]", text)
 
-
 def is_english(text):
     return re.search(r"[A-Za-z]", text)
-
 
 def is_mixed(text):
     return is_chinese(text) and is_english(text)
 
-
 def is_code_like(text):
     return re.fullmatch(r"[A-Za-z0-9\-_/\. %]+", text)
-
 
 def should_translate(text):
     text = text.strip()
     if not text:
         return False
-    if is_mixed(text):
-        return False
-    if is_code_like(text):
-        return False
-    if is_chinese(text):
-        return True
-    return False
-
+    return bool(re.search(r"[\u4e00-\u9fff]", text))
 
 def box_center(box):
     x1, y1, x2, y2 = box
     return ((x1 + x2) / 2, (y1 + y2) / 2)
-
 
 def intersection_area(a, b):
     x1 = max(a[0], b[0])
@@ -47,13 +35,10 @@ def intersection_area(a, b):
 
     if x2 < x1 or y2 < y1:
         return 0
-
     return (x2 - x1) * (y2 - y1)
-
 
 def box_area(box):
     return (box[2] - box[0]) * (box[3] - box[1])
-
 
 def overlap_ratio(cell_box, rec_box):
     inter = intersection_area(cell_box, rec_box)
@@ -62,87 +47,174 @@ def overlap_ratio(cell_box, rec_box):
         return 0
     return inter / area
 
-
-def center_inside(cell_box, rec_box):
-    cx1, cy1, cx2, cy2 = cell_box
-    rx, ry = box_center(rec_box)
-
-    return cx1 <= rx <= cx2 and cy1 <= ry <= cy2
-
-
-def is_inside_cell(cell_box, rec_box, overlap_thresh=0.7):
-    if center_inside(cell_box, rec_box):
-        return True
-    if overlap_ratio(cell_box, rec_box) > overlap_thresh:
-        return True
-    return False
-
-
 def sort_by_reading_order(texts_with_box):
-    def center(box):
+    def get_stats(box):
         x1, y1, x2, y2 = box
-        return ((x1 + x2) / 2, (y1 + y2) / 2)
+        return (x1 + x2) / 2, (y1 + y2) / 2, (y2 - y1) 
+    
+    if not texts_with_box:
+        return []
+    
+    avg_h = sum((item[1][3] - item[1][1]) for item in texts_with_box) / len(texts_with_box)
+    return sorted(texts_with_box, key=lambda x: (round(get_stats(x[1])[1] / (avg_h * 0.5)), get_stats(x[1])[0]))
 
-    return sorted(texts_with_box, key=lambda x: (center(x[1])[1], center(x[1])[0]))
+def group_texts_by_proximity(texts_with_box, x_thresh=3.0, y_thresh=1.2):
+    if not texts_with_box:
+        return []
+        
+    groups = []
+    current_group = [texts_with_box[0]]
+    
+    for i in range(1, len(texts_with_box)):
+        curr = texts_with_box[i]
+        prev = current_group[-1]
+        
+        p_box, c_box = prev[1], curr[1]
+        h_prev, h_curr = p_box[3] - p_box[1], c_box[3] - c_box[1]
+        avg_h = (h_prev + h_curr) / 2.0
+        x_dist = max(0, max(p_box[0], c_box[0]) - min(p_box[2], c_box[2]))
+        y_dist = max(0, max(p_box[1], c_box[1]) - min(p_box[3], c_box[3]))
+        p_cy = (p_box[1] + p_box[3]) / 2
+        c_cy = (c_box[1] + c_box[3]) / 2
+        is_same_line = abs(p_cy - c_cy) < (avg_h * 0.6)
 
+        should_merge = False
+        if is_same_line:
+            if x_dist <= avg_h * x_thresh:
+                should_merge = True
+        else:
+            if y_dist <= avg_h * y_thresh:
+                x_overlap = min(p_box[2], c_box[2]) - max(p_box[0], c_box[0])
+                if x_overlap > -avg_h:
+                    should_merge = True
+        
+        if should_merge:
+            current_group.append(curr)
+        else:
+            groups.append(current_group)
+            current_group = [curr]
+            
+    if current_group:
+        groups.append(current_group)
+    return groups
 
-def merge_cell_text(cell_box, rec_texts, rec_boxes):
-    texts_in_cell = []
+def normalize_box_to_bbox(box):
+    if not box: return [0, 0, 0, 0]
+    if isinstance(box[0], (list, tuple)):
+        xs = [float(p[0]) for p in box]
+        ys = [float(p[1]) for p in box]
+        return [min(xs), min(ys), max(xs), max(ys)]
+    return [float(v) for v in box]
 
-    for txt, box in zip(rec_texts, rec_boxes):
-        if is_inside_cell(cell_box, box):
-            texts_in_cell.append((txt, box))
-
-    if not texts_in_cell:
-        return ""
-
-    texts_in_cell = sort_by_reading_order(texts_in_cell)
-    merged = "".join([t[0] for t in texts_in_cell])
-    return merged.strip()
-
-
-def add_merged_cells_field(data, verbose: bool = False):
+def add_merged_cells_field(data, pdf_path: str = None, page_index: int = 0, scale_factor: float = 1.0, verbose: bool = False):
     table_res_list = data.get("table_res_list")
     if not isinstance(table_res_list, list) or not table_res_list:
         return data
+    
+    all_pdf_cells = []
+    is_landscape = False 
+
+    if pdf_path and Path(pdf_path).exists():
+        with pdfplumber.open(pdf_path) as pdf:
+            if page_index < len(pdf.pages):
+                page = pdf.pages[page_index]
+
+                if page.width > page.height:
+                    is_landscape = True
+
+                for table in page.find_tables():
+                    for cell in table.cells:
+                        if cell is None:
+                            continue
+                        x0, top, x1, bottom = cell
+                        all_pdf_cells.append([
+                            x0 * scale_factor, 
+                            top * scale_factor, 
+                            x1 * scale_factor, 
+                            bottom * scale_factor
+                        ])
+
+    if not all_pdf_cells:
+        max_x = max([normalize_box_to_bbox(b)[2] for t in table_res_list for b in t.get("table_ocr_pred", {}).get("rec_boxes", [])] + [0])
+        max_y = max([normalize_box_to_bbox(b)[3] for t in table_res_list for b in t.get("table_ocr_pred", {}).get("rec_boxes", [])] + [0])
+        is_landscape = (max_x > max_y)
+
+
+    dynamic_y_thresh = 4 if is_landscape else 0.7
+
+    unique_cells = []
+    seen = set()
+    for c in all_pdf_cells:
+        tup = (round(c[0], 1), round(c[1], 1), round(c[2], 1), round(c[3], 1))
+        if tup not in seen:
+            seen.add(tup)
+            unique_cells.append(c)
 
     for table_idx, table in enumerate(table_res_list):
-        if verbose:
-            print(f"\nProcessing Table {table_idx + 1}")
-
-        cell_boxes = table.get("cell_box_list") or []
         table_ocr_pred = table.get("table_ocr_pred") or {}
         rec_texts = table_ocr_pred.get("rec_texts") or []
-        rec_boxes = table_ocr_pred.get("rec_boxes") or []
-        if (
-            not isinstance(cell_boxes, list)
-            or not isinstance(rec_texts, list)
-            or not isinstance(rec_boxes, list)
-        ):
+        raw_rec_boxes = table_ocr_pred.get("rec_boxes") or []
+        rec_boxes = [normalize_box_to_bbox(b) for b in raw_rec_boxes]
+        
+        if not rec_texts or not rec_boxes:
             continue
 
+        cell_buckets = {i: [] for i in range(len(unique_cells))}
+
+        for txt, box in zip(rec_texts, rec_boxes):
+            best_cell_idx = -1
+            min_cell_area = float('inf')
+            
+            for i, cell_box in enumerate(unique_cells):
+                overlap = overlap_ratio(cell_box, box)
+                if overlap >= 0.90:
+                    area = box_area(cell_box)
+                    if area < min_cell_area:
+                        min_cell_area = area
+                        best_cell_idx = i
+            if best_cell_idx != -1:
+                cell_buckets[best_cell_idx].append((txt, box))
+
         merged_cells = []
-
-        for cell_idx, cell_box in enumerate(cell_boxes):
-            if not (isinstance(cell_box, list) and len(cell_box) == 4):
+        
+        for cell_idx, items in cell_buckets.items():
+            if not items:
                 continue
+            
+            cell_box = unique_cells[cell_idx]
+            items = sort_by_reading_order(items)
 
-            merged_text = merge_cell_text(cell_box, rec_texts, rec_boxes)
-            translate_flag = should_translate(merged_text)
+            grouped_texts = group_texts_by_proximity(items, x_thresh=3.0, y_thresh=dynamic_y_thresh)
+            for group in grouped_texts:
+                merged_text = " ".join([t[0].strip() for t in group])
+                if not merged_text:
+                    continue
+                    
+                translate_flag = should_translate(merged_text)
+                if not translate_flag:
+                    continue
+                    
+                if len(group) == 1:
+                    target_box = group[0][1]
+                else:
+                    xs = [item[1][0] for item in group] + [item[1][2] for item in group]
+                    ys = [item[1][1] for item in group] + [item[1][3] for item in group]
+                    target_box = [min(xs), min(ys), max(xs), max(ys)]
 
-            merged_cells.append(
-                {
-                    "cell_box": cell_box,
+                merged_cells.append({
+                    "cell_box": target_box,
                     "merged_text": merged_text,
                     "should_translate": translate_flag,
-                }
-            )
-
-            if verbose:
-                print(f"[Cell {cell_idx + 1}] {merged_text} -> {translate_flag}")
+                    "original_table_cell": cell_box,
+                    "original_ocr_components": [
+                        {"text": item[0], "box": item[1]} for item in group
+                    ]
+                })
+                
+                if verbose:
+                    print(f"[Merged] {merged_text} -> translate: {translate_flag}")
 
         table["merged_cells"] = merged_cells
-
     return data
 
 

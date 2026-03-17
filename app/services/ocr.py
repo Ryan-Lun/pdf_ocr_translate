@@ -146,29 +146,27 @@ def resolve_fontfile() -> str | None:
             return candidate
     return None
 
-
+# 換行
 def wrap_text_lines(text: str, max_width: float, font: fitz.Font, font_size: float) -> list[str]:
-    if not text:
-        return []
-    if max_width <= 0:
-        return [text]
-    lines: list[str] = []
+    if not text: return []
+    lines = []
     for raw_line in str(text).splitlines():
         if raw_line == "":
             lines.append("")
             continue
+            
         current = ""
-        for ch in raw_line:
-            candidate = current + ch
+        for word in re.split(r'( )', raw_line):
+            candidate = current + word
             if current and font.text_length(candidate, font_size) > max_width:
                 lines.append(current.rstrip())
-                current = ch.lstrip()
+                current = word.lstrip()
             else:
                 current = candidate
         if current:
             lines.append(current.rstrip())
+            
     return lines
-
 
 def load_ocr_pages(job_dir: Path) -> list[dict[str, Any]]:
     json_dir = job_dir / "ocr_json"

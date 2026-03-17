@@ -231,18 +231,32 @@ def run_layout_parsing_predict(
     return uniq
 
 
-def merge_pp_json_inprocess(pp_json_paths: list[Path]) -> list[Path]:
+def merge_pp_json_inprocess(pp_json_paths: list[Path], pdf_path: Path | None = None, dpi: int = 300) -> list[Path]:
     if merge_keep_original_json is None and add_merged_cells_field is None:
         return pp_json_paths
+    
     merged_paths: list[Path] = []
+    scale_factor = dpi / 72.0
+    
     for js_path in pp_json_paths:
         try:
             data = json.loads(js_path.read_text(encoding="utf-8"))
             merged = data
             if merge_keep_original_json is not None:
                 merged = merge_keep_original_json(merged)
+            
             if add_merged_cells_field is not None:
-                merged = add_merged_cells_field(merged, verbose=False)
+                page_idx = infer_page_index_from_stem(js_path.stem)
+                if page_idx is None:
+                    page_idx = 0
+                    
+                merged = add_merged_cells_field(
+                    merged, 
+                    pdf_path=str(pdf_path) if pdf_path else None, 
+                    page_index=page_idx,
+                    scale_factor=scale_factor,
+                    verbose=False
+                )
             js_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
             merged_paths.append(js_path)
         except Exception as exc:
@@ -686,6 +700,8 @@ def translate_texts_with_openai(
 
     uniq: list[str] = []
     normalized: list[str] = []
+    uniq: list[str] = []
+    normalized: list[str] = []
     for text in texts:
         key = normalize_line(text)
         if key:
@@ -693,9 +709,17 @@ def translate_texts_with_openai(
         if not key:
             normalized.append("")
             continue
+            
+        # 文字沒有出現中文就不送入翻譯
+        if not bool(re.search(r"[\u4e00-\u9fff]", key)) or re.fullmatch(r"[\x00-\x7F]+", key):
+            cache[key] = key
+            normalized.append(key)
+            continue
+
         if key in cache:
             normalized.append(key)
             continue
+            
         cache[key] = ""
         uniq.append(key)
         normalized.append(key)
@@ -809,8 +833,10 @@ def overlay_one_page(
         tables = load_table_bboxes_fallback_layout(data)
     table_bboxes = [t["bbox"] for t in tables]
     paragraph_bboxes: list[list[float]] = []
-    merged_cells: list[tuple[list[float], str]] = []
+    
+    precise_overlay_items: list[tuple[list[float], str]] = []
     merged_cells_all: list[list[float]] = []
+    
     for table in data.get("table_res_list", []) or []:
         for cell in table.get("merged_cells", []) or []:
             if not isinstance(cell, dict):
@@ -821,10 +847,24 @@ def overlay_one_page(
             text = str(cell.get("merged_text") or "").strip()
             if not text:
                 continue
+            
             box_vals = [float(v) for v in box]
             merged_cells_all.append(box_vals)
+            
             if bool(cell.get("should_translate")):
-                merged_cells.append((box_vals, text))
+                components = cell.get("original_ocr_components", [])
+                if components and len(components) > 0:
+                    xs = []
+                    ys = []
+                    for comp in components:
+                        b = comp.get("box") or comp.get("ocr_box")
+                        xs.extend([b[0], b[2]])
+                        ys.extend([b[1], b[3]])
+                    target_box = [min(xs), min(ys), max(xs), max(ys)]
+                    precise_overlay_items.append((target_box, text))
+                else:
+                    precise_overlay_items.append((box_vals, text))
+
     if merged_cells_all and not table_bboxes:
         derived_tables: list[list[float]] = []
         for table in data.get("table_res_list", []) or []:
@@ -839,8 +879,8 @@ def overlay_one_page(
             if xs and ys:
                 derived_tables.append([min(xs), min(ys), max(xs), max(ys)])
         table_bboxes = derived_tables
+        
     skip_for_tables = skip_text_inside_table or bool(merged_cells_all)
-
     dbg_shape = page.new_shape() if draw_boxes else None
 
     for blk in data.get("parsing_res_list", []):
@@ -881,16 +921,16 @@ def overlay_one_page(
             if not info.get("ok", True):
                 print("[WARN] paragraph overflow:", "page=", page.number, "len=", len(content), "bbox_px=", bb_px)
 
-    if merged_cells:
-        for cell_box, cell_text in merged_cells:
-            rect = px_bbox_to_rect(cell_box, img_w_px, img_h_px, page)
+    if precise_overlay_items:
+        for target_box, cell_text in precise_overlay_items:
+            rect = px_bbox_to_rect(target_box, img_w_px, img_h_px, page)
             if rect.is_empty:
                 continue
             if dbg_shape is not None:
                 dbg_shape.draw_rect(rect)
                 dbg_shape.finish(color=(1, 0.55, 0.1), width=0.6)
             if draw_text:
-                fs_max = min(12.0, max(paragraph_min_fs, rect.height * 0.6))
+                fs_max = min(12.0, max(paragraph_min_fs, rect.height * 0.8))
                 insert_paragraph_autowrap_shrink(
                     page=page,
                     rect=rect,
@@ -960,7 +1000,8 @@ def overlay_one_page(
     if dbg_shape is not None:
         dbg_shape.commit()
 
-    print(f"[DEBUG] page={page.number} tables={len(table_bboxes)} merged_cells={len(merged_cells)} ocr_line_hits={hit}")
+    print(f"[DEBUG] page={page.number} tables={len(table_bboxes)} merged_cells={len(precise_overlay_items)} ocr_line_hits={hit}")
+
 
 
 def overlay_debug_pdf(
@@ -1088,7 +1129,7 @@ def run_pipeline(
         progress_cb=progress_cb,
         cancel_event=cancel_event,
     )
-    pp_json_paths = merge_pp_json_inprocess(pp_json_paths)
+    pp_json_paths = merge_pp_json_inprocess(pp_json_paths, pdf_path=pdf_path, dpi=dpi)
 
     norm_json_dir.mkdir(parents=True, exist_ok=True)
     per_page_with_coords_jsons: list[Path] = []
