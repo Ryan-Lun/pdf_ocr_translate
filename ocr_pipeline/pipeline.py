@@ -699,8 +699,7 @@ def translate_texts_with_openai(
         raise RuntimeError(f"OpenAI translation failed: {last_err}") from last_err
 
     uniq: list[str] = []
-    normalized: list[str] = []
-    uniq: list[str] = []
+
     normalized: list[str] = []
     for text in texts:
         key = normalize_line(text)
