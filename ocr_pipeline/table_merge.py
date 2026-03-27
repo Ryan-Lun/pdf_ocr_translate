@@ -106,6 +106,7 @@ def normalize_box_to_bbox(box):
         return [min(xs), min(ys), max(xs), max(ys)]
     return [float(v) for v in box]
 
+
 def add_merged_cells_field(data, pdf_path: str = None, page_index: int = 0, scale_factor: float = 1.0, verbose: bool = False):
     table_res_list = data.get("table_res_list")
     if not isinstance(table_res_list, list) or not table_res_list:
@@ -135,10 +136,16 @@ def add_merged_cells_field(data, pdf_path: str = None, page_index: int = 0, scal
                         ])
 
     if not all_pdf_cells:
+        # Fallback to OCR-detected cells from table_res_list
+        for t in table_res_list:
+            ocr_cells = t.get("cell_box_list") or []
+            for box in ocr_cells:
+                if isinstance(box, (list, tuple)) and len(box) == 4:
+                    all_pdf_cells.append([float(v) for v in box])
+
         max_x = max([normalize_box_to_bbox(b)[2] for t in table_res_list for b in t.get("table_ocr_pred", {}).get("rec_boxes", [])] + [0])
         max_y = max([normalize_box_to_bbox(b)[3] for t in table_res_list for b in t.get("table_ocr_pred", {}).get("rec_boxes", [])] + [0])
         is_landscape = (max_x > max_y)
-
 
     dynamic_y_thresh = 4 if is_landscape else 0.7
 
@@ -161,7 +168,6 @@ def add_merged_cells_field(data, pdf_path: str = None, page_index: int = 0, scal
 
         cell_buckets = {i: [] for i in range(len(unique_cells))}
 
-
         matched_ocr_indices = set()
         for ocr_idx, (txt, box) in enumerate(zip(rec_texts, rec_boxes)):
             best_cell_idx = -1
@@ -180,7 +186,6 @@ def add_merged_cells_field(data, pdf_path: str = None, page_index: int = 0, scal
 
         merged_cells = []
         
-
         for cell_idx, items in cell_buckets.items():
             if not items:
                 continue
@@ -213,8 +218,8 @@ def add_merged_cells_field(data, pdf_path: str = None, page_index: int = 0, scal
                     "original_ocr_components": [{"text": item[0], "box": item[1]} for item in group]
                 })
         
-                print(f"[Merged] {merged_text} -> translate: {translate_flag}")
-
+                if verbose:
+                    print(f"[Merged] {merged_text} -> translate: {translate_flag}")
 
         orphaned_items = []
         for ocr_idx, (txt, box) in enumerate(zip(rec_texts, rec_boxes)):
@@ -251,12 +256,58 @@ def add_merged_cells_field(data, pdf_path: str = None, page_index: int = 0, scal
                     ]
                 })
                 
-                print(f"[Rescued] {merged_text} -> translate: {translate_flag}")
+                if verbose:
+                    print(f"[Rescued] {merged_text} -> translate: {translate_flag}")
 
+        table_all_text = "".join(rec_texts).replace(" ", "")
+        overall_ocr = data.get("overall_ocr_res") or {}
+        o_texts = overall_ocr.get("rec_texts") or []
+        o_raw_boxes = overall_ocr.get("rec_boxes") or []
+        o_boxes = [normalize_box_to_bbox(b) for b in o_raw_boxes]
+
+        if unique_cells and o_texts and o_boxes:
+            table_x0 = min(c[0] for c in unique_cells)
+            table_y0 = min(c[1] for c in unique_cells)
+            table_x1 = max(c[2] for c in unique_cells)
+            table_y1 = max(c[3] for c in unique_cells)
+
+            for o_txt, o_box in zip(o_texts, o_boxes):
+                o_txt_clean = o_txt.strip().replace(" ", "")
+                if not o_txt_clean:
+                    continue
+
+                if o_txt_clean not in table_all_text:
+                    cx = (o_box[0] + o_box[2]) / 2
+                    cy = (o_box[1] + o_box[3]) / 2
+                    
+                    if table_x0 <= cx <= table_x1 and table_y0 <= cy <= table_y1:
+                        merged_text = o_txt.strip()
+                        translate_flag = should_translate(merged_text)
+                        
+                        if translate_flag:
+                            best_patch_idx = -1
+                            min_patch_area = float('inf')
+                            for i, cell_box in enumerate(unique_cells):
+                                if cell_box[0] <= cx <= cell_box[2] and cell_box[1] <= cy <= cell_box[3]:
+                                    area = box_area(cell_box)
+                                    if area < min_patch_area:
+                                        min_patch_area = area
+                                        best_patch_idx = i
+                                        
+                            patch_cell = unique_cells[best_patch_idx] if best_patch_idx != -1 else o_box
+                            merged_cells.append({
+                                "cell_box": o_box,
+                                "merged_text": merged_text,
+                                "should_translate": translate_flag,
+                                "original_table_cell": patch_cell,
+                                "original_ocr_components": [{"text": o_txt, "box": o_box}]
+                            })
+                            
+                            if verbose:
+                                print(f"[Missing Text]: {merged_text}")
 
         merged_cells.sort(key=lambda x: (round(x["cell_box"][1], 1), round(x["cell_box"][0], 1)))
         table["merged_cells"] = merged_cells
-
     return data
 
 
