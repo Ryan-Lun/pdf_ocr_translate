@@ -362,7 +362,6 @@ def px_point_to_pdf_pt(
     sx = page_w_pt / img_w_px
     sy = page_h_pt / img_h_px
     x = x_px * sx
-    # image origin is top-left, PDF origin is bottom-left
     y = y_px * sy
     
     if rot == 90:
