@@ -146,29 +146,27 @@ def resolve_fontfile() -> str | None:
             return candidate
     return None
 
-
+# 換行
 def wrap_text_lines(text: str, max_width: float, font: fitz.Font, font_size: float) -> list[str]:
-    if not text:
-        return []
-    if max_width <= 0:
-        return [text]
-    lines: list[str] = []
+    if not text: return []
+    lines = []
     for raw_line in str(text).splitlines():
         if raw_line == "":
             lines.append("")
             continue
+            
         current = ""
-        for ch in raw_line:
-            candidate = current + ch
+        for word in re.split(r'( )', raw_line):
+            candidate = current + word
             if current and font.text_length(candidate, font_size) > max_width:
                 lines.append(current.rstrip())
-                current = ch.lstrip()
+                current = word.lstrip()
             else:
                 current = candidate
         if current:
             lines.append(current.rstrip())
+            
     return lines
-
 
 def load_ocr_pages(job_dir: Path) -> list[dict[str, Any]]:
     json_dir = job_dir / "ocr_json"
@@ -386,19 +384,32 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
             rotate = rotation if rotation else 0
             no_clip = bool(box.get("no_clip"))
 
-            lines = wrap_text_lines(text, rect.width, font_obj, font_size_pt)
+            sx = page_w / img_w
+            sy = page_h / img_h
+            v_w = w * sx 
+            v_h = h * sy 
+            v_y = y * sy 
+
+            lines = wrap_text_lines(text, v_w, font_obj, font_size_pt)
             if not lines:
                 lines = [text]
+                
             line_height = max(1.0, font_size_pt * 1.2)
-            cursor_y = rect.y0 + line_height
-            max_lines_in_box = max(1, int(rect.height // line_height))
+
+            cursor_v_y = v_y + line_height
+            max_lines_in_box = max(1, int(v_h // line_height))
             allow_overflow = no_clip or len(lines) > max_lines_in_box
-            max_y = rect.y1 if not allow_overflow else page.rect.y1 - line_height * 0.2
+            max_v_y = v_y + v_h if not allow_overflow else page_h - line_height * 0.2
+            
             for idx, line in enumerate(lines):
-                overflow = cursor_y > max_y
+                overflow = cursor_v_y > max_v_y
                 if overflow and idx != 0:
                     break
-                baseline = fitz.Point(rect.x0, cursor_y)
+
+                y_cursor_px = cursor_v_y / sy
+                pt_unrot = px_point_to_pdf_pt(x, y_cursor_px, img_w, img_h, page_w, page_h, rotation)
+                baseline = fitz.Point(pt_unrot[0], pt_unrot[1])
+                
                 if fontfile:
                     shape.insert_text(
                         baseline,
@@ -419,7 +430,7 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
                     )
                 if overflow:
                     break
-                cursor_y += line_height
+                cursor_v_y += line_height
 
         shape.commit()
         if dbg_shape is not None:

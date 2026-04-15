@@ -16,7 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 def normalize_text(text: str) -> str:
-    return " ".join((text or "").strip().split())
+    if not text: 
+        return ""
+
+    text = text.replace("\\n", "\n") 
+    lines = [" ".join(line.split()) for line in text.splitlines() if line.strip()]
+    return "\n".join(lines)
 
 
 _PUNCT_TRANSLATION = str.maketrans(
@@ -109,6 +114,7 @@ def get_azure_client():
     return OpenAI(base_url=state.AZURE_BASE_URL, api_key=api_key)
 
 
+
 def resolve_batch_prompt(target_lang: str, override: str | None = None) -> str:
     if override:
         return override.strip()
@@ -121,10 +127,12 @@ def resolve_batch_prompt(target_lang: str, override: str | None = None) -> str:
             f"Translate the text to {target_lang} accurately and literally.",
             "Do NOT summarize, paraphrase, explain, or add content.",
             "Preserve all numbers, codes, references, and formatting.",
-            "Output only the translated text.",
+            "CRITICAL FORMATTING RULE 1: You MUST insert a line break strictly before every numbered item (e.g., '2.', '3.', '4.').",
+            "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",
+            "Strictly prohibit duplicate words or expressions with identical meanings; if they appear, you must remove the redundancy and keep only one.",
+            "Output only the translated text."
         ]
     ).strip()
-
 
 def build_batch_items(
     ocr_pages: list[dict[str, Any]],
@@ -148,8 +156,10 @@ def build_batch_items(
         clean = normalize_for_translation(raw_text)
         if not clean:
             return
-        if is_numeric_only(clean):
+        if not re.search(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]", clean):
+    
             return
+        # print(f"ID: {custom_id} | context: {clean}")
         clean = glossary.apply_glossary(clean, glossary_entries)
         if not clean:
             return
@@ -264,6 +274,7 @@ def build_edits_payload_from_translations(
 ) -> dict[str, Any]:
     pages_payload: list[dict[str, Any]] = []
     pp_pages = pp_pages or {}
+    
     for page in ocr_pages:
         page_idx = int(page.get("page_index_0based", 0))
         pp_page = pp_pages.get(page_idx)
@@ -272,20 +283,16 @@ def build_edits_payload_from_translations(
         skip_table_lines = bool(merged_cells)
         has_paragraph_flags = ocr.has_paragraph_translate_flags(pp_page)
         rec_polys = page.get("rec_polys", []) or []
-        rec_texts = page.get("rec_texts", []) or []
-        edit_texts = page.get("edit_texts", []) or []
+        
         boxes: list[dict[str, Any]] = []
+        
+
         for idx, poly in enumerate(rec_polys):
             custom_id = f"p{page_idx:04d}-l{idx:04d}"
             text = translations.get(custom_id)
             if not text:
-                text = (
-                    edit_texts[idx]
-                    if idx < len(edit_texts)
-                    else rec_texts[idx]
-                    if idx < len(rec_texts)
-                    else ""
-                )
+                continue
+            
             text = normalize_text(text)
             if not text:
                 continue
@@ -314,7 +321,11 @@ def build_edits_payload_from_translations(
                     continue
                 block_idx = int(block.get("block_index", 0))
                 custom_id = f"p{page_idx:04d}-b{block_idx:04d}"
-                block_text = translations.get(custom_id) or block.get("text", "")
+   
+                block_text = translations.get(custom_id)
+                if not block_text:
+                    continue
+                
                 block_text = normalize_text(block_text)
                 if not block_text:
                     continue
@@ -345,7 +356,11 @@ def build_edits_payload_from_translations(
                 if not cell.get("should_translate"):
                     continue
                 custom_id = f"p{page_idx:04d}-c{cell_idx:04d}"
-                cell_text = translations.get(custom_id) or cell.get("merged_text", "")
+                
+                cell_text = translations.get(custom_id)
+                if not cell_text:
+                    continue
+                
                 cell_text = normalize_text(cell_text)
                 if not cell_text:
                     continue

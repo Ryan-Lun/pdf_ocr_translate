@@ -1396,7 +1396,7 @@ function createBoxElement(pageIdx, boxIdx) {
   textEl.draggable = false;
   textEl.addEventListener("dragstart", (event) => event.preventDefault());
   textEl.textContent = box.text;
-
+  textEl.innerText = box.text;
   boxEl.appendChild(textEl);
   page.overlay.appendChild(boxEl);
   boxEl.draggable = false;
@@ -1434,29 +1434,19 @@ function createBoxElement(pageIdx, boxIdx) {
       box._editBefore = cloneBoxData(box);
     }
   });
+  
   textEl.addEventListener("input", () => {
-    const raw = textEl.textContent.replace(/\n+/g, " ");
-    box.text = raw;
-  });
-  textEl.addEventListener("blur", () => {
-    const normalized = textEl.textContent.replace(/\s+/g, " ").trim();
-    box.text = normalized;
-    if (textEl.textContent !== normalized) {
-      textEl.textContent = normalized;
-    }
-    if (box._editBefore) {
-      const before = box._editBefore;
-      delete box._editBefore;
-      const after = cloneBoxData(box);
-      if (before.text !== after.text) {
-        pushAction({
-          type: "update_boxes",
-          updates: [{ pageIdx, boxId: box.id, before, after }],
-        });
-      }
-    }
+    box.text = textEl.innerText;
   });
 
+  textEl.addEventListener("blur", () => {
+    const normalized = textEl.innerText.trim();
+    box.text = normalized;
+    if (textEl.innerText !== normalized) {
+      textEl.innerText = normalized;
+    }
+  });
+  
   ["nw", "n", "ne", "e", "se", "s", "sw", "w"].forEach((dir) => {
     const handleEl = document.createElement("div");
     handleEl.className = `resize-handle resize-${dir}`;

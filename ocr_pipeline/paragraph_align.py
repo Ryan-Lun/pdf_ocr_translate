@@ -21,8 +21,7 @@ def get_model():
 
 
 def is_chinese(text: Any):
-    return re.search(r"[\u4e00-\u9fff]", str(text))
-
+    return re.search(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]", text)
 
 def is_english(text: Any):
     return re.search(r"[A-Za-z]", str(text))

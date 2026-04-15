@@ -13,7 +13,7 @@ UPLOAD_ROOT = OUT_ROOT / "uploads"
 TRITON_URL = os.getenv("TRITON_URL", "https://racks-editing-norm-timber.trycloudflare.com/table-recognition")
 AZURE_BASE_URL = os.getenv("AZURE_OPENAI_BASE_URL", "https://uocp-azure-openai.openai.azure.com/openai/v1/")
 AZURE_API_KEY_ENV = os.getenv("AZURE_OPENAI_API_KEY_ENV", "UO_AZURE_OPENAI_API_KEY")
-AZURE_BATCH_MODEL = os.getenv("AZURE_BATCH_MODEL", "gpt-4o-mini-global-batch")
+AZURE_BATCH_MODEL = os.getenv("AZURE_BATCH_MODEL", "batch-o3-mini")
 AZURE_BATCH_POLL_SECONDS = float(os.getenv("AZURE_BATCH_POLL_SECONDS", "60"))
 AZURE_BATCH_COMPLETION_WINDOW = os.getenv("AZURE_BATCH_COMPLETION_WINDOW", "24h")
 GLOSSARY_INSPECTION_PATH = os.getenv(
@@ -36,7 +36,10 @@ AZURE_BATCH_SYSTEM_PROMPT = os.getenv(
             "Translate the text from Chinese to English accurately and literally.",
             "Do NOT summarize, paraphrase, explain, or add content.",
             "Preserve all numbers, codes, references, and formatting.",
-            "Output only the translated English text.",
+            "CRITICAL FORMATTING RULE 1: You MUST insert a line break strictly before every numbered item (e.g., '2.', '3.', '4.').",
+            "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",
+            "Strictly prohibit duplicate words or expressions with identical meanings; if they appear, you must remove the redundancy and keep only one.",
+            "Output only the translated text."
         ]
     ),
 ).strip()
