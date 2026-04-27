@@ -18,6 +18,7 @@ dependencies = [
   "pdftext>=0.6.3",
   "pikepdf>=10.3.0",
   "pymupdf>=1.26.7",
+  "python-docx>=1.2.0",
   "python-dotenv>=1.2.1",
   "python-multipart>=0.0.22",
   "requests>=2.32.5",

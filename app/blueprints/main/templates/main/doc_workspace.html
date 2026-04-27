@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDF 翻譯重建</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+  </head>
+  <body class="home">
+    <main class="shell">
+      <header class="hero">
+        <div class="hero-toolbar hero-toolbar--right">
+          <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
+        </div>
+        <p class="eyebrow">PDF -> PP-StructureV3 -> Markdown -> Word</p>
+        <h1>PDF 翻譯重建</h1>
+      </header>
+      <section class="upload-card upload-card-doc">
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('.upload_doc_workspace') }}">
+          <label class="file-input">
+            <span>選擇 PDF（可多選）</span>
+            <input type="file" name="pdf" accept="application/pdf" multiple />
+          </label>
+          <div class="form-grid">
+            <label>
+              <span>翻譯語言</span>
+              <select name="target_lang">
+                <option value="en" selected>English (en)</option>
+                <option value="zh">中文 (zh)</option>
+              </select>
+            </label>
+          </div>
+          <button class="primary" type="submit">開始文件轉檔</button>
+        </form>
+      </section>
+      <section class="upload-card jobs-board">
+        <div class="jobs-header">
+          <div>
+            <p class="eyebrow">Document</p>
+            <h2>文件工作區任務</h2>
+          </div>
+          <div class="jobs-actions">
+            <button id="docJobsRefresh" class="ghost" type="button">重新整理</button>
+          </div>
+        </div>
+        <div id="docJobsEmpty" class="hint">No document jobs yet.</div>
+        <div id="docJobsList" class="jobs-list"></div>
+      </section>
+    </main>
+    <script>
+      const docJobsList = document.getElementById("docJobsList");
+      const docJobsEmpty = document.getElementById("docJobsEmpty");
+      const docJobsRefresh = document.getElementById("docJobsRefresh");
+      let docJobsLoading = false;
+
+      function formatDate(ts) {
+        if (!ts) return "Unknown";
+        return new Date(ts * 1000).toLocaleString();
+      }
+
+      function formatDuration(seconds) {
+        if (seconds == null || Number.isNaN(seconds)) return "";
+        const total = Math.max(0, Math.floor(seconds));
+        const mins = Math.floor(total / 60);
+        const secs = total % 60;
+        if (mins > 0) return `${mins}分${secs}秒`;
+        return `${secs}秒`;
+      }
+
+      function renderDocJobs(jobs) {
+        docJobsList.innerHTML = "";
+        if (!jobs || jobs.length === 0) {
+          docJobsEmpty.style.display = "block";
+          return;
+        }
+        docJobsEmpty.style.display = "none";
+        jobs.forEach((job) => {
+          const card = document.createElement("article");
+          card.className = "job-card doc-job-card";
+
+          const idTag = document.createElement("div");
+          idTag.className = "job-id";
+          idTag.textContent = job.job_id.slice(0, 8);
+
+          const title = document.createElement("div");
+          title.className = "job-title";
+          title.textContent = job.job_name && job.job_name.trim()
+            ? job.job_name
+            : `Doc ${job.job_id.slice(0, 8)}`;
+
+          const meta = document.createElement("div");
+          meta.className = "job-meta";
+          const durationLabel = formatDuration(job.duration_seconds);
+          const durationText = durationLabel ? ` · 處理時間: ${durationLabel}` : "";
+          meta.textContent = `Updated: ${formatDate(job.updated_at)} · Status: ${job.status_label || "Unknown"}${durationText}`;
+
+          const actions = document.createElement("div");
+          actions.className = "job-actions";
+
+          if (job.structure_md_url) {
+            const mdLink = document.createElement("a");
+            mdLink.href = `${job.structure_md_url}?download=1`;
+            mdLink.textContent = "下載原始 MD";
+            mdLink.className = "ghost";
+            actions.appendChild(mdLink);
+          }
+
+          if (job.translated_md_url) {
+            const translatedLink = document.createElement("a");
+            translatedLink.href = `${job.translated_md_url}?download=1`;
+            translatedLink.textContent = "下載翻譯 MD";
+            translatedLink.className = "ghost";
+            actions.appendChild(translatedLink);
+          }
+
+          if (job.docx_url) {
+            const docxLink = document.createElement("a");
+            docxLink.href = `${job.docx_url}?download=1`;
+            docxLink.textContent = "下載 Word";
+            docxLink.className = "ghost";
+            docxLink.download = job.download_name || `${job.job_id}.docx`;
+            actions.appendChild(docxLink);
+          }
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "danger job-delete";
+          deleteBtn.textContent = "刪除";
+          deleteBtn.addEventListener("click", async () => {
+            const ok = confirm(`Delete job ${job.job_id}? This cannot be undone.`);
+            if (!ok) return;
+            deleteBtn.disabled = true;
+            try {
+              const res = await fetch(`/api/job/${job.job_id}`, { method: "DELETE" });
+              if (!res.ok) alert("Delete failed. Please try again.");
+            } catch (error) {
+              alert("Delete failed. Please try again.");
+            } finally {
+              deleteBtn.disabled = false;
+              loadDocJobs();
+            }
+          });
+          actions.appendChild(deleteBtn);
+
+          card.appendChild(idTag);
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(actions);
+          docJobsList.appendChild(card);
+        });
+      }
+
+      async function loadDocJobs() {
+        if (docJobsLoading) return;
+        docJobsLoading = true;
+        docJobsList.innerHTML = '<div class="hint">Loading...</div>';
+        try {
+          const res = await fetch("/api/doc-jobs");
+          if (!res.ok) return renderDocJobs([]);
+          const data = await res.json();
+          renderDocJobs(data.jobs || []);
+        } catch (error) {
+          renderDocJobs([]);
+        } finally {
+          docJobsLoading = false;
+        }
+      }
+
+      docJobsRefresh.addEventListener("click", loadDocJobs);
+      loadDocJobs();
+      setInterval(loadDocJobs, 10000);
+    </script>
+  </body>
+</html>

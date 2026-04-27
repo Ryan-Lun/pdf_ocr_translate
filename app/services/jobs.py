@@ -37,6 +37,8 @@ def get_job_type(job_dir_path: Path) -> str:
     job_type = str(meta.get("job_type") or "").strip().lower()
     if job_type == "doc_workspace":
         return "doc_workspace"
+    if job_type == "word_translate":
+        return "word_translate"
     return "ocr_overlay"
 
 
@@ -99,6 +101,8 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
         structure_md_path = job_dir_path / "structure" / "doc.md"
         translated_md_path = job_dir_path / "translated" / "doc.translated.md"
         docx_path = job_dir_path / "output" / "output.docx"
+        source_docx_path = None
+        word_source_name = ""
 
         created_at = (
             job_timestamp(pdf_path)
@@ -112,12 +116,19 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
         docx_ts = job_timestamp(docx_path)
         updated_at = max(debug_ts, edited_ts, structure_ts, translated_ts, docx_ts, created_at)
         job_meta = load_job_meta(job_dir_path) or {}
+        word_source_name = str(job_meta.get("source_filename") or "").strip()
+        if word_source_name:
+            source_docx_path = job_dir_path / word_source_name
+            created_at = job_timestamp(source_docx_path) or created_at
+            updated_at = max(updated_at, job_timestamp(source_docx_path))
         started_at = job_meta.get("processing_started_at") or created_at
         completed_at = job_meta.get("processing_completed_at")
         job_name = normalize_job_name(job_meta.get("job_name"))
         if not isinstance(completed_at, (int, float)):
             if current_job_type == "doc_workspace":
                 completed_at = docx_ts or translated_ts or structure_ts or None
+            elif current_job_type == "word_translate":
+                completed_at = docx_ts or None
             else:
                 if debug_ts:
                     completed_at = debug_ts
@@ -171,6 +182,47 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
                         "jobs.job_file", job_id=job_id, filename="translated/doc.translated.md"
                     )
                     if translated_md_path.exists()
+                    else None,
+                    "docx_url": url_for(
+                        "jobs.job_file", job_id=job_id, filename="output/output.docx"
+                    )
+                    if docx_path.exists()
+                    else None,
+                }
+            )
+            continue
+
+        if current_job_type == "word_translate":
+            word_stage = str(job_meta.get("word_stage") or "uploaded").lower()
+            status_map = {
+                "uploaded": ("uploaded", "已上傳"),
+                "translate_running": ("translate", "翻譯中"),
+                "completed": ("completed", "完成"),
+                "cancelled": ("cancelled", "已取消"),
+                "failed": ("failed", "失敗"),
+            }
+            status_code, status_label = status_map.get(word_stage, ("uploaded", "已上傳"))
+            jobs.append(
+                {
+                    "job_id": job_id,
+                    "job_type": current_job_type,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "duration_seconds": duration_seconds,
+                    "ocr_duration_seconds": None,
+                    "translate_duration_seconds": None,
+                    "status_code": status_code,
+                    "status_label": status_label,
+                    "status": status_label,
+                    "job_name": job_name,
+                    "progress": float(job_meta.get("progress") or 0.0),
+                    "avg_quality": float(job_meta.get("avg_quality") or 0.0),
+                    "target_lang": job_meta.get("target_lang"),
+                    "download_name": build_docx_name(job_id, job_name),
+                    "source_docx_url": url_for(
+                        "jobs.job_file", job_id=job_id, filename=word_source_name
+                    )
+                    if source_docx_path and source_docx_path.exists()
                     else None,
                     "docx_url": url_for(
                         "jobs.job_file", job_id=job_id, filename="output/output.docx"

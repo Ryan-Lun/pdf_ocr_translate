@@ -5,7 +5,7 @@ from pathlib import Path
 from flask import Blueprint, abort, redirect, render_template, request, url_for
 from werkzeug.utils import secure_filename
 
-from ...services import doc_workspace, jobs, pipeline, state
+from ...services import doc_workspace, jobs, pipeline, state, word_translate
 
 main_bp = Blueprint(
     "main",
@@ -19,6 +19,21 @@ main_bp = Blueprint(
 @main_bp.route("/", methods=["GET"], endpoint="index")
 def index() -> str:
     return render_template("main/index.html")
+
+
+@main_bp.route("/workspace/pdf-overlay", methods=["GET"], endpoint="overlay_workspace")
+def overlay_workspace() -> str:
+    return render_template("main/overlay_workspace.html", batch_model=state.AZURE_BATCH_MODEL)
+
+
+@main_bp.route("/workspace/pdf-doc", methods=["GET"], endpoint="doc_workspace_page")
+def doc_workspace_page() -> str:
+    return render_template("main/doc_workspace.html")
+
+
+@main_bp.route("/workspace/word", methods=["GET"], endpoint="word_workspace_page")
+def word_workspace_page() -> str:
+    return render_template("main/word_workspace.html")
 
 
 @main_bp.route("/upload", methods=["POST"], endpoint="upload")
@@ -68,7 +83,7 @@ def upload() -> str:
 
     jobs.notify_jobs_update()
 
-    return redirect(url_for(".index"))
+    return redirect(url_for(".overlay_workspace"))
 
 
 @main_bp.route("/upload-doc-workspace", methods=["POST"], endpoint="upload_doc_workspace")
@@ -102,4 +117,40 @@ def upload_doc_workspace() -> str:
             pass
 
     jobs.notify_jobs_update()
-    return redirect(url_for(".index"))
+    return redirect(url_for(".doc_workspace_page"))
+
+
+@main_bp.route("/upload-word-workspace", methods=["POST"], endpoint="upload_word_workspace")
+def upload_word_workspace() -> str:
+    files = request.files.getlist("docx")
+    if not files or all(f.filename == "" for f in files):
+        abort(400, "Missing Word file.")
+
+    state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    state.UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+
+    target_lang = request.form.get("target_lang", "en").strip() or "en"
+    retain_terms = request.form.get("retain_terms", "")
+
+    for file in files:
+        if not file or file.filename == "":
+            continue
+        ext = Path(file.filename).suffix.lower()
+        if ext != ".docx":
+            continue
+        tmp_path = state.UPLOAD_ROOT / secure_filename(file.filename)
+        file.save(tmp_path)
+        display_name = secure_filename(Path(file.filename).stem) or "document"
+        word_translate.enqueue_word_job_from_upload(
+            tmp_path,
+            display_name,
+            target_lang,
+            retain_terms_raw=retain_terms,
+        )
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    jobs.notify_jobs_update()
+    return redirect(url_for(".word_workspace_page"))

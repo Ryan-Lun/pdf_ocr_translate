@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import subprocess
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from . import batch, glossary, state
+from . import glossary, openai_config, state
 
 logger = logging.getLogger(__name__)
 
@@ -56,15 +55,7 @@ def _is_translatable_block(block: dict[str, Any]) -> bool:
 
 
 def _get_translation_client():
-    from openai import OpenAI
-
-    if state.DOC_TRANSLATE_USE_AZURE:
-        return batch.get_azure_client(), state.DOC_TRANSLATE_MODEL
-
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set.")
-    return OpenAI(api_key=api_key), state.DOC_TRANSLATE_MODEL
+    return openai_config.create_sync_client(), state.DOC_TRANSLATE_MODEL
 
 
 def _build_system_prompt(target_lang: str, glossary_entries: list[tuple[str, str]]) -> str:

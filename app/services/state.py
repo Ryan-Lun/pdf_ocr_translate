@@ -5,6 +5,8 @@ import re
 import threading
 from pathlib import Path
 
+from . import openai_config
+
 try:
     from dotenv import load_dotenv
 except Exception:  # pragma: no cover - optional import guard
@@ -27,9 +29,11 @@ PP_STRUCTURE_URL = os.getenv(
         "https://writing-coordination-farm-approximately.trycloudflare.com/layout-parsing",
     ),
 )
-AZURE_BASE_URL = os.getenv("AZURE_OPENAI_BASE_URL", "https://uocp-azure-openai.openai.azure.com/openai/v1/")
-AZURE_API_KEY_ENV = os.getenv("AZURE_OPENAI_API_KEY_ENV", "UO_AZURE_OPENAI_API_KEY")
-AZURE_BATCH_MODEL = os.getenv("AZURE_BATCH_MODEL", "batch-o3-mini")
+OPENAI_BASE_URL = openai_config.get_openai_base_url()
+AZURE_BASE_URL = OPENAI_BASE_URL
+OPENAI_API_KEY = openai_config.get_openai_api_key()
+AZURE_API_KEY_ENV = os.getenv("AZURE_OPENAI_API_KEY_ENV", "OPENAI_API_KEY")
+AZURE_BATCH_MODEL = openai_config.get_batch_translate_deployment()
 AZURE_BATCH_POLL_SECONDS = float(os.getenv("AZURE_BATCH_POLL_SECONDS", "60"))
 AZURE_BATCH_COMPLETION_WINDOW = os.getenv("AZURE_BATCH_COMPLETION_WINDOW", "24h")
 GLOSSARY_INSPECTION_PATH = os.getenv(
@@ -60,7 +64,9 @@ AZURE_BATCH_SYSTEM_PROMPT = os.getenv(
     ),
 ).strip()
 
-DOC_TRANSLATE_MODEL = os.getenv("DOC_TRANSLATE_MODEL", "gpt-4.1-mini")
+DOC_TRANSLATE_MODEL = openai_config.get_doc_translate_deployment()
+WORD_TRANSLATE_MODEL = openai_config.get_word_translate_deployment()
+WORD_QUALITY_MODEL = openai_config.get_word_quality_deployment()
 DOC_TRANSLATE_MAX_CHARS = int(os.getenv("DOC_TRANSLATE_MAX_CHARS", "4000"))
 DOC_TRANSLATE_USE_AZURE = os.getenv("DOC_TRANSLATE_USE_AZURE", "0").strip() == "1"
 DOC_TRANSLATE_SYSTEM_PROMPT = os.getenv(

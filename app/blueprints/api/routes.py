@@ -6,7 +6,7 @@ import threading
 
 from flask import Blueprint, Response, abort, jsonify, request, send_file, stream_with_context, url_for
 
-from ...services import batch, doc_workspace, glossary, jobs, ocr, state
+from ...services import batch, doc_workspace, glossary, jobs, ocr, state, word_translate
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +178,26 @@ def list_jobs():
 def list_doc_jobs():
     jobs_list = jobs.build_jobs_list(job_type="doc_workspace")
     return jsonify({"jobs": jobs_list})
+
+
+@api_bp.route("/word-jobs", methods=["GET"], endpoint="list_word_jobs")
+def list_word_jobs():
+    jobs_list = jobs.build_jobs_list(job_type="word_translate")
+    return jsonify({"jobs": jobs_list})
+
+
+@api_bp.route("/job/<job_id>/cancel-word", methods=["POST"], endpoint="cancel_word_job")
+def cancel_word_job(job_id: str):
+    if not jobs.safe_job_id(job_id):
+        abort(404)
+    job_dir = jobs.job_dir(job_id)
+    if not job_dir.exists() or jobs.get_job_type(job_dir) != "word_translate":
+        abort(404)
+    cancelled = word_translate.cancel_word_job(job_id)
+    if cancelled:
+        jobs.update_job_meta(job_dir, word_stage="cancelled")
+        jobs.notify_jobs_update()
+    return jsonify({"ok": True, "cancelled": cancelled})
 
 
 @api_bp.route("/doc-job/<job_id>", methods=["GET"], endpoint="doc_job_data")

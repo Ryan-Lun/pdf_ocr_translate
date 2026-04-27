@@ -10,7 +10,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from . import glossary, jobs, ocr, state, translation_memory
+from . import glossary, jobs, ocr, openai_config, state, translation_memory
 
 logger = logging.getLogger(__name__)
 
@@ -99,19 +99,7 @@ def poly_to_bbox(poly: list[list[float]] | None) -> dict[str, float] | None:
 
 
 def get_azure_client():
-    try:
-        from dotenv import load_dotenv
-        from openai import OpenAI
-    except Exception as exc:
-        raise RuntimeError(
-            "openai and python-dotenv are required for Azure batch translation."
-        ) from exc
-
-    load_dotenv()
-    api_key = os.getenv(state.AZURE_API_KEY_ENV)
-    if not api_key:
-        raise RuntimeError(f"Environment variable {state.AZURE_API_KEY_ENV} is not set.")
-    return OpenAI(base_url=state.AZURE_BASE_URL, api_key=api_key)
+    return openai_config.create_sync_client()
 
 
 
