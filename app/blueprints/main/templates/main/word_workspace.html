@@ -9,11 +9,11 @@
   <body class="home">
     <main class="shell">
       <header class="hero">
-        <div class="hero-toolbar hero-toolbar--right">
+        <div class="hero-title-split">
+          <h1>Word 原版面翻譯</h1>
           <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
         </div>
         <p class="eyebrow">DOCX -> Translate -> DOCX</p>
-        <h1>Word 原版面翻譯</h1>
       </header>
       <section class="upload-card upload-card-doc">
         <form method="post" enctype="multipart/form-data" action="{{ url_for('.upload_word_workspace') }}">

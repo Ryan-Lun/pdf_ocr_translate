@@ -136,6 +136,39 @@ code {
   margin-bottom: 0;
 }
 
+.hero-title-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.hero-title-row h1 {
+  margin: 0;
+}
+
+.hero-title-row .back-link {
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
+.hero-title-split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.hero-title-split h1 {
+  margin: 0;
+}
+
+.hero-title-split .back-link {
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
 .lede {
   max-width: 520px;
   color: var(--muted);
