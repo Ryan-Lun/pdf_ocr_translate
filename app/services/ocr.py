@@ -53,6 +53,32 @@ def bbox_to_poly(
     return [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
 
 
+def _dedupe_box_signature(box: dict[str, Any]) -> tuple[Any, ...] | None:
+    if not bool(box.get("auto_generated", True)):
+        return None
+    bbox = box.get("bbox")
+    text = str(box.get("text", "")).strip()
+    deleted = bool(box.get("deleted"))
+    if isinstance(bbox, dict):
+        try:
+            coords = (
+                round(float(bbox.get("x", 0.0)), 1),
+                round(float(bbox.get("y", 0.0)), 1),
+                round(float(bbox.get("w", 0.0)), 1),
+                round(float(bbox.get("h", 0.0)), 1),
+            )
+        except (TypeError, ValueError):
+            return None
+    elif isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+        try:
+            coords = tuple(round(float(v), 1) for v in bbox)
+        except (TypeError, ValueError):
+            return None
+    else:
+        return None
+    return coords + (text, deleted)
+
+
 def load_page_data(
     page_json_path: Path,
     edits_boxes: list[dict[str, Any]] | None = None,
@@ -69,9 +95,16 @@ def load_page_data(
         colors: list[str] = []
         box_ids: list[int] = []
         no_clips: list[bool] = []
+        auto_generated_flags: list[bool] = []
+        seen_signatures: set[tuple[Any, ...]] = set()
         for box in edits_boxes:
             if not isinstance(box, dict):
                 continue
+            signature = _dedupe_box_signature(box)
+            if signature is not None:
+                if signature in seen_signatures:
+                    continue
+                seen_signatures.add(signature)
             if box.get("deleted"):
                 continue
             poly = bbox_to_poly(box.get("bbox"))
@@ -86,6 +119,7 @@ def load_page_data(
             colors.append(str(box.get("color") or state.DEFAULT_TEXT_COLOR))
             box_ids.append(int(box.get("id") or len(box_ids)))
             no_clips.append(bool(box.get("no_clip")))
+            auto_generated_flags.append(bool(box.get("auto_generated", True)))
         count = len(rec_polys)
     else:
         rec_polys = data.get("rec_polys", []) or []
@@ -96,6 +130,7 @@ def load_page_data(
         colors = []
         box_ids = []
         no_clips = []
+        auto_generated_flags = []
         count = len(rec_polys)
 
     if not edit_texts:
@@ -118,6 +153,7 @@ def load_page_data(
         "colors": colors,
         "box_ids": box_ids,
         "no_clips": no_clips,
+        "auto_generated_flags": auto_generated_flags,
     }
 
 
@@ -261,6 +297,7 @@ def iter_merged_cells(pp_page: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not pp_page:
         return []
     cells: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
     for table in pp_page.get("table_res_list", []) or []:
         for cell in table.get("merged_cells", []) or []:
             if not isinstance(cell, dict):
@@ -271,6 +308,10 @@ def iter_merged_cells(pp_page: dict[str, Any] | None) -> list[dict[str, Any]]:
             text = str(cell.get("merged_text") or "").strip()
             if not text:
                 continue
+            signature = tuple(round(float(v), 1) for v in box) + (text,)
+            if signature in seen:
+                continue
+            seen.add(signature)
             cells.append(
                 {
                     "cell_box": [float(v) for v in box],

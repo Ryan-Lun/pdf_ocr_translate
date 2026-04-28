@@ -98,6 +98,17 @@ def poly_to_bbox(poly: list[list[float]] | None) -> dict[str, float] | None:
     return {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1}
 
 
+def bbox_list_center_in_tables(
+    bbox: list[float] | None,
+    table_bboxes: list[list[float]],
+) -> bool:
+    if not bbox or len(bbox) != 4 or not table_bboxes:
+        return False
+    cx = (float(bbox[0]) + float(bbox[2])) * 0.5
+    cy = (float(bbox[1]) + float(bbox[3])) * 0.5
+    return any(tb[0] <= cx <= tb[2] and tb[1] <= cy <= tb[3] for tb in table_bboxes)
+
+
 def get_azure_client():
     return openai_config.create_sync_client()
 
@@ -189,6 +200,8 @@ def build_batch_items(
         paragraph_blocks = ocr.iter_paragraph_blocks(pp_page)
         for block in paragraph_blocks:
             if not block.get("should_translate"):
+                continue
+            if merged_cells and bbox_list_center_in_tables(block.get("bbox"), table_bboxes):
                 continue
             block_idx = int(block.get("block_index", 0))
             custom_id = f"p{page_idx:04d}-b{block_idx:04d}"
@@ -299,13 +312,23 @@ def build_edits_payload_from_translations(
                     for tb in table_bboxes
                 ):
                     continue
-            boxes.append({"id": idx, "bbox": bbox, "text": text, "deleted": False})
+            boxes.append(
+                {
+                    "id": idx,
+                    "bbox": bbox,
+                    "text": text,
+                    "deleted": False,
+                    "auto_generated": True,
+                }
+            )
 
         paragraph_blocks = ocr.iter_paragraph_blocks(pp_page)
         if paragraph_blocks:
             base_id = 200000
             for block in paragraph_blocks:
                 if not block.get("should_translate"):
+                    continue
+                if merged_cells and bbox_list_center_in_tables(block.get("bbox"), table_bboxes):
                     continue
                 block_idx = int(block.get("block_index", 0))
                 custom_id = f"p{page_idx:04d}-b{block_idx:04d}"
@@ -335,6 +358,7 @@ def build_edits_payload_from_translations(
                         "text": block_text,
                         "deleted": False,
                         "no_clip": True,
+                        "auto_generated": True,
                     }
                 )
 
@@ -364,7 +388,13 @@ def build_edits_payload_from_translations(
                     "h": float(box[3] - box[1]),
                 }
                 boxes.append(
-                    {"id": base_id + cell_idx, "bbox": bbox, "text": cell_text, "deleted": False}
+                    {
+                        "id": base_id + cell_idx,
+                        "bbox": bbox,
+                        "text": cell_text,
+                        "deleted": False,
+                        "auto_generated": True,
+                    }
                 )
 
         pages_payload.append({"page_index_0based": page_idx, "boxes": boxes})

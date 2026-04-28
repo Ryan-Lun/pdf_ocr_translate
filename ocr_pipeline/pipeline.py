@@ -411,31 +411,33 @@ def insert_paragraph_autowrap_shrink(
     if not clean:
         return {"ok": True, "fontsize": max_fs, "rc": 0.0, "clipped": False}
 
-    def _insert_box(content: str, fontsize: float) -> float:
+    def _measure_box(content: str, fontsize: float) -> tuple[float, fitz.Shape]:
+        shape = page.new_shape()
         if fontfile:
-            return page.insert_textbox(
+            rc = shape.insert_textbox(
                 rect,
                 content,
                 fontfile=fontfile,
                 fontsize=fontsize,
                 color=(0, 0, 1),
                 align=align,
-                overlay=True,
             )
-        return page.insert_textbox(
-            rect,
-            content,
-            fontname="helv",
-            fontsize=fontsize,
-            color=(0, 0, 1),
-            align=align,
-            overlay=True,
-        )
+        else:
+            rc = shape.insert_textbox(
+                rect,
+                content,
+                fontname="helv",
+                fontsize=fontsize,
+                color=(0, 0, 1),
+                align=align,
+            )
+        return rc, shape
 
     fs = max_fs
     while fs >= min_fs:
-        rc = _insert_box(clean, fs)
+        rc, shape = _measure_box(clean, fs)
         if rc >= 0:
+            shape.commit(overlay=True)
             return {"ok": True, "fontsize": fs, "rc": rc, "clipped": False}
         fs -= 0.8
 
@@ -443,21 +445,26 @@ def insert_paragraph_autowrap_shrink(
         words = clean.split()
         lo, hi = 0, len(words)
         best = ""
+        best_shape: fitz.Shape | None = None
+        best_rc = 0.0
         while lo <= hi:
             mid = (lo + hi) // 2
             cand = " ".join(words[:mid]) + ("..." if mid < len(words) else "")
-            rc = _insert_box(cand, min_fs)
+            rc, shape = _measure_box(cand, min_fs)
             if rc >= 0:
                 best = cand
+                best_shape = shape
+                best_rc = rc
                 lo = mid + 1
             else:
                 hi = mid - 1
 
-        if best:
-            rc = _insert_box(best, min_fs)
-            return {"ok": True, "fontsize": min_fs, "rc": rc, "clipped": True}
+        if best and best_shape is not None:
+            best_shape.commit(overlay=True)
+            return {"ok": True, "fontsize": min_fs, "rc": best_rc, "clipped": True}
 
-    rc = _insert_box(clean, min_fs)
+    rc, shape = _measure_box(clean, min_fs)
+    shape.commit(overlay=True)
     return {"ok": False, "fontsize": min_fs, "rc": rc, "clipped": False}
 
 

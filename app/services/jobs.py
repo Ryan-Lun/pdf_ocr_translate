@@ -440,7 +440,37 @@ def load_edits_map(job_dir_path: Path) -> dict[int, list[dict[str, Any]]]:
         boxes = page.get("boxes", [])
         if not isinstance(boxes, list):
             boxes = []
-        pages[page_idx] = [box for box in boxes if isinstance(box, dict)]
+        deduped: list[dict[str, Any]] = []
+        seen: set[tuple[Any, ...]] = set()
+        for box in boxes:
+            if not isinstance(box, dict):
+                continue
+            if not bool(box.get("auto_generated", True)):
+                deduped.append(box)
+                continue
+            bbox = box.get("bbox")
+            text = str(box.get("text", "")).strip()
+            deleted = bool(box.get("deleted"))
+            if isinstance(bbox, dict):
+                try:
+                    signature = (
+                        round(float(bbox.get("x", 0.0)), 1),
+                        round(float(bbox.get("y", 0.0)), 1),
+                        round(float(bbox.get("w", 0.0)), 1),
+                        round(float(bbox.get("h", 0.0)), 1),
+                        text,
+                        deleted,
+                    )
+                except (TypeError, ValueError):
+                    signature = None
+            else:
+                signature = None
+            if signature is not None:
+                if signature in seen:
+                    continue
+                seen.add(signature)
+            deduped.append(box)
+        pages[page_idx] = deduped
     return pages
 
 
