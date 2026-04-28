@@ -811,16 +811,30 @@ function updateBoxElement(page, box) {
   const left = box.bbox.x * scale;
   const top = box.bbox.y * scale;
   const width = box.bbox.w * scale;
-  const height = box.bbox.h * scale;
+  const baseHeight = box.bbox.h * scale;
+  const textEl = box.element.querySelector(".text");
+  const expanded = !!box.noClip || !!box._isExpanded;
+  let height = baseHeight;
 
   box.element.style.left = `${left}px`;
   box.element.style.top = `${top}px`;
   box.element.style.width = `${width}px`;
+  if (textEl) {
+    textEl.style.fontSize = `${box.fontSize * scale}px`;
+  }
+  if (expanded && textEl) {
+    const previousHeight = textEl.style.height;
+    textEl.style.height = "auto";
+    const boxStyle = window.getComputedStyle(box.element);
+    const paddingY = Number.parseFloat(boxStyle.paddingTop || "0") + Number.parseFloat(boxStyle.paddingBottom || "0");
+    height = Math.max(baseHeight, textEl.scrollHeight + paddingY);
+    textEl.style.height = previousHeight;
+  }
   box.element.style.height = `${height}px`;
   box.element.style.color = box.color;
-  box.element.querySelector(".text").style.fontSize = `${box.fontSize * scale}px`;
   box.element.classList.toggle("is-deleted", box.deleted);
   box.element.classList.toggle("no-clip", !!box.noClip);
+  box.element.classList.toggle("is-expanded", expanded);
 }
 
 function updatePageLayout(page) {
@@ -1435,6 +1449,17 @@ function createBoxElement(pageIdx, boxIdx) {
   boxEl.addEventListener("pointermove", onDragMove);
   boxEl.addEventListener("pointerup", onDragEnd);
   boxEl.addEventListener("pointercancel", onDragEnd);
+  boxEl.addEventListener("dblclick", (event) => {
+    if (event.target.closest(".resize-handle") || event.target.closest(".text")) {
+      return;
+    }
+    event.preventDefault();
+    selectBox(pageIdx, boxIdx, event.ctrlKey);
+    if (!box.noClip) {
+      box.noClip = true;
+      updateBoxElement(page, box);
+    }
+  });
 
   textEl.addEventListener("focus", () => {
     selectBox(pageIdx, boxIdx, state.lastCtrlKey);
@@ -1446,6 +1471,9 @@ function createBoxElement(pageIdx, boxIdx) {
   
   textEl.addEventListener("input", () => {
     box.text = textEl.innerText;
+    if (box.noClip || box._isExpanded) {
+      updateBoxElement(page, box);
+    }
   });
 
   textEl.addEventListener("blur", () => {

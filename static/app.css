@@ -805,6 +805,12 @@ button.primary:hover {
   overflow: visible;
 }
 
+.text-box.is-expanded {
+  overflow: visible;
+  z-index: 4;
+  background: rgba(255, 255, 255, 0.92);
+}
+
 .text-box .text {
   outline: none;
   cursor: text;
@@ -816,6 +822,11 @@ button.primary:hover {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+.text-box.is-expanded .text {
+  overflow: visible;
+  height: auto;
 }
 
 .text-box.selected {
