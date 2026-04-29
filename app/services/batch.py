@@ -15,6 +15,32 @@ from . import glossary, jobs, ocr, openai_config, state, translation_memory
 logger = logging.getLogger(__name__)
 
 
+def resolve_document_mode(value: Any) -> str:
+    return jobs.normalize_document_mode(value)
+
+
+def use_merged_cells_for_mode(document_mode: str) -> bool:
+    return resolve_document_mode(document_mode) in {"form", "general"}
+
+
+def _contains_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]", text or ""))
+
+
+def _contains_english(text: str) -> bool:
+    return bool(re.search(r"[A-Za-z]", text or ""))
+
+
+def should_translate_merged_cell(cell: dict[str, Any], document_mode: str) -> bool:
+    if not cell.get("should_translate"):
+        return False
+    mode = resolve_document_mode(document_mode)
+    if mode == "form":
+        return True
+    text = normalize_for_translation(str(cell.get("merged_text") or ""))
+    return _contains_cjk(text) and not _contains_english(text)
+
+
 def normalize_text(text: str) -> str:
     if not text: 
         return ""
@@ -109,6 +135,32 @@ def bbox_list_center_in_tables(
     return any(tb[0] <= cx <= tb[2] and tb[1] <= cy <= tb[3] for tb in table_bboxes)
 
 
+def bbox_list_overlaps_tables(
+    bbox: list[float] | None,
+    table_bboxes: list[list[float]],
+    min_overlap_ratio: float = 0.15,
+) -> bool:
+    if not bbox or len(bbox) != 4 or not table_bboxes:
+        return False
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    width = max(0.0, x2 - x1)
+    height = max(0.0, y2 - y1)
+    area = width * height
+    if area <= 0:
+        return False
+    for tb in table_bboxes:
+        ix1 = max(x1, float(tb[0]))
+        iy1 = max(y1, float(tb[1]))
+        ix2 = min(x2, float(tb[2]))
+        iy2 = min(y2, float(tb[3]))
+        if ix2 <= ix1 or iy2 <= iy1:
+            continue
+        overlap_area = (ix2 - ix1) * (iy2 - iy1)
+        if overlap_area / area >= min_overlap_ratio:
+            return True
+    return False
+
+
 def get_azure_client():
     return openai_config.create_sync_client()
 
@@ -139,6 +191,7 @@ def build_batch_items(
     system_prompt: str,
     glossary_entries: list[tuple[str, str]] | None = None,
     pp_pages: dict[int, dict[str, Any]] | None = None,
+    document_mode: str = "form",
 ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str], dict[str, str]]:
     items: list[dict[str, Any]] = []
     alias_map: dict[str, str] = {}
@@ -146,6 +199,7 @@ def build_batch_items(
     prefilled: dict[str, str] = {}
     seen: dict[str, str] = {}
     pp_pages = pp_pages or {}
+    translate_merged_cells = use_merged_cells_for_mode(document_mode)
 
     with state.TRANSLATION_MEMORY_LOCK:
         translation_memory_data = translation_memory.load_translation_memory()
@@ -192,23 +246,22 @@ def build_batch_items(
     for page in ocr_pages:
         page_idx = int(page.get("page_index_0based", 0))
         pp_page = pp_pages.get(page_idx)
-        table_bboxes = ocr.collect_table_bboxes(pp_page)
-
-        merged_cells = ocr.iter_merged_cells(pp_page)
-        skip_table_lines = bool(merged_cells)
+        merged_cells = ocr.iter_merged_cells(pp_page) if translate_merged_cells else []
+        table_bboxes = ocr.collect_table_bboxes(pp_page) if merged_cells else []
+        skip_table_lines = bool(table_bboxes)
         has_paragraph_flags = ocr.has_paragraph_translate_flags(pp_page)
         paragraph_blocks = ocr.iter_paragraph_blocks(pp_page)
         for block in paragraph_blocks:
             if not block.get("should_translate"):
                 continue
-            if merged_cells and bbox_list_center_in_tables(block.get("bbox"), table_bboxes):
+            if table_bboxes and bbox_list_overlaps_tables(block.get("bbox"), table_bboxes):
                 continue
             block_idx = int(block.get("block_index", 0))
             custom_id = f"p{page_idx:04d}-b{block_idx:04d}"
             _add_item(custom_id, block.get("text", ""))
 
         for cell_idx, cell in enumerate(merged_cells):
-            if not cell.get("should_translate"):
+            if not should_translate_merged_cell(cell, document_mode):
                 continue
             custom_id = f"p{page_idx:04d}-c{cell_idx:04d}"
             _add_item(custom_id, cell.get("merged_text", ""))
@@ -221,11 +274,14 @@ def build_batch_items(
             if skip_table_lines and table_bboxes and idx < len(rec_polys):
                 bbox = poly_to_bbox(rec_polys[idx])
                 if bbox:
-                    cx = float(bbox["x"]) + float(bbox["w"]) * 0.5
-                    cy = float(bbox["y"]) + float(bbox["h"]) * 0.5
-                    if any(
-                        tb[0] <= cx <= tb[2] and tb[1] <= cy <= tb[3]
-                        for tb in table_bboxes
+                    if bbox_list_overlaps_tables(
+                        [
+                            float(bbox["x"]),
+                            float(bbox["y"]),
+                            float(bbox["x"]) + float(bbox["w"]),
+                            float(bbox["y"]) + float(bbox["h"]),
+                        ],
+                        table_bboxes,
                     ):
                         continue
             custom_id = f"p{page_idx:04d}-l{idx:04d}"
@@ -272,16 +328,18 @@ def build_edits_payload_from_translations(
     ocr_pages: list[dict[str, Any]],
     translations: dict[str, str],
     pp_pages: dict[int, dict[str, Any]] | None = None,
+    document_mode: str = "form",
 ) -> dict[str, Any]:
     pages_payload: list[dict[str, Any]] = []
     pp_pages = pp_pages or {}
+    translate_merged_cells = use_merged_cells_for_mode(document_mode)
     
     for page in ocr_pages:
         page_idx = int(page.get("page_index_0based", 0))
         pp_page = pp_pages.get(page_idx)
-        table_bboxes = ocr.collect_table_bboxes(pp_page)
-        merged_cells = ocr.iter_merged_cells(pp_page)
-        skip_table_lines = bool(merged_cells)
+        merged_cells = ocr.iter_merged_cells(pp_page) if translate_merged_cells else []
+        table_bboxes = ocr.collect_table_bboxes(pp_page) if merged_cells else []
+        skip_table_lines = bool(table_bboxes)
         has_paragraph_flags = ocr.has_paragraph_translate_flags(pp_page)
         rec_polys = page.get("rec_polys", []) or []
         
@@ -305,11 +363,14 @@ def build_edits_payload_from_translations(
             if has_paragraph_flags:
                 continue
             if skip_table_lines and table_bboxes:
-                cx = float(bbox["x"]) + float(bbox["w"]) * 0.5
-                cy = float(bbox["y"]) + float(bbox["h"]) * 0.5
-                if any(
-                    tb[0] <= cx <= tb[2] and tb[1] <= cy <= tb[3]
-                    for tb in table_bboxes
+                if bbox_list_overlaps_tables(
+                    [
+                        float(bbox["x"]),
+                        float(bbox["y"]),
+                        float(bbox["x"]) + float(bbox["w"]),
+                        float(bbox["y"]) + float(bbox["h"]),
+                    ],
+                    table_bboxes,
                 ):
                     continue
             boxes.append(
@@ -328,7 +389,7 @@ def build_edits_payload_from_translations(
             for block in paragraph_blocks:
                 if not block.get("should_translate"):
                     continue
-                if merged_cells and bbox_list_center_in_tables(block.get("bbox"), table_bboxes):
+                if table_bboxes and bbox_list_overlaps_tables(block.get("bbox"), table_bboxes):
                     continue
                 block_idx = int(block.get("block_index", 0))
                 custom_id = f"p{page_idx:04d}-b{block_idx:04d}"
@@ -365,7 +426,7 @@ def build_edits_payload_from_translations(
         if merged_cells:
             base_id = 100000
             for cell_idx, cell in enumerate(merged_cells):
-                if not cell.get("should_translate"):
+                if not should_translate_merged_cell(cell, document_mode):
                     continue
                 custom_id = f"p{page_idx:04d}-c{cell_idx:04d}"
                 
@@ -406,6 +467,9 @@ def run_batch_translate_job(
     job_id: str, job_dir: Path, config: dict[str, Any] | None = None
 ) -> None:
     config = config or jobs.load_batch_config(job_dir) or {}
+    document_mode = resolve_document_mode(
+        config.get("document_mode") or (jobs.load_job_meta(job_dir) or {}).get("document_mode")
+    )
     target_lang = str(config.get("target_lang") or "en")
     model_name = str(config.get("model") or state.AZURE_BATCH_MODEL)
     system_prompt = resolve_batch_prompt(target_lang, config.get("system_prompt"))
@@ -433,6 +497,7 @@ def run_batch_translate_job(
             system_prompt=system_prompt,
             glossary_entries=glossary_entries,
             pp_pages=pp_pages,
+            document_mode=document_mode,
         )
         jobs.write_batch_alias_map(job_dir, alias_map)
         jobs.write_batch_prefill_map(job_dir, prefilled)
@@ -450,7 +515,7 @@ def run_batch_translate_job(
                 "", alias_map=alias_map, prefilled=prefilled
             )
             edits_payload = build_edits_payload_from_translations(
-                ocr_pages, translations, pp_pages=pp_pages
+                ocr_pages, translations, pp_pages=pp_pages, document_mode=document_mode
             )
             edits_path = job_dir / "edits.json"
             edits_path.write_text(
@@ -541,7 +606,7 @@ def run_batch_translate_job(
                         memory[key] = {"text": translated, "last_used": now_ts}
                 translation_memory.write_translation_memory(memory)
         edits_payload = build_edits_payload_from_translations(
-            ocr_pages, translations, pp_pages=pp_pages
+            ocr_pages, translations, pp_pages=pp_pages, document_mode=document_mode
         )
         edits_path = job_dir / "edits.json"
         edits_path.write_text(

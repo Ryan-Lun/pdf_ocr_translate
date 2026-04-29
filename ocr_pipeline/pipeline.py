@@ -231,7 +231,12 @@ def run_layout_parsing_predict(
     return uniq
 
 
-def merge_pp_json_inprocess(pp_json_paths: list[Path], pdf_path: Path | None = None, dpi: int = 300) -> list[Path]:
+def merge_pp_json_inprocess(
+    pp_json_paths: list[Path],
+    pdf_path: Path | None = None,
+    dpi: int = 300,
+    document_mode: str = "form",
+) -> list[Path]:
     if merge_keep_original_json is None and add_merged_cells_field is None:
         return pp_json_paths
     
@@ -256,6 +261,7 @@ def merge_pp_json_inprocess(pp_json_paths: list[Path], pdf_path: Path | None = N
                     page_index=page_idx,
                     scale_factor=scale_factor,
                     verbose=True,
+                    document_mode=document_mode,
                 )
             js_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
             merged_paths.append(js_path)
@@ -1101,6 +1107,7 @@ def run_pipeline(
     skip_text_inside_table: bool = False,
     min_line_score: float = 0.0,
     table_fallback_layout: bool = False,
+    document_mode: str = "form",
 ) -> dict[str, Any]:
     img_dir = out_root / "images"
     pp_json_dir = out_root / "pp_json"
@@ -1134,7 +1141,12 @@ def run_pipeline(
         progress_cb=progress_cb,
         cancel_event=cancel_event,
     )
-    pp_json_paths = merge_pp_json_inprocess(pp_json_paths, pdf_path=pdf_path, dpi=dpi)
+    pp_json_paths = merge_pp_json_inprocess(
+        pp_json_paths,
+        pdf_path=pdf_path,
+        dpi=dpi,
+        document_mode=document_mode,
+    )
 
     norm_json_dir.mkdir(parents=True, exist_ok=True)
     per_page_with_coords_jsons: list[Path] = []

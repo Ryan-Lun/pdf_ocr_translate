@@ -177,7 +177,14 @@ def is_pdf_page_landscape(pdf_path: str, page_index: int) -> bool:
         return page.width > page.height
 
 
-def add_merged_cells_field(data, pdf_path: str = None, page_index: int = 0, scale_factor: float = 1.0, verbose: bool = False):
+def add_merged_cells_field(
+    data,
+    pdf_path: str = None,
+    page_index: int = 0,
+    scale_factor: float = 1.0,
+    verbose: bool = False,
+    document_mode: str = "form",
+):
     table_res_list = data.get("table_res_list")
     if not isinstance(table_res_list, list) or not table_res_list:
         return data
@@ -343,7 +350,7 @@ def add_merged_cells_field(data, pdf_path: str = None, page_index: int = 0, scal
                     })
 
         # 5. Add Missing OCR items from overall_ocr_res individually (only if inside table boundaries)
-        if unique_cells and missing_ocr_items:
+        if document_mode != "general" and unique_cells and missing_ocr_items:
             table_x0 = min(c[0] for c in unique_cells)
             table_y0 = min(c[1] for c in unique_cells)
             table_x1 = max(c[2] for c in unique_cells)

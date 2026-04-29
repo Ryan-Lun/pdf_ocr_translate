@@ -42,6 +42,13 @@ def get_job_type(job_dir_path: Path) -> str:
     return "ocr_overlay"
 
 
+def normalize_document_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    if mode == "general":
+        return "general"
+    return "form"
+
+
 def build_download_base(job_id: str, job_name: str | None) -> str:
     base = job_name or "translated"
     safe = secure_filename(base) or "translated"

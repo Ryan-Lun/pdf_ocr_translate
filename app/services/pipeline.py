@@ -27,6 +27,7 @@ def run_ocr_pipeline_job(
     translate_model: str,
     keep_lang: str,
     enable_translate: bool,
+    document_mode: str,
     cancel_event: threading.Event,
 ) -> None:
     logger.info("OCR pipeline start job_id=%s", job_id)
@@ -45,6 +46,7 @@ def run_ocr_pipeline_job(
             translate_model=translate_model,
             triton_url=state.TRITON_URL,
             keep_lang=keep_lang,
+            document_mode=jobs.normalize_document_mode(document_mode),
             cancel_event=cancel_event,
         )
     except PipelineCancelled:
@@ -76,6 +78,7 @@ def run_ocr_pipeline_job(
         batch_config = {
             "target_lang": translate_target_lang,
             "model": translate_model,
+            "document_mode": jobs.normalize_document_mode(document_mode),
         }
         jobs.write_batch_config(job_dir, batch_config)
         jobs.notify_jobs_update()
@@ -94,17 +97,20 @@ def enqueue_job_from_upload(
     translate_model: str,
     keep_lang: str,
     enable_translate: bool,
+    document_mode: str,
 ) -> str:
     job_id = uuid.uuid4().hex
     job_dir = jobs.job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     job_name = display_name
     now_ts = time.time()
+    normalized_document_mode = jobs.normalize_document_mode(document_mode)
     jobs.write_job_meta(
         job_dir,
         {
             "job_name": job_name,
             "job_type": "ocr_overlay",
+            "document_mode": normalized_document_mode,
             "processing_started_at": now_ts,
             "ocr_started_at": now_ts,
         },
@@ -133,6 +139,7 @@ def enqueue_job_from_upload(
             translate_model,
             keep_lang,
             enable_translate,
+            normalized_document_mode,
             cancel_event,
         ),
         daemon=True,

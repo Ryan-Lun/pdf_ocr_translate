@@ -46,6 +46,9 @@ def job_data(job_id: str):
 
     edited_pdf_path = job_dir / "edited.pdf"
     config = jobs.load_batch_config(job_dir) or {}
+    document_mode = batch.resolve_document_mode(
+        config.get("document_mode") or (jobs.load_job_meta(job_dir) or {}).get("document_mode")
+    )
     job_name = jobs.get_job_name(job_dir)
     download_name = jobs.build_download_name(job_id, job_name)
     target_lang = str(config.get("target_lang") or "en")
@@ -62,6 +65,7 @@ def job_data(job_id: str):
         if edited_pdf_path.exists()
         else None,
         "batch_status": jobs.load_batch_status(job_dir),
+        "document_mode": document_mode,
         "glossary": glossary.load_global_glossary(),
         "system_prompt": system_prompt,
         "pages": pages,
@@ -119,8 +123,12 @@ def batch_restore(job_id: str):
         )
         ocr_pages = ocr.load_ocr_pages(job_dir)
         pp_pages = ocr.load_pp_pages(job_dir)
+        document_mode = batch.resolve_document_mode(
+            (jobs.load_batch_config(job_dir) or {}).get("document_mode")
+            or (jobs.load_job_meta(job_dir) or {}).get("document_mode")
+        )
         edits_payload = batch.build_edits_payload_from_translations(
-            ocr_pages, translations, pp_pages=pp_pages
+            ocr_pages, translations, pp_pages=pp_pages, document_mode=document_mode
         )
         edits_path = job_dir / "edits.json"
         edits_path.write_text(

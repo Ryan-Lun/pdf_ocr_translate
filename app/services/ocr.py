@@ -306,8 +306,21 @@ def iter_merged_cells(pp_page: dict[str, Any] | None) -> list[dict[str, Any]]:
             if not (isinstance(box, list) and len(box) == 4):
                 continue
             text = str(cell.get("merged_text") or "").strip()
+            print("[iter_merged_cells]", text)
             if not text:
                 continue
+            original_components = cell.get("original_ocr_components") or []
+            is_missing_individual = False
+            if len(original_components) == 1:
+                component = original_components[0]
+                comp_box = component.get("box") or component.get("ocr_box")
+                if isinstance(comp_box, list) and len(comp_box) == 4:
+                    try:
+                        is_missing_individual = all(
+                            abs(float(a) - float(b)) <= 0.1 for a, b in zip(box, comp_box)
+                        )
+                    except (TypeError, ValueError):
+                        is_missing_individual = False
             signature = tuple(round(float(v), 1) for v in box) + (text,)
             if signature in seen:
                 continue
@@ -317,6 +330,7 @@ def iter_merged_cells(pp_page: dict[str, Any] | None) -> list[dict[str, Any]]:
                     "cell_box": [float(v) for v in box],
                     "merged_text": text,
                     "should_translate": bool(cell.get("should_translate")),
+                    "is_missing_individual": is_missing_individual,
                 }
             )
     return cells

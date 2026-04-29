@@ -53,6 +53,7 @@ def upload() -> str:
     translate_target_lang = request.form.get("target_lang", "en").strip() or "en"
     translate_model = request.form.get("model", state.AZURE_BATCH_MODEL).strip() or state.AZURE_BATCH_MODEL
     keep_lang = request.form.get("keep_lang", "all").strip().lower() or "all"
+    document_mode = jobs.normalize_document_mode(request.form.get("document_mode"))
     if keep_lang not in {"all", "zh", "en"}:
         keep_lang = "all"
 
@@ -75,6 +76,7 @@ def upload() -> str:
             translate_model,
             keep_lang,
             enable_translate,
+            document_mode,
         )
         try:
             tmp_path.unlink(missing_ok=True)
