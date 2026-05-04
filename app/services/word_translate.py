@@ -18,7 +18,7 @@ from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 from werkzeug.utils import secure_filename
 
-from . import jobs, openai_config, state
+from . import jobs, openai_config, state, translation_memory
 
 logger = logging.getLogger(__name__)
 WORD_JOB_EVENTS: dict[str, threading.Event] = {}
@@ -172,6 +172,45 @@ class EnhancedWordTranslator:
 
     def is_translatable(self, text: str) -> bool:
         return bool(text and text.strip() and any(char.isalpha() for char in text))
+
+    def _lookup_tm(self, text: str, target_lang: str) -> str | None:
+        normalized_source = translation_memory.normalize_source_text(text)
+        if not normalized_source:
+            return None
+        with state.TRANSLATION_MEMORY_LOCK:
+            memory = translation_memory.load_translation_memory()
+            _, entry = translation_memory.get_tm_entry(
+                memory,
+                text,
+                target_lang,
+                "word",
+                source_normalized=normalized_source,
+            )
+            if not entry:
+                return None
+            translated = translation_memory.extract_target_text(entry).strip()
+            if not translated:
+                return None
+            translation_memory.touch_entry(entry)
+            translation_memory.write_translation_memory(memory)
+        return translated
+
+    def _store_tm(self, text: str, translated_text: str, target_lang: str) -> None:
+        normalized_source = translation_memory.normalize_source_text(text)
+        if not normalized_source or not str(translated_text or "").strip():
+            return
+        with state.TRANSLATION_MEMORY_LOCK:
+            memory = translation_memory.load_translation_memory()
+            translation_memory.upsert_entry(
+                memory,
+                text,
+                translated_text,
+                target_lang,
+                "word",
+                source_normalized=normalized_source,
+                source="word",
+            )
+            translation_memory.write_translation_memory(memory)
 
     def is_invalid_translation_response(self, source_text: str, translated_text: str) -> bool:
         if not translated_text:
@@ -412,12 +451,17 @@ class EnhancedWordTranslator:
             async with semaphore:
                 if cancel_event is not None and cancel_event.is_set():
                     raise WordTranslationCancelled("Word translation cancelled.")
+                cached_translation = self._lookup_tm(text, target_language)
+                if cached_translation is not None:
+                    return text, cached_translation, 40
                 translated_text, quality_score = await self.translate_text_with_quality(
                     text,
                     target_language,
                     user_terms,
                     cancel_event=cancel_event,
                 )
+                if translated_text and translated_text != text:
+                    self._store_tm(text, translated_text, target_language)
                 await asyncio.sleep(request_delay)
                 return text, translated_text, quality_score
 

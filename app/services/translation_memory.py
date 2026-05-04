@@ -60,6 +60,8 @@ def normalize_target_lang(target_lang: str | None) -> str:
 
 def normalize_document_mode(document_mode: str | None) -> str:
     cleaned = str(document_mode or "").strip().lower()
+    if cleaned == "word":
+        return "word"
     if cleaned == "general":
         return "general"
     if cleaned == "scanned":
