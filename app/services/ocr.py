@@ -96,6 +96,10 @@ def load_page_data(
         box_ids: list[int] = []
         no_clips: list[bool] = []
         auto_generated_flags: list[bool] = []
+        tm_source_texts: list[str] = []
+        tm_source_normalizeds: list[str] = []
+        tm_target_langs: list[str] = []
+        tm_document_modes: list[str] = []
         seen_signatures: set[tuple[Any, ...]] = set()
         for box in edits_boxes:
             if not isinstance(box, dict):
@@ -120,6 +124,10 @@ def load_page_data(
             box_ids.append(int(box.get("id") or len(box_ids)))
             no_clips.append(bool(box.get("no_clip")))
             auto_generated_flags.append(bool(box.get("auto_generated", True)))
+            tm_source_texts.append(str(box.get("tm_source_text") or ""))
+            tm_source_normalizeds.append(str(box.get("tm_source_normalized") or ""))
+            tm_target_langs.append(str(box.get("tm_target_lang") or ""))
+            tm_document_modes.append(str(box.get("tm_document_mode") or ""))
         count = len(rec_polys)
     else:
         rec_polys = data.get("rec_polys", []) or []
@@ -131,6 +139,10 @@ def load_page_data(
         box_ids = []
         no_clips = []
         auto_generated_flags = []
+        tm_source_texts = []
+        tm_source_normalizeds = []
+        tm_target_langs = []
+        tm_document_modes = []
         count = len(rec_polys)
 
     if not edit_texts:
@@ -154,6 +166,10 @@ def load_page_data(
         "box_ids": box_ids,
         "no_clips": no_clips,
         "auto_generated_flags": auto_generated_flags,
+        "tm_source_texts": tm_source_texts,
+        "tm_source_normalizeds": tm_source_normalizeds,
+        "tm_target_langs": tm_target_langs,
+        "tm_document_modes": tm_document_modes,
     }
 
 

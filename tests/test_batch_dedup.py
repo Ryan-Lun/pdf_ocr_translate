@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import time
+
 from app.services.batch import build_batch_items, build_edits_payload_from_translations
+from app.services import state, translation_memory
 
 
 def test_table_paragraph_blocks_are_skipped_when_merged_cells_exist():
@@ -46,7 +50,12 @@ def test_table_paragraph_blocks_are_skipped_when_merged_cells_exist():
 
     assert [item["custom_id"] for item in items] == ["p0000-c0000"]
     assert alias_map == {}
-    assert key_map == {"p0000-c0000": "表格段落"}
+    assert key_map == {
+        "p0000-c0000": {
+            "source_text": "表格段落",
+            "source_normalized": "表格段落",
+        }
+    }
     assert prefilled == {}
 
 
@@ -142,7 +151,12 @@ def test_table_merged_cells_win_over_overlapping_paragraph_blocks():
     )
 
     assert [item["custom_id"] for item in items] == ["p0000-c0000"]
-    assert key_map == {"p0000-c0000": "表格內容"}
+    assert key_map == {
+        "p0000-c0000": {
+            "source_text": "表格內容",
+            "source_normalized": "表格內容",
+        }
+    }
 
 
 def test_form_mode_prefers_merged_cells_over_paragraph_blocks_and_ocr_lines():
@@ -190,7 +204,12 @@ def test_form_mode_prefers_merged_cells_over_paragraph_blocks_and_ocr_lines():
     )
 
     assert [item["custom_id"] for item in items] == ["p0000-c0000"]
-    assert key_map == {"p0000-c0000": "表格合併儲存格"}
+    assert key_map == {
+        "p0000-c0000": {
+            "source_text": "表格合併儲存格",
+            "source_normalized": "表格合併儲存格",
+        }
+    }
 
 
 def test_form_mode_payload_prefers_merged_cells_over_paragraph_blocks_and_ocr_lines():
@@ -338,7 +357,12 @@ def test_general_document_mode_keeps_chinese_only_merged_cells_for_batch_items()
 
     assert [item["custom_id"] for item in items] == ["p0000-c0000"]
     assert alias_map == {}
-    assert key_map == {"p0000-c0000": "表格內容"}
+    assert key_map == {
+        "p0000-c0000": {
+            "source_text": "表格內容",
+            "source_normalized": "表格內容",
+        }
+    }
     assert prefilled == {}
 
 
@@ -480,7 +504,12 @@ def test_general_document_mode_keeps_chinese_missing_text_added_individually_cel
 
     assert [item["custom_id"] for item in items] == ["p0000-c0000"]
     assert alias_map == {}
-    assert key_map == {"p0000-c0000": "補漏文字"}
+    assert key_map == {
+        "p0000-c0000": {
+            "source_text": "補漏文字",
+            "source_normalized": "補漏文字",
+        }
+    }
     assert prefilled == {}
 
     payload = build_edits_payload_from_translations(
@@ -531,8 +560,109 @@ def test_scanned_document_mode_uses_ocr_lines_for_batch_items():
 
     assert [item["custom_id"] for item in items] == ["p0000-l0000"]
     assert alias_map == {}
-    assert key_map == {"p0000-l0000": "掃描文字"}
+    assert key_map == {
+        "p0000-l0000": {
+            "source_text": "掃描文字",
+            "source_normalized": "掃描文字",
+        }
+    }
     assert prefilled == {}
+
+
+def test_form_mode_uses_target_lang_scoped_translation_memory(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
+    now_ts = time.time()
+    memory = {
+        translation_memory.make_tm_key("表格內容", "en", "form"): {
+            "source_text": "表格內容",
+            "source_normalized": "表格內容",
+            "target_text": "table content",
+            "target_lang": "en",
+            "document_mode": "form",
+            "created_at": now_ts,
+            "last_used": now_ts,
+            "source": "batch",
+            "count": 1,
+        }
+    }
+    state.TRANSLATION_MEMORY_PATH.write_text(
+        json.dumps(memory, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    ocr_pages = [{"page_index_0based": 0, "rec_texts": ["表格內容"], "rec_polys": []}]
+    items, alias_map, key_map, prefilled = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        target_lang="en",
+        document_mode="form",
+    )
+
+    assert items == []
+    assert alias_map == {}
+    assert key_map == {}
+    assert prefilled == {"p0000-l0000": "table content"}
+
+    items, alias_map, key_map, prefilled = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        target_lang="ja",
+        document_mode="form",
+    )
+
+    assert [item["custom_id"] for item in items] == ["p0000-l0000"]
+    assert alias_map == {}
+    assert key_map == {
+        "p0000-l0000": {
+            "source_text": "表格內容",
+            "source_normalized": "表格內容",
+        }
+    }
+    assert prefilled == {}
+
+
+def test_form_mode_edits_payload_includes_tm_metadata():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": [],
+            "rec_polys": [],
+        }
+    ]
+    pp_pages = {
+        0: {
+            "table_res_list": [
+                {
+                    "cell_box_list": [[0, 0, 100, 100]],
+                    "merged_cells": [
+                        {
+                            "cell_box": [10, 10, 90, 90],
+                            "merged_text": "表格內容",
+                            "should_translate": True,
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+    payload = build_edits_payload_from_translations(
+        ocr_pages,
+        {"p0000-c0000": "table content"},
+        pp_pages=pp_pages,
+        target_lang="en",
+        document_mode="form",
+    )
+
+    box = payload["pages"][0]["boxes"][0]
+    assert box["tm_source_text"] == "表格內容"
+    assert box["tm_source_normalized"] == "表格內容"
+    assert box["tm_target_lang"] == "en"
+    assert box["tm_document_mode"] == "form"
 
 
 def test_scanned_document_mode_writes_back_to_ocr_boxes():

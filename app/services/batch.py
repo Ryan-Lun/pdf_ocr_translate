@@ -3,10 +3,8 @@
 import datetime
 import json
 import logging
-import os
 import re
 import time
-import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -58,43 +56,8 @@ def normalize_text(text: str) -> str:
     return "\n".join(lines)
 
 
-_PUNCT_TRANSLATION = str.maketrans(
-    {
-        "，": ",",
-        "。": ".",
-        "；": ";",
-        "：": ":",
-        "？": "?",
-        "！": "!",
-        "（": "(",
-        "）": ")",
-        "【": "[",
-        "】": "]",
-        "「": '"',
-        "」": '"',
-        "『": '"',
-        "』": '"',
-        "、": ",",
-        "．": ".",
-        "／": "/",
-        "％": "%",
-        "＋": "+",
-        "－": "-",
-        "～": "~",
-        "—": "-",
-        "–": "-",
-        "…": "...",
-    }
-)
-
-
 def normalize_for_translation(text: str) -> str:
-    if text is None:
-        return ""
-    cleaned = unicodedata.normalize("NFKC", str(text))
-    cleaned = cleaned.translate(_PUNCT_TRANSLATION)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
+    return translation_memory.normalize_source_text(text)
 
 
 def is_numeric_only(text: str) -> bool:
@@ -199,11 +162,12 @@ def build_batch_items(
     system_prompt: str,
     glossary_entries: list[tuple[str, str]] | None = None,
     pp_pages: dict[int, dict[str, Any]] | None = None,
+    target_lang: str = "en",
     document_mode: str = "form",
-) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str], dict[str, str]]:
+) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, dict[str, str]], dict[str, str]]:
     items: list[dict[str, Any]] = []
     alias_map: dict[str, str] = {}
-    key_map: dict[str, str] = {}
+    key_map: dict[str, dict[str, str]] = {}
     prefilled: dict[str, str] = {}
     seen: dict[str, str] = {}
     pp_pages = pp_pages or {}
@@ -216,28 +180,54 @@ def build_batch_items(
         tm_dirty = False
 
     def _add_item(custom_id: str, raw_text: str) -> None:
-        clean = normalize_for_translation(raw_text)
+        nonlocal tm_dirty
+        source_text = str(raw_text or "")
+        normalized_source = normalize_for_translation(source_text)
+        if not normalized_source:
+            return
+        if not re.search(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]", normalized_source):
+            return
+        tm_key, tm_entry = translation_memory.get_tm_entry(
+            translation_memory_data,
+            source_text,
+            target_lang,
+            document_mode,
+            source_normalized=normalized_source,
+        )
+        if tm_key and tm_entry:
+            translated_text = translation_memory.extract_target_text(tm_entry)
+            if translated_text:
+                prefilled[custom_id] = translated_text
+                translation_memory.touch_entry(tm_entry)
+                if tm_key != translation_memory.make_tm_key(
+                    source_text,
+                    target_lang,
+                    document_mode,
+                    source_normalized=normalized_source,
+                ):
+                    translation_memory.upsert_entry(
+                        translation_memory_data,
+                        source_text,
+                        translated_text,
+                        target_lang,
+                        document_mode,
+                        source_normalized=normalized_source,
+                        source=str(tm_entry.get("source") or "batch"),
+                    )
+                tm_dirty = True
+                return
+        clean = glossary.apply_glossary(normalized_source, glossary_entries)
         if not clean:
             return
-        if not re.search(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]", clean):
-    
+        dedupe_key = normalized_source
+        if dedupe_key in seen:
+            alias_map[custom_id] = seen[dedupe_key]
             return
-        # print(f"ID: {custom_id} | context: {clean}")
-        clean = glossary.apply_glossary(clean, glossary_entries)
-        if not clean:
-            return
-        key = clean
-        if key in translation_memory_data:
-            entry = translation_memory_data[key]
-            prefilled[custom_id] = str(entry.get("text") or "")
-            entry["last_used"] = time.time()
-            tm_dirty = True
-            return
-        if key in seen:
-            alias_map[custom_id] = seen[key]
-            return
-        seen[key] = custom_id
-        key_map[custom_id] = key
+        seen[dedupe_key] = custom_id
+        key_map[custom_id] = {
+            "source_text": source_text,
+            "source_normalized": normalized_source,
+        }
         items.append(
             {
                 "custom_id": custom_id,
@@ -349,6 +339,7 @@ def build_edits_payload_from_translations(
     ocr_pages: list[dict[str, Any]],
     translations: dict[str, str],
     pp_pages: dict[int, dict[str, Any]] | None = None,
+    target_lang: str = "en",
     document_mode: str = "form",
 ) -> dict[str, Any]:
     pages_payload: list[dict[str, Any]] = []
@@ -356,11 +347,25 @@ def build_edits_payload_from_translations(
     mode = resolve_document_mode(document_mode)
     translate_merged_cells = use_merged_cells_for_mode(document_mode)
     use_structured_blocks = use_structured_blocks_for_mode(document_mode)
+
+    def build_tm_meta(source_text: str) -> dict[str, Any]:
+        if mode != "form":
+            return {}
+        normalized_source = normalize_for_translation(source_text)
+        if not normalized_source:
+            return {}
+        return {
+            "tm_source_text": str(source_text or ""),
+            "tm_source_normalized": normalized_source,
+            "tm_target_lang": str(target_lang or "en"),
+            "tm_document_mode": mode,
+        }
     
     for page in ocr_pages:
         page_idx = int(page.get("page_index_0based", 0))
         pp_page = pp_pages.get(page_idx)
         rec_polys = page.get("rec_polys", []) or []
+        rec_texts = page.get("rec_texts", []) or []
         boxes: list[dict[str, Any]] = []
 
         if mode == "scanned":
@@ -382,6 +387,7 @@ def build_edits_payload_from_translations(
                         "text": text,
                         "deleted": False,
                         "auto_generated": True,
+                        **build_tm_meta(rec_texts[idx] if idx < len(rec_texts) else ""),
                     }
                 )
             pages_payload.append({"page_index_0based": page_idx, "boxes": boxes})
@@ -430,6 +436,7 @@ def build_edits_payload_from_translations(
                     "text": text,
                     "deleted": False,
                     "auto_generated": True,
+                    **build_tm_meta(rec_texts[idx] if idx < len(rec_texts) else ""),
                 }
             )
 
@@ -470,6 +477,7 @@ def build_edits_payload_from_translations(
                         "deleted": False,
                         "no_clip": True,
                         "auto_generated": True,
+                        **build_tm_meta(block.get("text", "")),
                     }
                 )
 
@@ -505,6 +513,7 @@ def build_edits_payload_from_translations(
                         "text": cell_text,
                         "deleted": False,
                         "auto_generated": True,
+                        **build_tm_meta(cell.get("merged_text", "")),
                     }
                 )
 
@@ -547,6 +556,7 @@ def run_batch_translate_job(
             system_prompt=system_prompt,
             glossary_entries=glossary_entries,
             pp_pages=pp_pages,
+            target_lang=target_lang,
             document_mode=document_mode,
         )
         jobs.write_batch_alias_map(job_dir, alias_map)
@@ -565,7 +575,11 @@ def run_batch_translate_job(
                 "", alias_map=alias_map, prefilled=prefilled
             )
             edits_payload = build_edits_payload_from_translations(
-                ocr_pages, translations, pp_pages=pp_pages, document_mode=document_mode
+                ocr_pages,
+                translations,
+                pp_pages=pp_pages,
+                target_lang=target_lang,
+                document_mode=document_mode,
             )
             edits_path = job_dir / "edits.json"
             edits_path.write_text(
@@ -650,13 +664,26 @@ def run_batch_translate_job(
             with state.TRANSLATION_MEMORY_LOCK:
                 memory = translation_memory.load_translation_memory()
                 now_ts = time.time()
-                for custom_id, key in key_map.items():
+                for custom_id, source_meta in key_map.items():
                     translated = translations.get(custom_id)
                     if translated:
-                        memory[key] = {"text": translated, "last_used": now_ts}
+                        translation_memory.upsert_entry(
+                            memory,
+                            source_meta.get("source_text", ""),
+                            translated,
+                            target_lang,
+                            document_mode,
+                            source_normalized=source_meta.get("source_normalized"),
+                            source="batch",
+                            now_ts=now_ts,
+                        )
                 translation_memory.write_translation_memory(memory)
         edits_payload = build_edits_payload_from_translations(
-            ocr_pages, translations, pp_pages=pp_pages, document_mode=document_mode
+            ocr_pages,
+            translations,
+            pp_pages=pp_pages,
+            target_lang=target_lang,
+            document_mode=document_mode,
         )
         edits_path = job_dir / "edits.json"
         edits_path.write_text(

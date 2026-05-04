@@ -6,7 +6,7 @@ import threading
 
 from flask import Blueprint, Response, abort, jsonify, request, send_file, stream_with_context, url_for
 
-from ...services import batch, doc_workspace, glossary, jobs, ocr, state, word_translate
+from ...services import batch, doc_workspace, glossary, jobs, ocr, state, translation_memory, word_translate
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +127,13 @@ def batch_restore(job_id: str):
             (jobs.load_batch_config(job_dir) or {}).get("document_mode")
             or (jobs.load_job_meta(job_dir) or {}).get("document_mode")
         )
+        target_lang = str((jobs.load_batch_config(job_dir) or {}).get("target_lang") or "en")
         edits_payload = batch.build_edits_payload_from_translations(
-            ocr_pages, translations, pp_pages=pp_pages, document_mode=document_mode
+            ocr_pages,
+            translations,
+            pp_pages=pp_pages,
+            target_lang=target_lang,
+            document_mode=document_mode,
         )
         edits_path = job_dir / "edits.json"
         edits_path.write_text(
@@ -315,10 +320,49 @@ def save_job(job_id: str):
         abort(404)
 
     payload = request.get_json(force=True)
+    config = jobs.load_batch_config(job_dir) or {}
+    document_mode = batch.resolve_document_mode(
+        config.get("document_mode") or (jobs.load_job_meta(job_dir) or {}).get("document_mode")
+    )
+    target_lang = str(config.get("target_lang") or "en")
     edits_path = job_dir / "edits.json"
     edits_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    if document_mode == "form":
+        tm_changed = False
+        with state.TRANSLATION_MEMORY_LOCK:
+            memory = translation_memory.load_translation_memory()
+            now_ts = None
+            for page in payload.get("pages", []):
+                if not isinstance(page, dict):
+                    continue
+                for box in page.get("boxes", []):
+                    if not isinstance(box, dict):
+                        continue
+                    if box.get("deleted") or not bool(box.get("auto_generated")):
+                        continue
+                    source_text = str(box.get("tm_source_text") or "").strip()
+                    translated_text = str(box.get("text") or "").strip()
+                    box_mode = str(box.get("tm_document_mode") or document_mode)
+                    box_target_lang = str(box.get("tm_target_lang") or target_lang)
+                    if not source_text or not translated_text:
+                        continue
+                    if translation_memory.normalize_document_mode(box_mode) != "form":
+                        continue
+                    translation_memory.upsert_entry(
+                        memory,
+                        source_text,
+                        translated_text,
+                        box_target_lang,
+                        box_mode,
+                        source_normalized=str(box.get("tm_source_normalized") or "") or None,
+                        source="editor",
+                        now_ts=now_ts,
+                    )
+                    tm_changed = True
+            if tm_changed:
+                translation_memory.write_translation_memory(memory)
     try:
         edited_pdf = ocr.apply_edits_to_pdf(job_id, job_dir, payload)
     except Exception as exc:
