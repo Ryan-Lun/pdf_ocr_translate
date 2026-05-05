@@ -188,6 +188,7 @@ def run_layout_parsing_predict(
         payload = {
             "file": image_data,
             "fileType": 1,
+            "useDocOrientationClassify": False,
             "useTableOrientationClassify": False,
         }
         response = requests.post(triton_url, json=payload, timeout=120)

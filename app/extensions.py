@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from .services import job_store
+from .services import job_store, startup_warmup
 
 
 def init_app(app) -> None:
@@ -13,3 +13,4 @@ def init_app(app) -> None:
         )
     app.logger.setLevel(logging.INFO)
     job_store.init_app(app)
+    startup_warmup.init_startup_warmup()

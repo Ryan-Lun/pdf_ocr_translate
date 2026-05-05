@@ -85,6 +85,15 @@ DOC_TRANSLATE_SYSTEM_PROMPT = os.getenv(
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 WORKER_POLL_SECONDS = float(os.getenv("WORKER_POLL_SECONDS", "3"))
 WORKER_ID = os.getenv("WORKER_ID", f"{os.getenv('COMPUTERNAME', 'worker')}-{os.getpid()}")
+WORKER_OCR_MAX_RUNNING = int(os.getenv("WORKER_OCR_MAX_RUNNING", "1"))
+WORKER_DOC_MAX_RUNNING = int(os.getenv("WORKER_DOC_MAX_RUNNING", "1"))
+WORKER_WORD_MAX_RUNNING = int(os.getenv("WORKER_WORD_MAX_RUNNING", "1"))
+STARTUP_WARMUP_ENABLED = os.getenv("STARTUP_WARMUP_ENABLED", "1").strip() == "1"
+STARTUP_WARMUP_BLOCKING = os.getenv("STARTUP_WARMUP_BLOCKING", "1").strip() == "1"
+STARTUP_WARMUP_BGE = os.getenv("STARTUP_WARMUP_BGE", "1").strip() == "1"
+STARTUP_WARMUP_TRITON = os.getenv("STARTUP_WARMUP_TRITON", "0").strip() == "1"
+STARTUP_WARMUP_OPENAI_CLIENTS = os.getenv("STARTUP_WARMUP_OPENAI_CLIENTS", "1").strip() == "1"
+STARTUP_WARMUP_TIMEOUT_SECONDS = float(os.getenv("STARTUP_WARMUP_TIMEOUT_SECONDS", "30"))
 
 BATCH_INPUT_NAME = "azure_batch_input.jsonl"
 BATCH_OUTPUT_NAME = "azure_batch_output.jsonl"

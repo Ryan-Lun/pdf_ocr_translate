@@ -70,6 +70,24 @@
         return `${secs}秒`;
       }
 
+      function isActiveJob(job) {
+        return ["queued", "running", "cancel_requested"].includes(job.job_status);
+      }
+
+      function canRetryJob(job) {
+        return ["failed", "cancelled"].includes(job.job_status);
+      }
+
+      async function cancelJob(jobId) {
+        const res = await fetch(`/api/job/${jobId}/cancel`, { method: "POST" });
+        if (!res.ok) throw new Error("cancel failed");
+      }
+
+      async function retryJob(jobId) {
+        const res = await fetch(`/api/job/${jobId}/retry`, { method: "POST" });
+        if (!res.ok) throw new Error("retry failed");
+      }
+
       function renderDocJobs(jobs) {
         docJobsList.innerHTML = "";
         if (!jobs || jobs.length === 0) {
@@ -99,6 +117,25 @@
 
           const actions = document.createElement("div");
           actions.className = "job-actions";
+
+          if (isActiveJob(job)) {
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "ghost";
+            cancelBtn.textContent = job.job_status === "cancel_requested" ? "取消中" : "取消";
+            cancelBtn.disabled = job.job_status === "cancel_requested";
+            cancelBtn.addEventListener("click", async () => {
+              cancelBtn.disabled = true;
+              try {
+                await cancelJob(job.job_id);
+              } catch (error) {
+                alert("Cancel failed. Please try again.");
+              } finally {
+                loadDocJobs();
+              }
+            });
+            actions.appendChild(cancelBtn);
+          }
 
           if (job.structure_md_url) {
             const mdLink = document.createElement("a");
@@ -131,6 +168,24 @@
             docxLink.className = "ghost";
             docxLink.download = job.download_name || `${job.job_id}.docx`;
             actions.appendChild(docxLink);
+          }
+
+          if (canRetryJob(job)) {
+            const retryBtn = document.createElement("button");
+            retryBtn.type = "button";
+            retryBtn.className = "ghost";
+            retryBtn.textContent = "重試";
+            retryBtn.addEventListener("click", async () => {
+              retryBtn.disabled = true;
+              try {
+                await retryJob(job.job_id);
+              } catch (error) {
+                alert("Retry failed. Please try again.");
+              } finally {
+                loadDocJobs();
+              }
+            });
+            actions.appendChild(retryBtn);
           }
 
           const deleteBtn = document.createElement("button");

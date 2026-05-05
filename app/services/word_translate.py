@@ -626,12 +626,13 @@ def _run_word_job(
     retain_terms: list[str],
 ) -> None:
     now_ts = time.time()
-    jobs.update_job_meta(
+    jobs.set_job_state(
         job_dir,
-        word_stage="translate_running",
-        translate_started_at=now_ts,
+        status="running",
+        stage="prepare",
+        started_at=now_ts,
+        extra_meta={"translate_started_at": now_ts},
     )
-    jobs.notify_jobs_update()
     translator = EnhancedWordTranslator()
     with WORD_JOB_EVENTS_LOCK:
         cancel_event = WORD_JOB_EVENTS.setdefault(job_id, threading.Event())
@@ -640,6 +641,7 @@ def _run_word_job(
             ensure_docx_source(source_path, processing_source_path)
         else:
             processing_source_path = source_path
+        jobs.set_job_state(job_dir, status="running", stage="translate")
 
         async def _runner() -> tuple[float, float]:
             last_progress = 0.0
@@ -653,54 +655,60 @@ def _run_word_job(
             ):
                 last_progress = float(progress)
                 last_quality = float(avg_quality)
-                jobs.update_job_meta(
+                jobs.set_job_state(
                     job_dir,
+                    status="running",
+                    stage="translate",
                     progress=round(last_progress, 2),
-                    avg_quality=round(last_quality, 2),
+                    extra_meta={"avg_quality": round(last_quality, 2)},
                 )
-                jobs.notify_jobs_update()
             return last_progress, last_quality
 
         last_progress, last_quality = asyncio.run(_runner())
         if cancel_event.is_set():
-            jobs.update_job_meta(
+            jobs.set_job_state(
                 job_dir,
-                word_stage="cancelled",
-                error=None,
-                processing_completed_at=time.time(),
-                translate_completed_at=time.time(),
+                status="cancelled",
+                stage="cancelled",
+                completed_at=time.time(),
+                extra_meta={"translate_completed_at": time.time(), "avg_quality": round(last_quality, 2)},
             )
-            jobs.notify_jobs_update()
             return
-        jobs.update_job_meta(
+        jobs.set_job_state(
             job_dir,
-            word_stage="completed",
+            status="running",
+            stage="save",
             progress=max(100.0, round(last_progress, 2)),
-            avg_quality=round(last_quality, 2),
-            processing_completed_at=time.time(),
-            translate_completed_at=time.time(),
+            extra_meta={"avg_quality": round(last_quality, 2)},
         )
-        jobs.notify_jobs_update()
+        now_done = time.time()
+        jobs.set_job_state(
+            job_dir,
+            status="completed",
+            stage="completed",
+            progress=max(100.0, round(last_progress, 2)),
+            completed_at=now_done,
+            extra_meta={"translate_completed_at": now_done, "avg_quality": round(last_quality, 2)},
+        )
     except Exception as exc:
         if isinstance(exc, WordTranslationCancelled):
-            jobs.update_job_meta(
+            jobs.set_job_state(
                 job_dir,
-                word_stage="cancelled",
-                error=None,
-                processing_completed_at=time.time(),
-                translate_completed_at=time.time(),
+                status="cancelled",
+                stage="cancelled",
+                completed_at=time.time(),
+                extra_meta={"translate_completed_at": time.time()},
             )
-            jobs.notify_jobs_update()
             return
         logger.exception("Word translation failed job_id=%s error=%s", job_id, exc)
-        jobs.update_job_meta(
+        jobs.set_job_state(
             job_dir,
-            word_stage="failed",
-            error=str(exc),
-            processing_completed_at=time.time(),
-            translate_completed_at=time.time(),
+            status="failed",
+            stage="failed",
+            error_message=str(exc),
+            completed_at=time.time(),
+            extra_meta={"translate_completed_at": time.time()},
         )
-        jobs.notify_jobs_update()
     finally:
         with WORD_JOB_EVENTS_LOCK:
             WORD_JOB_EVENTS.pop(job_id, None)
@@ -754,7 +762,7 @@ def enqueue_word_job_from_upload(
     jobs.job_store.create_job(
         job_id=job_id,
         job_type="word_translate",
-        stage="uploaded",
+        stage="queued",
         job_name=display_name,
         target_lang=target_lang,
         payload={

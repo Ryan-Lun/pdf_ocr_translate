@@ -14,6 +14,10 @@ from . import docx_export, jobs, markdown_translate, pp_structure, state
 logger = logging.getLogger(__name__)
 
 
+class DocWorkspaceCancelled(Exception):
+    pass
+
+
 def doc_status_path(job_dir: Path) -> Path:
     return job_dir / state.DOC_STATUS_NAME
 
@@ -37,6 +41,12 @@ def load_doc_status(job_dir: Path) -> dict | None:
         return None
 
 
+def _raise_if_cancel_requested(job_id: str) -> None:
+    record = jobs.job_store.get_job(job_id)
+    if record is not None and record.cancel_requested:
+        raise DocWorkspaceCancelled("Document workspace cancelled.")
+
+
 def run_doc_workspace_job(
     job_id: str,
     job_dir: Path,
@@ -47,19 +57,26 @@ def run_doc_workspace_job(
     translated_dir = job_dir / "translated"
     output_dir = job_dir / "output"
     try:
-        jobs.update_job_meta(job_dir, doc_stage="structure_running")
+        _raise_if_cancel_requested(job_id)
+        jobs.set_job_state(job_dir, status="running", stage="extract")
         write_doc_status(job_dir, "structure_running", target_lang=target_lang)
         markdown_path, _ = pp_structure.extract_pdf_to_markdown(pdf_path, structure_dir)
 
-        jobs.update_job_meta(job_dir, doc_stage="structure_completed")
+        _raise_if_cancel_requested(job_id)
         write_doc_status(job_dir, "structure_completed", markdown_path=str(markdown_path.name))
 
-        jobs.update_job_meta(job_dir, doc_stage="html_running")
+        jobs.set_job_state(job_dir, status="running", stage="html")
         write_doc_status(job_dir, "html_running")
         structure_html_path = structure_dir / "doc.html"
         docx_export.export_markdown_to_html(markdown_path, structure_html_path)
 
-        jobs.update_job_meta(job_dir, doc_stage="translate_running", translate_started_at=time.time())
+        _raise_if_cancel_requested(job_id)
+        jobs.set_job_state(
+            job_dir,
+            status="running",
+            stage="translate",
+            extra_meta={"translate_started_at": time.time()},
+        )
         write_doc_status(job_dir, "translate_running", target_lang=target_lang)
         translated_html_path = translated_dir / "doc.translated.html"
         source_images_dir = structure_dir / "images"
@@ -72,23 +89,31 @@ def run_doc_workspace_job(
             target_lang=target_lang,
         )
 
-        jobs.update_job_meta(job_dir, doc_stage="translate_completed", translate_completed_at=time.time())
+        _raise_if_cancel_requested(job_id)
         write_doc_status(
             job_dir,
             "translate_completed",
             html_path=str(translated_html_path.name),
         )
 
-        jobs.update_job_meta(job_dir, doc_stage="docx_running")
+        jobs.set_job_state(
+            job_dir,
+            status="running",
+            stage="docx",
+            extra_meta={"translate_completed_at": time.time()},
+        )
         write_doc_status(job_dir, "docx_running", html_path=str(translated_html_path.name))
         docx_path = output_dir / "output.docx"
         docx_export.export_html_to_docx(translated_html_path, docx_path)
 
+        _raise_if_cancel_requested(job_id)
         now_ts = time.time()
-        jobs.update_job_meta(
+        jobs.set_job_state(
             job_dir,
-            doc_stage="completed",
-            processing_completed_at=now_ts,
+            status="completed",
+            stage="completed",
+            progress=100.0,
+            completed_at=now_ts,
         )
         write_doc_status(
             job_dir,
@@ -96,12 +121,23 @@ def run_doc_workspace_job(
             html_path=str(translated_html_path.name),
             docx_path=str(docx_path.name),
         )
+    except DocWorkspaceCancelled:
+        now_ts = time.time()
+        jobs.set_job_state(
+            job_dir,
+            status="cancelled",
+            stage="cancelled",
+            completed_at=now_ts,
+        )
+        write_doc_status(job_dir, "cancelled")
     except Exception as exc:
         logger.exception("Document workspace failed job_id=%s error=%s", job_id, exc)
-        jobs.update_job_meta(
+        jobs.set_job_state(
             job_dir,
-            doc_stage="failed",
-            processing_completed_at=time.time(),
+            status="failed",
+            stage="failed",
+            error_message=str(exc),
+            completed_at=time.time(),
         )
         write_doc_status(job_dir, "failed", error=str(exc))
 
@@ -128,7 +164,7 @@ def enqueue_doc_job_from_upload(
     jobs.job_store.create_job(
         job_id=job_id,
         job_type="doc_workspace",
-        stage="uploaded",
+        stage="queued",
         job_name=display_name,
         target_lang=target_lang,
         payload={"target_lang": target_lang},

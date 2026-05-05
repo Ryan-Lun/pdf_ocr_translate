@@ -33,6 +33,7 @@ def run_ocr_pipeline_job(
 ) -> None:
     logger.info("OCR pipeline start job_id=%s", job_id)
     jobs.set_active_upload({"event": cancel_event, "job_id": job_id, "started_at": time.time()})
+    jobs.set_job_state(job_dir, status="running", stage="ocr", started_at=time.time())
     try:
         run_pipeline(
             pdf_path=pdf_path,
@@ -53,7 +54,7 @@ def run_ocr_pipeline_job(
         )
     except PipelineCancelled:
         logger.info("OCR pipeline cancelled job_id=%s", job_id)
-        jobs.job_store.update_job(job_id, status="cancelled", stage="ocr", completed_at=jobs.datetime_from_timestamp(time.time()))
+        jobs.set_job_state(job_dir, status="cancelled", stage="ocr", completed_at=time.time())
         try:
             shutil.rmtree(job_dir)
         except Exception as exc:
@@ -62,11 +63,15 @@ def run_ocr_pipeline_job(
         return
     except Exception as exc:
         logger.exception("OCR pipeline failed job_id=%s error=%s", job_id, exc)
-        jobs.update_job_meta(
-            job_dir, processing_completed_at=time.time(), ocr_completed_at=time.time()
+        now_ts = time.time()
+        jobs.set_job_state(
+            job_dir,
+            status="failed",
+            stage="ocr",
+            error_message=str(exc),
+            completed_at=now_ts,
+            extra_meta={"ocr_completed_at": now_ts},
         )
-        jobs.job_store.update_job(job_id, status="failed", error_message=str(exc))
-        jobs.notify_jobs_update()
         return
     finally:
         jobs.clear_active_upload(job_id)
@@ -74,11 +79,15 @@ def run_ocr_pipeline_job(
     logger.info("OCR pipeline completed job_id=%s", job_id)
     ocr.update_pp_json_should_translate(job_dir)
     if not enable_translate:
-        jobs.update_job_meta(
-            job_dir, processing_completed_at=time.time(), ocr_completed_at=time.time()
+        now_ts = time.time()
+        jobs.set_job_state(
+            job_dir,
+            status="completed",
+            stage="completed",
+            completed_at=now_ts,
+            progress=100.0,
+            extra_meta={"ocr_completed_at": now_ts},
         )
-        jobs.job_store.update_job(job_id, status="completed", stage="ocr")
-    jobs.notify_jobs_update()
     if enable_translate:
         batch_config = {
             "target_lang": translate_target_lang,
@@ -86,7 +95,12 @@ def run_ocr_pipeline_job(
             "document_mode": jobs.normalize_document_mode(document_mode),
         }
         jobs.write_batch_config(job_dir, batch_config)
-        jobs.notify_jobs_update()
+        jobs.set_job_state(
+            job_dir,
+            status="running",
+            stage="translate",
+            extra_meta={"ocr_completed_at": time.time()},
+        )
         if spawn_translate_thread:
             threading.Thread(
                 target=batch.run_batch_translate_job, args=(job_id, job_dir, batch_config), daemon=True

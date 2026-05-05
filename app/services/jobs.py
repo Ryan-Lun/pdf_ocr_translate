@@ -23,6 +23,42 @@ DB_STATUS_BY_BATCH = {
     "cancelled": "cancelled",
 }
 
+LEGACY_STAGE_KEY_BY_TYPE = {
+    "doc_workspace": "doc_stage",
+    "word_translate": "word_stage",
+}
+
+DOC_STAGE_DISPLAY = {
+    "queued": ("uploaded", "已上傳"),
+    "extract": ("structure", "辨識中"),
+    "html": ("html", "HTML 轉檔中"),
+    "translate": ("translate", "翻譯中"),
+    "docx": ("docx", "轉檔中"),
+    "completed": ("completed", "完成"),
+    "failed": ("failed", "失敗"),
+    "cancelled": ("cancelled", "已取消"),
+}
+
+WORD_STAGE_DISPLAY = {
+    "queued": ("uploaded", "已上傳"),
+    "prepare": ("prepare", "準備中"),
+    "translate": ("translate", "翻譯中"),
+    "save": ("save", "輸出中"),
+    "completed": ("completed", "完成"),
+    "failed": ("failed", "失敗"),
+    "cancelled": ("cancelled", "已取消"),
+}
+
+OCR_STAGE_DISPLAY = {
+    "queued": ("uploaded", "已上傳"),
+    "ocr": ("ocr", "OCR"),
+    "translate": ("translate", "翻譯中"),
+    "render": ("render", "輸出中"),
+    "completed": ("completed", "完成"),
+    "failed": ("failed", "失敗"),
+    "cancelled": ("cancelled", "已取消"),
+}
+
 
 def safe_job_id(job_id: str) -> bool:
     return bool(re.fullmatch(r"[a-f0-9]{32}", job_id))
@@ -121,6 +157,70 @@ def notify_jobs_update() -> None:
     with state.JOBS_EVENT:
         state.JOBS_VERSION += 1
         state.JOBS_EVENT.notify_all()
+
+
+def map_status_display(job_type: str, status: str, stage: str) -> tuple[str, str]:
+    normalized_stage = str(stage or "").strip().lower()
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status == "failed":
+        return "failed", "失敗"
+    if normalized_status == "cancel_requested":
+        return "cancelled", "取消中"
+    if normalized_status == "cancelled":
+        return "cancelled", "已取消"
+    if normalized_status == "completed":
+        return "completed", "完成"
+    if job_type == "doc_workspace":
+        return DOC_STAGE_DISPLAY.get(normalized_stage or "queued", ("uploaded", "已上傳"))
+    if job_type == "word_translate":
+        return WORD_STAGE_DISPLAY.get(normalized_stage or "queued", ("uploaded", "已上傳"))
+    return OCR_STAGE_DISPLAY.get(normalized_stage or "queued", ("uploaded", "已上傳"))
+
+
+def set_job_state(
+    job_dir_path: Path,
+    *,
+    status: str,
+    stage: str,
+    progress: float | None = None,
+    error_message: str | None = None,
+    started_at: float | None = None,
+    completed_at: float | None = None,
+    extra_meta: dict[str, Any] | None = None,
+) -> None:
+    job_id = job_dir_path.name
+    meta = load_job_meta(job_dir_path) or {}
+    job_type = str(meta.get("job_type") or get_job_type(job_dir_path))
+    legacy_stage_key = LEGACY_STAGE_KEY_BY_TYPE.get(job_type)
+    if legacy_stage_key:
+        meta[legacy_stage_key] = stage
+    if progress is not None:
+        meta["progress"] = float(progress)
+    if error_message is not None:
+        meta["error"] = error_message
+    if started_at is not None and "processing_started_at" not in meta:
+        meta["processing_started_at"] = started_at
+    if completed_at is not None:
+        meta["processing_completed_at"] = completed_at
+    if extra_meta:
+        meta.update({k: v for k, v in extra_meta.items() if v is not None})
+    job_meta_path(job_dir_path).write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    _safe_update_job_store(
+        job_id,
+        job_type=job_type,
+        status=status,
+        stage=stage,
+        progress=float(progress) if progress is not None else float(meta.get("progress") or 0.0),
+        error_message=error_message,
+        started_at=datetime_from_timestamp(started_at or meta.get("processing_started_at")),
+        completed_at=datetime_from_timestamp(completed_at or meta.get("processing_completed_at")),
+        job_name=normalize_job_name(meta.get("job_name")),
+        target_lang=str(meta.get("target_lang") or "") or None,
+        document_mode=str(meta.get("document_mode") or "") or None,
+    )
+    notify_jobs_update()
 
 
 def _safe_update_job_store(job_id: str, **updates: Any) -> None:
@@ -249,23 +349,15 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
             duration_seconds = max(0.0, updated_at - created_at)
 
         if current_job_type == "doc_workspace":
-            doc_stage = str(record.stage or job_meta.get("doc_stage") or "uploaded").lower()
-            status_map = {
-                "uploaded": ("uploaded", "已上傳"),
-                "structure_running": ("structure", "辨識中"),
-                "structure_completed": ("structure_completed", "辨識完成"),
-                "translate_running": ("translate", "翻譯中"),
-                "translate_completed": ("translate_completed", "翻譯完成"),
-                "html_running": ("html", "HTML 轉檔中"),
-                "docx_running": ("docx", "轉檔中"),
-                "completed": ("completed", "完成"),
-                "failed": ("failed", "失敗"),
-            }
-            status_code, status_label = status_map.get(doc_stage, ("uploaded", "已上傳"))
+            status_code, status_label = map_status_display(
+                current_job_type, record.status, record.stage or "queued"
+            )
             jobs.append(
                 {
                     "job_id": job_id,
                     "job_type": current_job_type,
+                    "job_status": record.status,
+                    "job_stage": record.stage,
                     "created_at": created_at,
                     "updated_at": updated_at,
                     "duration_seconds": duration_seconds,
@@ -306,19 +398,15 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
             continue
 
         if current_job_type == "word_translate":
-            word_stage = str(record.stage or job_meta.get("word_stage") or "uploaded").lower()
-            status_map = {
-                "uploaded": ("uploaded", "已上傳"),
-                "translate_running": ("translate", "翻譯中"),
-                "completed": ("completed", "完成"),
-                "cancelled": ("cancelled", "已取消"),
-                "failed": ("failed", "失敗"),
-            }
-            status_code, status_label = status_map.get(word_stage, ("uploaded", "已上傳"))
+            status_code, status_label = map_status_display(
+                current_job_type, record.status, record.stage or "queued"
+            )
             jobs.append(
                 {
                     "job_id": job_id,
                     "job_type": current_job_type,
+                    "job_status": record.status,
+                    "job_stage": record.stage,
                     "created_at": created_at,
                     "updated_at": updated_at,
                     "duration_seconds": duration_seconds,
@@ -359,32 +447,18 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
         else:
             translate_duration_seconds = None
 
-        debug_ready = debug_pdf_path.exists()
-        batch_status = load_batch_status(job_dir_path)
-        batch_config = load_batch_config(job_dir_path)
         download_name = build_download_name(job_id, job_name)
-        if not debug_ready:
-            status_code = "ocr"
-            status_label = "OCR"
-        elif batch_config:
-            batch_state = str((batch_status or {}).get("status") or "").lower()
-            if batch_state in {"failed", "canceled", "cancelled"}:
-                status_code = "translate_failed"
-                status_label = "翻譯失敗"
-            elif batch_state == "completed":
-                status_code = "completed"
-                status_label = "完成"
-            else:
-                status_code = "translate"
-                status_label = "翻譯中"
-        else:
-            status_code = "completed"
-            status_label = "完成"
+        debug_ready = debug_pdf_path.exists()
+        status_code, status_label = map_status_display(
+            current_job_type, record.status, record.stage or "queued"
+        )
 
         jobs.append(
             {
                 "job_id": job_id,
                 "job_type": current_job_type,
+                "job_status": record.status,
+                "job_stage": record.stage,
                 "created_at": created_at,
                 "updated_at": updated_at,
                 "duration_seconds": duration_seconds,
@@ -440,13 +514,10 @@ def write_job_meta(job_dir_path: Path, meta: dict[str, Any]) -> None:
     if not safe_job_id(job_id):
         return
     job_type = str(meta.get("job_type") or get_job_type(job_dir_path))
-    status, stage = infer_job_store_status(job_dir_path, meta)
     progress = float(meta.get("progress") or 0.0)
     _safe_update_job_store(
         job_id,
         job_type=job_type,
-        status=status,
-        stage=stage,
         progress=progress,
         job_name=normalize_job_name(meta.get("job_name")),
         target_lang=str(meta.get("target_lang") or "") or None,
@@ -497,10 +568,19 @@ def write_batch_status(job_dir_path: Path, status: str, **meta: Any) -> None:
     batch_status_path(job_dir_path).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    normalized = status.lower()
+    if normalized == "completed":
+        stage = "completed"
+    elif normalized in {"failed", "canceled", "cancelled"}:
+        stage = "translate"
+    elif normalized == "queued":
+        stage = "translate"
+    else:
+        stage = "translate"
     _safe_update_job_store(
         job_dir_path.name,
-        status=DB_STATUS_BY_BATCH.get(status.lower(), "running"),
-        stage="translate",
+        status=DB_STATUS_BY_BATCH.get(normalized, "running"),
+        stage=stage,
         error_message=str(meta.get("error") or "") or None,
     )
     notify_jobs_update()
@@ -645,13 +725,62 @@ def build_translated_zip(job_ids: set[str] | None) -> tuple[io.BytesIO, int]:
 
 def delete_job_dir(job_id: str) -> tuple[bool, str | None]:
     job_dir_path = job_dir(job_id)
+    if job_dir_path.exists():
+        try:
+            shutil.rmtree(job_dir_path)
+        except Exception as exc:
+            return False, str(exc)
+    job_store.delete_job(job_id)
+    notify_jobs_update()
+    return True, None
+
+
+def retry_job(job_id: str) -> tuple[bool, str | None]:
+    record = job_store.get_job(job_id)
+    if record is None:
+        return False, "Job not found."
+    if record.status in {"queued", "running"}:
+        return False, "Job is already active."
+
+    job_dir_path = job_dir(job_id)
     if not job_dir_path.exists():
-        return False, None
-    try:
-        shutil.rmtree(job_dir_path)
-    except Exception as exc:
-        return False, str(exc)
-    _safe_update_job_store(job_id, status="cancelled", completed_at=datetime.now(timezone.utc))
+        return False, "Job directory not found."
+
+    payload = job_store.deserialize_payload(record)
+    stage = "queued"
+    if record.job_type == "ocr_overlay":
+        has_ocr_output = (job_dir_path / "ocr_json").exists()
+        has_batch_config = load_batch_config(job_dir_path) is not None
+        if has_ocr_output and has_batch_config:
+            payload["resume_translate_only"] = True
+            stage = "translate"
+            config = load_batch_config(job_dir_path) or {}
+            write_batch_status(
+                job_dir_path,
+                "queued",
+                job_id=job_id,
+                model=config.get("model"),
+                target_lang=config.get("target_lang"),
+            )
+        else:
+            payload.pop("resume_translate_only", None)
+    else:
+        payload.pop("resume_translate_only", None)
+
+    requeued = job_store.requeue_job(
+        job_id,
+        stage=stage,
+        payload=payload,
+        progress=0.0,
+    )
+    if not requeued:
+        return False, "Job could not be requeued."
+
+    meta = load_job_meta(job_dir_path) or {}
+    meta["progress"] = 0.0
+    meta.pop("error", None)
+    meta.pop("processing_completed_at", None)
+    write_job_meta(job_dir_path, meta)
     notify_jobs_update()
     return True, None
 

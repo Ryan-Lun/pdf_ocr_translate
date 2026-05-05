@@ -31,6 +31,9 @@ def process_job(job_id: str) -> None:
     job_dir = jobs.job_dir(job_id)
     payload = job_store.deserialize_payload(record)
     logger.info("Worker processing job_id=%s job_type=%s", job_id, record.job_type)
+    if record.cancel_requested:
+        jobs.set_job_state(job_dir, status="cancelled", stage="cancelled", completed_at=time.time())
+        return
 
     if record.job_type == "ocr_overlay":
         if bool(payload.get("resume_translate_only")):
@@ -92,21 +95,30 @@ def process_job(job_id: str) -> None:
 def run_worker_loop(worker_id: str | None = None, poll_seconds: float | None = None) -> None:
     worker_name = worker_id or state.WORKER_ID
     delay = poll_seconds if poll_seconds is not None else state.WORKER_POLL_SECONDS
+    concurrency_limits = {
+        "ocr_overlay": state.WORKER_OCR_MAX_RUNNING,
+        "doc_workspace": state.WORKER_DOC_MAX_RUNNING,
+        "word_translate": state.WORKER_WORD_MAX_RUNNING,
+    }
     logger.info("Worker loop started worker_id=%s poll_seconds=%s", worker_name, delay)
     while True:
-        record = job_store.claim_next_job(worker_name)
-        if record is None:
-            time.sleep(delay)
-            continue
+        record = job_store.claim_next_job(worker_name, concurrency_limits=concurrency_limits)
+        processed_active_batch = False
         try:
-            process_job(record.job_id)
+            if record is not None:
+                process_job(record.job_id)
+            processed_active_batch = batch.poll_active_batch_jobs(limit=1) > 0
         except Exception as exc:
-            logger.exception("Worker job failed job_id=%s error=%s", record.job_id, exc)
-            job_store.update_job(
-                record.job_id,
-                status="failed",
-                error_message=str(exc),
-                completed_at=job_store.utcnow(),
-            )
+            job_id = record.job_id if record is not None else None
+            logger.exception("Worker loop failure job_id=%s error=%s", job_id, exc)
+            if job_id:
+                job_store.update_job(
+                    job_id,
+                    status="failed",
+                    error_message=str(exc),
+                    completed_at=job_store.utcnow(),
+                )
         finally:
             jobs.notify_jobs_update()
+        if record is None and not processed_active_batch:
+            time.sleep(delay)

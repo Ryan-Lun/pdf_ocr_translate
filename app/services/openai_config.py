@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 
 from openai import AsyncOpenAI, OpenAI
 
@@ -64,6 +65,7 @@ def get_word_quality_deployment() -> str:
     ).strip()
 
 
+@lru_cache(maxsize=1)
 def create_sync_client() -> OpenAI:
     api_key = get_openai_api_key()
     base_url = get_openai_base_url()
@@ -74,6 +76,7 @@ def create_sync_client() -> OpenAI:
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
+@lru_cache(maxsize=1)
 def create_async_client() -> AsyncOpenAI:
     api_key = get_openai_api_key()
     base_url = get_openai_base_url()

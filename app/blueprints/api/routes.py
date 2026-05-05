@@ -106,7 +106,12 @@ def batch_status(job_id: str):
     job_dir = jobs.job_dir(job_id)
     if not job_dir.exists():
         abort(404)
+    record = jobs.job_store.get_job(job_id)
     status = jobs.load_batch_status(job_dir) or {"status": "not_started"}
+    if record is not None:
+        status["job_status"] = record.status
+        status["job_stage"] = record.stage
+        status["progress"] = record.progress
     return jsonify({"ok": True, "status": status})
 
 
@@ -216,10 +221,33 @@ def cancel_word_job(job_id: str):
     if not job_dir.exists() or jobs.get_job_type(job_dir) != "word_translate":
         abort(404)
     cancelled = word_translate.cancel_word_job(job_id) or jobs.job_store.request_cancel(job_id)
-    if cancelled:
-        jobs.update_job_meta(job_dir, word_stage="cancelled")
-        jobs.notify_jobs_update()
+    jobs.notify_jobs_update()
     return jsonify({"ok": True, "cancelled": cancelled})
+
+
+@api_bp.route("/job/<job_id>/cancel", methods=["POST"], endpoint="cancel_job")
+def cancel_job(job_id: str):
+    if not jobs.safe_job_id(job_id):
+        abort(404)
+    record = jobs.job_store.get_job(job_id)
+    if record is None:
+        abort(404)
+    cancelled = False
+    if record.job_type == "word_translate":
+        cancelled = word_translate.cancel_word_job(job_id)
+    cancelled = jobs.job_store.request_cancel(job_id) or cancelled
+    jobs.notify_jobs_update()
+    return jsonify({"ok": True, "cancelled": cancelled})
+
+
+@api_bp.route("/job/<job_id>/retry", methods=["POST"], endpoint="retry_job")
+def retry_job(job_id: str):
+    if not jobs.safe_job_id(job_id):
+        abort(404)
+    retried, error = jobs.retry_job(job_id)
+    if not retried:
+        return jsonify({"ok": False, "error": error}), 400
+    return jsonify({"ok": True, "job_id": job_id})
 
 
 @api_bp.route("/doc-job/<job_id>", methods=["GET"], endpoint="doc_job_data")
@@ -230,10 +258,16 @@ def doc_job_data(job_id: str):
     if not job_dir.exists() or jobs.get_job_type(job_dir) != "doc_workspace":
         abort(404)
     job_name = jobs.get_job_name(job_dir)
+    record = jobs.job_store.get_job(job_id)
+    status_payload = doc_workspace.load_doc_status(job_dir) or {}
+    if record is not None:
+        status_payload["job_status"] = record.status
+        status_payload["job_stage"] = record.stage
+        status_payload["progress"] = record.progress
     payload = {
         "job_id": job_id,
         "job_name": job_name,
-        "status": doc_workspace.load_doc_status(job_dir),
+        "status": status_payload,
         "source_pdf_url": url_for("jobs.job_file", job_id=job_id, filename="source.pdf")
         if (job_dir / "source.pdf").exists()
         else None,
@@ -309,7 +343,8 @@ def delete_job(job_id: str):
     if not jobs.safe_job_id(job_id):
         abort(404)
     job_dir = jobs.job_dir(job_id)
-    if not job_dir.exists():
+    record = jobs.job_store.get_job(job_id)
+    if not job_dir.exists() and record is None:
         return jsonify({"ok": True, "deleted": False})
     deleted, error = jobs.delete_job_dir(job_id)
     if not deleted:
@@ -391,7 +426,14 @@ def cancel_upload():
         for item in jobs.job_store.list_jobs(job_type="ocr_overlay"):
             if item.status in {"queued", "running", "cancel_requested"}:
                 cancelled = jobs.job_store.request_cancel(item.job_id)
-                return jsonify({"ok": cancelled, "job_id": item.job_id, "status": "cancel_requested" if cancelled else "idle"})
+                updated = jobs.job_store.get_job(item.job_id)
+                return jsonify(
+                    {
+                        "ok": cancelled,
+                        "job_id": item.job_id,
+                        "status": updated.status if cancelled and updated is not None else "idle",
+                    }
+                )
         return jsonify({"ok": False, "status": "idle"})
     event = active.get("event")
     if event is not None:

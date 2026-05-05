@@ -11,6 +11,61 @@ from typing import Any
 from . import glossary, jobs, ocr, openai_config, state, translation_memory
 
 logger = logging.getLogger(__name__)
+TERMINAL_BATCH_STATUSES = {"completed", "failed", "canceled", "cancelled"}
+
+
+def _is_terminal_batch_status(status: Any) -> bool:
+    return str(status or "").strip().lower() in TERMINAL_BATCH_STATUSES
+
+
+def _build_batch_status_meta(
+    job_id: str,
+    target_lang: str,
+    model_name: str,
+    existing_status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    existing_status = existing_status or {}
+    started_at = existing_status.get("started_at")
+    if started_at is None:
+        started_at = time.time()
+    return {
+        "job_id": job_id,
+        "started_at": started_at,
+        "model": str(existing_status.get("model") or model_name),
+        "target_lang": str(existing_status.get("target_lang") or target_lang),
+    }
+
+
+def _batch_key_map_path(job_dir: Path) -> Path:
+    return job_dir / "batch_key_map.json"
+
+
+def _write_batch_key_map(job_dir: Path, key_map: dict[str, dict[str, str]]) -> None:
+    _batch_key_map_path(job_dir).write_text(
+        json.dumps(key_map, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _load_batch_key_map(job_dir: Path) -> dict[str, dict[str, str]]:
+    path = _batch_key_map_path(job_dir)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    result: dict[str, dict[str, str]] = {}
+    for custom_id, item in data.items():
+        if not isinstance(custom_id, str) or not isinstance(item, dict):
+            continue
+        result[custom_id] = {
+            "source_text": str(item.get("source_text") or ""),
+            "source_normalized": str(item.get("source_normalized") or ""),
+        }
+    return result
 
 
 def resolve_document_mode(value: Any) -> str:
@@ -523,8 +578,12 @@ def build_edits_payload_from_translations(
 
 
 def run_batch_translate_job(
-    job_id: str, job_dir: Path, config: dict[str, Any] | None = None
-) -> None:
+    job_id: str,
+    job_dir: Path,
+    config: dict[str, Any] | None = None,
+    *,
+    poll_only: bool = False,
+) -> bool:
     config = config or jobs.load_batch_config(job_dir) or {}
     document_mode = resolve_document_mode(
         config.get("document_mode") or (jobs.load_job_meta(job_dir) or {}).get("document_mode")
@@ -532,15 +591,45 @@ def run_batch_translate_job(
     target_lang = str(config.get("target_lang") or "en")
     model_name = str(config.get("model") or state.AZURE_BATCH_MODEL)
     system_prompt = resolve_batch_prompt(target_lang, config.get("system_prompt"))
-    jobs.update_job_meta(job_dir, translate_started_at=time.time(), translate_completed_at=None)
-    status_meta = {
-        "job_id": job_id,
-        "started_at": time.time(),
-        "model": model_name,
-        "target_lang": target_lang,
-    }
+    existing_status = jobs.load_batch_status(job_dir) or {}
+    batch_id = str(existing_status.get("batch_id") or "")
+    status_meta = _build_batch_status_meta(job_id, target_lang, model_name, existing_status)
+
+    if batch_id and batch_id != "prefill_only" and not _is_terminal_batch_status(existing_status.get("status")):
+        try:
+            return _poll_batch_translate_job(
+                job_id=job_id,
+                job_dir=job_dir,
+                document_mode=document_mode,
+                target_lang=target_lang,
+                status_meta=status_meta,
+                batch_id=batch_id,
+            )
+        except Exception as exc:
+            logger.exception("Batch translate poll failed job_id=%s error=%s", job_id, exc)
+            jobs.write_batch_status(job_dir, "failed", **status_meta, batch_id=batch_id, error=str(exc))
+            now_ts = time.time()
+            jobs.set_job_state(
+                job_dir,
+                status="failed",
+                stage="translate",
+                error_message=str(exc),
+                completed_at=now_ts,
+                extra_meta={"translate_completed_at": now_ts},
+            )
+            return False
+
+    if poll_only:
+        return False
+
+    jobs.set_job_state(
+        job_dir,
+        status="running",
+        stage="translate",
+        extra_meta={"translate_started_at": time.time()},
+    )
     logger.info(
-        "Batch translate start job_id=%s target_lang=%s model=%s",
+        "Batch translate submit job_id=%s target_lang=%s model=%s",
         job_id,
         target_lang,
         model_name,
@@ -561,6 +650,7 @@ def run_batch_translate_job(
         )
         jobs.write_batch_alias_map(job_dir, alias_map)
         jobs.write_batch_prefill_map(job_dir, prefilled)
+        _write_batch_key_map(job_dir, key_map)
         logger.info(
             "Batch translate collected pages=%s unique=%s dup_alias=%s tm_prefill=%s",
             len(ocr_pages),
@@ -571,37 +661,24 @@ def run_batch_translate_job(
         if not batch_items and not prefilled:
             raise RuntimeError("No OCR text lines found to translate.")
         if not batch_items and prefilled:
-            translations = build_translations_from_jsonl_text(
-                "", alias_map=alias_map, prefilled=prefilled
-            )
-            edits_payload = build_edits_payload_from_translations(
-                ocr_pages,
-                translations,
+            _finalize_batch_translate_job(
+                job_id=job_id,
+                job_dir=job_dir,
+                ocr_pages=ocr_pages,
                 pp_pages=pp_pages,
-                target_lang=target_lang,
                 document_mode=document_mode,
-            )
-            edits_path = job_dir / "edits.json"
-            edits_path.write_text(
-                json.dumps(edits_payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            logger.info(
-                "Batch translate skipped remote call; wrote edits.json=%s",
-                edits_path.resolve(),
-            )
-            ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)
-            logger.info("Batch translate wrote edited.pdf job_id=%s", job_id)
-            jobs.write_batch_status(
-                job_dir, "completed", **status_meta, batch_id="prefill_only"
-            )
-            jobs.update_job_meta(
-                job_dir, processing_completed_at=time.time(), translate_completed_at=time.time()
+                target_lang=target_lang,
+                key_map=key_map,
+                alias_map=alias_map,
+                prefilled=prefilled,
+                raw_text="",
+                status_meta=status_meta,
+                batch_id="prefill_only",
             )
             logger.info(
                 "Batch translate completed from translation memory job_id=%s", job_id
             )
-            return
+            return True
 
         batch_input_path = job_dir / state.BATCH_INPUT_NAME
         write_jsonl(batch_input_path, batch_items)
@@ -610,11 +687,12 @@ def run_batch_translate_job(
         )
 
         client = get_azure_client()
-        file_obj = client.files.create(
-            file=open(batch_input_path, "rb"),
-            purpose="batch",
-            extra_body={"expires_after": {"seconds": 1209600, "anchor": "created_at"}},
-        )
+        with batch_input_path.open("rb") as batch_file:
+            file_obj = client.files.create(
+                file=batch_file,
+                purpose="batch",
+                extra_body={"expires_after": {"seconds": 1209600, "anchor": "created_at"}},
+            )
         logger.info("Batch translate uploaded file_id=%s", file_obj.id)
         batch_obj = client.batches.create(
             input_file_id=file_obj.id,
@@ -623,83 +701,206 @@ def run_batch_translate_job(
         )
 
         batch_id = batch_obj.id
-        logger.info("Batch translate created batch_id=%s", batch_id)
+        logger.info("Batch translate submitted batch_id=%s", batch_id)
         jobs.write_batch_status(job_dir, "running", **status_meta, batch_id=batch_id)
-
-        status = batch_obj.status
-        while status not in ("completed", "failed", "canceled", "cancelled"):
-            time.sleep(state.AZURE_BATCH_POLL_SECONDS)
-            batch_obj = client.batches.retrieve(batch_id)
-            status = batch_obj.status
-            logger.info(
-                "Batch translate poll job_id=%s batch_id=%s status=%s",
-                job_id,
-                batch_id,
-                status,
-            )
-            jobs.write_batch_status(
-                job_dir,
-                status,
-                **status_meta,
-                batch_id=batch_id,
-                last_check=datetime.datetime.now().isoformat(timespec="seconds"),
-            )
-
-        if status != "completed":
-            raise RuntimeError(f"Batch status = {status}")
-
-        output_file_id = batch_obj.output_file_id or batch_obj.error_file_id
-        if not output_file_id:
-            raise RuntimeError("Batch has no output_file_id/error_file_id.")
-
-        file_response = client.files.content(output_file_id)
-        raw_text = file_response.text or ""
-        (job_dir / state.BATCH_OUTPUT_NAME).write_text(raw_text, encoding="utf-8")
-        logger.info("Batch translate downloaded output file_id=%s", output_file_id)
-
-        translations = build_translations_from_jsonl_text(
-            raw_text, alias_map=alias_map, prefilled=prefilled
-        )
-        if key_map:
-            with state.TRANSLATION_MEMORY_LOCK:
-                memory = translation_memory.load_translation_memory()
-                now_ts = time.time()
-                for custom_id, source_meta in key_map.items():
-                    translated = translations.get(custom_id)
-                    if translated:
-                        translation_memory.upsert_entry(
-                            memory,
-                            source_meta.get("source_text", ""),
-                            translated,
-                            target_lang,
-                            document_mode,
-                            source_normalized=source_meta.get("source_normalized"),
-                            source="batch",
-                            now_ts=now_ts,
-                        )
-                translation_memory.write_translation_memory(memory)
-        edits_payload = build_edits_payload_from_translations(
-            ocr_pages,
-            translations,
-            pp_pages=pp_pages,
-            target_lang=target_lang,
-            document_mode=document_mode,
-        )
-        edits_path = job_dir / "edits.json"
-        edits_path.write_text(
-            json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        logger.info("Batch translate wrote edits.json=%s", edits_path.resolve())
-        ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)
-        logger.info("Batch translate wrote edited.pdf job_id=%s", job_id)
-        jobs.write_batch_status(job_dir, "completed", **status_meta, batch_id=batch_id)
-        jobs.update_job_meta(
-            job_dir, processing_completed_at=time.time(), translate_completed_at=time.time()
-        )
-        logger.info("Batch translate completed job_id=%s", job_id)
+        return True
     except Exception as exc:
         logger.exception("Batch translate failed job_id=%s error=%s", job_id, exc)
         jobs.write_batch_status(job_dir, "failed", **status_meta, error=str(exc))
-        jobs.update_job_meta(
-            job_dir, processing_completed_at=time.time(), translate_completed_at=time.time()
+        now_ts = time.time()
+        jobs.set_job_state(
+            job_dir,
+            status="failed",
+            stage="translate",
+            error_message=str(exc),
+            completed_at=now_ts,
+            extra_meta={"translate_completed_at": now_ts},
         )
+        return False
+
+
+def _poll_batch_translate_job(
+    *,
+    job_id: str,
+    job_dir: Path,
+    document_mode: str,
+    target_lang: str,
+    status_meta: dict[str, Any],
+    batch_id: str,
+) -> bool:
+    record = jobs.job_store.get_job(job_id)
+    if record is not None and record.cancel_requested:
+        now_ts = time.time()
+        jobs.write_batch_status(
+            job_dir,
+            "cancelled",
+            **status_meta,
+            batch_id=batch_id,
+            last_check=datetime.datetime.now().isoformat(timespec="seconds"),
+            error="Cancelled by user.",
+        )
+        jobs.set_job_state(
+            job_dir,
+            status="cancelled",
+            stage="cancelled",
+            completed_at=now_ts,
+            extra_meta={"translate_completed_at": now_ts},
+        )
+        return True
+    client = get_azure_client()
+    batch_obj = client.batches.retrieve(batch_id)
+    status = str(batch_obj.status or "")
+    logger.info(
+        "Batch translate poll job_id=%s batch_id=%s status=%s",
+        job_id,
+        batch_id,
+        status,
+    )
+    jobs.write_batch_status(
+        job_dir,
+        status,
+        **status_meta,
+        batch_id=batch_id,
+        last_check=datetime.datetime.now().isoformat(timespec="seconds"),
+    )
+
+    normalized_status = status.lower()
+    if not _is_terminal_batch_status(normalized_status):
+        return True
+    if normalized_status != "completed":
+        now_ts = time.time()
+        error_message = f"Batch status = {status}"
+        final_status = "cancelled" if normalized_status in {"canceled", "cancelled"} else "failed"
+        jobs.set_job_state(
+            job_dir,
+            status=final_status,
+            stage="translate",
+            error_message=error_message,
+            completed_at=now_ts,
+            extra_meta={"translate_completed_at": now_ts},
+        )
+        return True
+
+    output_file_id = batch_obj.output_file_id or batch_obj.error_file_id
+    if not output_file_id:
+        raise RuntimeError("Batch has no output_file_id/error_file_id.")
+
+    file_response = client.files.content(output_file_id)
+    raw_text = file_response.text or ""
+    (job_dir / state.BATCH_OUTPUT_NAME).write_text(raw_text, encoding="utf-8")
+    logger.info("Batch translate downloaded output file_id=%s", output_file_id)
+
+    ocr_pages = ocr.load_ocr_pages(job_dir)
+    pp_pages = ocr.load_pp_pages(job_dir)
+    alias_map = jobs.load_batch_alias_map(job_dir)
+    prefilled = jobs.load_batch_prefill_map(job_dir)
+    key_map = _load_batch_key_map(job_dir)
+    _finalize_batch_translate_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        ocr_pages=ocr_pages,
+        pp_pages=pp_pages,
+        document_mode=document_mode,
+        target_lang=target_lang,
+        key_map=key_map,
+        alias_map=alias_map,
+        prefilled=prefilled,
+        raw_text=raw_text,
+        status_meta=status_meta,
+        batch_id=batch_id,
+    )
+    logger.info("Batch translate completed job_id=%s", job_id)
+    return True
+
+
+def _finalize_batch_translate_job(
+    *,
+    job_id: str,
+    job_dir: Path,
+    ocr_pages: list[dict[str, Any]],
+    pp_pages: dict[int, dict[str, Any]] | None,
+    document_mode: str,
+    target_lang: str,
+    key_map: dict[str, dict[str, str]],
+    alias_map: dict[str, str],
+    prefilled: dict[str, str],
+    raw_text: str,
+    status_meta: dict[str, Any],
+    batch_id: str,
+) -> None:
+    translations = build_translations_from_jsonl_text(
+        raw_text, alias_map=alias_map, prefilled=prefilled
+    )
+    if key_map:
+        with state.TRANSLATION_MEMORY_LOCK:
+            memory = translation_memory.load_translation_memory()
+            now_ts = time.time()
+            for custom_id, source_meta in key_map.items():
+                translated = translations.get(custom_id)
+                if translated:
+                    translation_memory.upsert_entry(
+                        memory,
+                        source_meta.get("source_text", ""),
+                        translated,
+                        target_lang,
+                        document_mode,
+                        source_normalized=source_meta.get("source_normalized"),
+                        source="batch",
+                        now_ts=now_ts,
+                    )
+            translation_memory.write_translation_memory(memory)
+    edits_payload = build_edits_payload_from_translations(
+        ocr_pages,
+        translations,
+        pp_pages=pp_pages,
+        target_lang=target_lang,
+        document_mode=document_mode,
+    )
+    edits_path = job_dir / "edits.json"
+    edits_path.write_text(
+        json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    logger.info("Batch translate wrote edits.json=%s", edits_path.resolve())
+    ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)
+    logger.info("Batch translate wrote edited.pdf job_id=%s", job_id)
+    jobs.write_batch_status(job_dir, "completed", **status_meta, batch_id=batch_id)
+    now_ts = time.time()
+    jobs.set_job_state(
+        job_dir,
+        status="completed",
+        stage="completed",
+        progress=100.0,
+        completed_at=now_ts,
+        extra_meta={"translate_completed_at": now_ts},
+    )
+
+
+def poll_active_batch_jobs(limit: int = 1) -> int:
+    now_ts = time.time()
+    candidates: list[tuple[float, str, Path]] = []
+    for record in jobs.job_store.list_jobs(job_type="ocr_overlay"):
+        if record.stage != "translate":
+            continue
+        if record.status not in {"running", "cancel_requested"}:
+            continue
+        job_dir = jobs.job_dir(record.job_id)
+        batch_status = jobs.load_batch_status(job_dir) or {}
+        batch_id = str(batch_status.get("batch_id") or "")
+        batch_state = str(batch_status.get("status") or "").strip().lower()
+        if record.cancel_requested and batch_id:
+            candidates.append((0.0, record.job_id, job_dir))
+            continue
+        if not batch_id or batch_id == "prefill_only" or _is_terminal_batch_status(batch_state):
+            continue
+        updated_at = float(batch_status.get("updated_at") or 0.0)
+        if updated_at and now_ts - updated_at < state.AZURE_BATCH_POLL_SECONDS:
+            continue
+        candidates.append((updated_at, record.job_id, job_dir))
+
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    processed = 0
+    for _, job_id, job_dir in candidates[: max(1, limit)]:
+        config = jobs.load_batch_config(job_dir) or {}
+        run_batch_translate_job(job_id, job_dir, config, poll_only=True)
+        processed += 1
+    return processed

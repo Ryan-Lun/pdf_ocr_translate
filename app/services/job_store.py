@@ -202,6 +202,23 @@ def update_job(job_id: str, **updates: Any) -> None:
         record.updated_at = utcnow()
 
 
+def delete_job(job_id: str) -> bool:
+    with session_scope() as session:
+        record = session.get(JobRecord, job_id)
+        if record is None:
+            return False
+        for artifact in session.scalars(
+            select(JobArtifactRecord).where(JobArtifactRecord.job_id == job_id)
+        ).all():
+            session.delete(artifact)
+        for event in session.scalars(
+            select(JobEventRecord).where(JobEventRecord.job_id == job_id)
+        ).all():
+            session.delete(event)
+        session.delete(record)
+        return True
+
+
 def request_cancel(job_id: str) -> bool:
     with session_scope() as session:
         record = session.get(JobRecord, job_id)
@@ -209,8 +226,41 @@ def request_cancel(job_id: str) -> bool:
             return False
         if record.status in {"completed", "failed", "cancelled"}:
             return False
+        if record.status == "queued":
+            record.cancel_requested = True
+            record.status = "cancelled"
+            record.completed_at = utcnow()
+            record.updated_at = utcnow()
+            return True
         record.cancel_requested = True
         record.status = "cancel_requested"
+        record.updated_at = utcnow()
+        return True
+
+
+def requeue_job(
+    job_id: str,
+    *,
+    stage: str = "queued",
+    payload: dict[str, Any] | None = None,
+    progress: float = 0.0,
+) -> bool:
+    with session_scope() as session:
+        record = session.get(JobRecord, job_id)
+        if record is None:
+            return False
+        if record.status in {"queued", "running"}:
+            return False
+        record.payload_json = _serialize_payload(payload) if payload is not None else record.payload_json
+        record.status = "queued"
+        record.stage = stage
+        record.progress = progress
+        record.error_message = None
+        record.cancel_requested = False
+        record.worker_id = None
+        record.started_at = None
+        record.completed_at = None
+        record.retry_count = int(record.retry_count or 0) + 1
         record.updated_at = utcnow()
         return True
 
@@ -240,7 +290,14 @@ def register_artifact(job_id: str, artifact_type: str, file_path: str) -> None:
         )
 
 
-def claim_next_job(worker_id: str) -> JobRecord | None:
+def claim_next_job(
+    worker_id: str,
+    concurrency_limits: dict[str, int] | None = None,
+) -> JobRecord | None:
+    concurrency_limits = concurrency_limits or {}
+    ocr_limit = max(0, int(concurrency_limits.get("ocr_overlay", 1)))
+    doc_limit = max(0, int(concurrency_limits.get("doc_workspace", 1)))
+    word_limit = max(0, int(concurrency_limits.get("word_translate", 1)))
     with session_scope() as session:
         bind = session.get_bind()
         if bind is None or bind.dialect.name != "mssql":
@@ -253,6 +310,29 @@ def claim_next_job(worker_id: str) -> JobRecord | None:
                     FROM jobs WITH (UPDLOCK, READPAST, ROWLOCK)
                     WHERE status = :queued_status
                       AND cancel_requested = 0
+                      AND (
+                        (job_type = 'ocr_overlay' AND :ocr_limit > 0 AND (
+                            SELECT COUNT(*)
+                            FROM jobs AS active
+                            WHERE active.job_type = 'ocr_overlay'
+                              AND active.status IN ('running', 'cancel_requested')
+                              AND ISNULL(active.stage, '') <> 'translate'
+                        ) < :ocr_limit)
+                        OR
+                        (job_type = 'doc_workspace' AND :doc_limit > 0 AND (
+                            SELECT COUNT(*)
+                            FROM jobs AS active
+                            WHERE active.job_type = 'doc_workspace'
+                              AND active.status IN ('running', 'cancel_requested')
+                        ) < :doc_limit)
+                        OR
+                        (job_type = 'word_translate' AND :word_limit > 0 AND (
+                            SELECT COUNT(*)
+                            FROM jobs AS active
+                            WHERE active.job_type = 'word_translate'
+                              AND active.status IN ('running', 'cancel_requested')
+                        ) < :word_limit)
+                      )
                     ORDER BY created_at ASC
                 )
                 UPDATE jobs
@@ -269,6 +349,9 @@ def claim_next_job(worker_id: str) -> JobRecord | None:
                 "queued_status": "queued",
                 "running_status": "running",
                 "worker_id": worker_id,
+                "ocr_limit": ocr_limit,
+                "doc_limit": doc_limit,
+                "word_limit": word_limit,
             },
         )
         row = result.first()
