@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -31,16 +32,109 @@ def _inside_table(box, table_boxes):
     return False
 
 
+def _sort_text_boxes(boxes, texts):
+    items = []
+    for box, text in zip(boxes, texts):
+        if not text:
+            continue
+        try:
+            x1, y1, x2, y2 = [float(v) for v in box]
+        except (TypeError, ValueError):
+            continue
+        items.append(
+            {
+                "box": [x1, y1, x2, y2],
+                "text": str(text).strip(),
+                "cy": (y1 + y2) * 0.5,
+                "height": max(0.0, y2 - y1),
+            }
+        )
+    items.sort(key=lambda item: (round(item["cy"], 1), item["box"][0]))
+    return items
+
+
+def _needs_space_between(prev_text: str, next_text: str) -> bool:
+    if not prev_text or not next_text:
+        return False
+    if re.search(r"[\u4e00-\u9fff\u3040-\u30ff]$", prev_text) and re.search(r"^[\u4e00-\u9fff\u3040-\u30ff]", next_text):
+        return False
+    if prev_text.endswith(("(", "[", "{", "/", "-")):
+        return False
+    if next_text.startswith((")", "]", "}", ",", ".", ";", ":", "!", "?", "/", "%")):
+        return False
+    return True
+
+
+def _append_text(parts: list[str], text: str) -> None:
+    text = str(text or "").strip()
+    if not text:
+        return
+    if not parts:
+        parts.append(text)
+        return
+    sep = " " if _needs_space_between(parts[-1], text) else ""
+    parts.append(f"{sep}{text}")
+
+
+def _compose_fallback_block_content(boxes, texts) -> str:
+    items = _sort_text_boxes(boxes, texts)
+    if not items:
+        return ""
+
+    merged_parts: list[str] = []
+    current_row: list[dict[str, Any]] = []
+    current_cy = None
+    current_height = 0.0
+
+    def flush_row() -> None:
+        if not current_row:
+            return
+        current_row.sort(key=lambda item: item["box"][0])
+        row_parts: list[str] = []
+        for item in current_row:
+            _append_text(row_parts, item["text"])
+        row_text = "".join(row_parts).strip()
+        if row_text:
+            _append_text(merged_parts, row_text)
+
+    for item in items:
+        if current_cy is None:
+            current_row = [item]
+            current_cy = item["cy"]
+            current_height = item["height"]
+            continue
+
+        same_row_threshold = max(10.0, current_height * 0.6, item["height"] * 0.6)
+        if abs(item["cy"] - current_cy) <= same_row_threshold:
+            current_row.append(item)
+            current_cy = (current_cy * (len(current_row) - 1) + item["cy"]) / len(current_row)
+            current_height = max(current_height, item["height"])
+            continue
+
+        flush_row()
+        current_row = [item]
+        current_cy = item["cy"]
+        current_height = item["height"]
+
+    flush_row()
+    return "".join(merged_parts).strip()
+
+
 def _insert_pruned_result(data: dict[str, Any], pruned_result, after_key: str | None = None):
     if after_key is None:
         data["parsing_res_list"] = pruned_result
         return data
 
     new_data = {}
+    inserted = False
     for k, v in data.items():
         new_data[k] = v
         if k == after_key:
             new_data["parsing_res_list"] = pruned_result
+            inserted = True
+
+    if not inserted:
+        new_data["parsing_res_list"] = pruned_result
 
     return new_data
 
@@ -106,8 +200,8 @@ def merge_keep_original_json(data: dict[str, Any]) -> dict[str, Any]:
     try:
         LayoutBlock = _get_layout_block_class()
     except Exception as exc:
-        print(f"[WARN] merge_keep_original_json unavailable: {exc}")
-        return data
+        print(f"[WARN] merge_keep_original_json LayoutBlock fallback: {exc}")
+        LayoutBlock = None
 
     for block in layout_blocks:
         label = block["label"]
@@ -146,17 +240,21 @@ def merge_keep_original_json(data: dict[str, Any]) -> dict[str, Any]:
             "rec_labels": ["text"] * len(boxes),
         }
 
-        lb = LayoutBlock(label=label, bbox=bbox)
-        lb.update_text_content(
-            image=dummy_img,
-            ocr_rec_res=ocr_rec_res,
-            text_rec_model=None,
-        )
+        if LayoutBlock is not None:
+            lb = LayoutBlock(label=label, bbox=bbox)
+            lb.update_text_content(
+                image=dummy_img,
+                ocr_rec_res=ocr_rec_res,
+                text_rec_model=None,
+            )
+            block_content = lb.content.strip()
+        else:
+            block_content = _compose_fallback_block_content(boxes, texts)
 
         pruned_result.append(
             {
                 "block_label": label,
-                "block_content": lb.content.strip(),
+                "block_content": block_content,
                 "block_bbox": bbox,
             }
         )
