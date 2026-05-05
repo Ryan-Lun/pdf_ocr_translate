@@ -82,6 +82,10 @@ DOC_TRANSLATE_SYSTEM_PROMPT = os.getenv(
     ),
 ).strip()
 
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+WORKER_POLL_SECONDS = float(os.getenv("WORKER_POLL_SECONDS", "3"))
+WORKER_ID = os.getenv("WORKER_ID", f"{os.getenv('COMPUTERNAME', 'worker')}-{os.getpid()}")
+
 BATCH_INPUT_NAME = "azure_batch_input.jsonl"
 BATCH_OUTPUT_NAME = "azure_batch_output.jsonl"
 BATCH_STATUS_NAME = "batch_status.json"

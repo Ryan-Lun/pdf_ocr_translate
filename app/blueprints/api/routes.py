@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
+import time
 
 from flask import Blueprint, Response, abort, jsonify, request, send_file, stream_with_context, url_for
 
@@ -84,10 +84,19 @@ def batch_translate(job_id: str):
     if status and status.get("status") in {"running", "queued"}:
         return jsonify({"ok": True, "status": status})
     config = jobs.load_batch_config(job_dir) or {}
-    threading.Thread(
-        target=batch.run_batch_translate_job, args=(job_id, job_dir, config), daemon=True
-    ).start()
-    return jsonify({"ok": True, "status": {"status": "running"}})
+    record = jobs.job_store.get_job(job_id)
+    payload = jobs.job_store.deserialize_payload(record)
+    payload["resume_translate_only"] = True
+    jobs.job_store.update_job(
+        job_id,
+        status="queued",
+        stage="translate",
+        payload_json=json.dumps(payload, ensure_ascii=False),
+        error_message=None,
+        completed_at=None,
+    )
+    jobs.write_batch_status(job_dir, "queued", job_id=job_id, model=config.get("model"), target_lang=config.get("target_lang"))
+    return jsonify({"ok": True, "status": {"status": "queued"}})
 
 
 @api_bp.route("/job/<job_id>/batch-status", methods=["GET"], endpoint="batch_status")
@@ -206,7 +215,7 @@ def cancel_word_job(job_id: str):
     job_dir = jobs.job_dir(job_id)
     if not job_dir.exists() or jobs.get_job_type(job_dir) != "word_translate":
         abort(404)
-    cancelled = word_translate.cancel_word_job(job_id)
+    cancelled = word_translate.cancel_word_job(job_id) or jobs.job_store.request_cancel(job_id)
     if cancelled:
         jobs.update_job_meta(job_dir, word_stage="cancelled")
         jobs.notify_jobs_update()
@@ -278,19 +287,16 @@ def download_translated_batch():
 def jobs_stream():
     @stream_with_context
     def generate():
-        last_version = -1
+        last_payload = None
         while True:
-            with state.JOBS_EVENT:
-                if last_version == state.JOBS_VERSION:
-                    state.JOBS_EVENT.wait(timeout=15)
-                current_version = state.JOBS_VERSION
-            if current_version == last_version:
-                yield ": ping\n\n"
-                continue
-            last_version = current_version
             payload = {"jobs": jobs.build_jobs_list(job_type="ocr_overlay")}
             data = json.dumps(payload, ensure_ascii=False)
-            yield f"event: jobs\ndata: {data}\n\n"
+            if data != last_payload:
+                last_payload = data
+                yield f"event: jobs\ndata: {data}\n\n"
+            else:
+                yield ": ping\n\n"
+            time.sleep(3)
 
     resp = Response(generate(), mimetype="text/event-stream")
     resp.headers["Cache-Control"] = "no-cache"
@@ -382,9 +388,16 @@ def save_job(job_id: str):
 def cancel_upload():
     active = jobs.get_active_upload()
     if not active:
+        for item in jobs.job_store.list_jobs(job_type="ocr_overlay"):
+            if item.status in {"queued", "running", "cancel_requested"}:
+                cancelled = jobs.job_store.request_cancel(item.job_id)
+                return jsonify({"ok": cancelled, "job_id": item.job_id, "status": "cancel_requested" if cancelled else "idle"})
         return jsonify({"ok": False, "status": "idle"})
     event = active.get("event")
     if event is not None:
         event.set()
+    job_id = str(active.get("job_id") or "")
+    if jobs.safe_job_id(job_id):
+        jobs.job_store.request_cancel(job_id)
     jobs.notify_jobs_update()
     return jsonify({"ok": True, "job_id": active.get("job_id")})

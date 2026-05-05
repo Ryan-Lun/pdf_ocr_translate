@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -126,6 +125,14 @@ def enqueue_doc_job_from_upload(
             "target_lang": target_lang,
         },
     )
+    jobs.job_store.create_job(
+        job_id=job_id,
+        job_type="doc_workspace",
+        stage="uploaded",
+        job_name=display_name,
+        target_lang=target_lang,
+        payload={"target_lang": target_lang},
+    )
 
     pdf_path = job_dir / "source.pdf"
     if source_pdf.exists():
@@ -134,9 +141,5 @@ def enqueue_doc_job_from_upload(
         raise FileNotFoundError(f"Missing PDF: {source_pdf}")
 
     write_doc_status(job_dir, "uploaded", target_lang=target_lang)
-    threading.Thread(
-        target=run_doc_workspace_job,
-        args=(job_id, job_dir, pdf_path, target_lang),
-        daemon=True,
-    ).start()
+    jobs.notify_jobs_update()
     return job_id

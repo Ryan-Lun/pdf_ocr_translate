@@ -29,8 +29,10 @@ def run_ocr_pipeline_job(
     enable_translate: bool,
     document_mode: str,
     cancel_event: threading.Event,
+    spawn_translate_thread: bool = True,
 ) -> None:
     logger.info("OCR pipeline start job_id=%s", job_id)
+    jobs.set_active_upload({"event": cancel_event, "job_id": job_id, "started_at": time.time()})
     try:
         run_pipeline(
             pdf_path=pdf_path,
@@ -51,6 +53,7 @@ def run_ocr_pipeline_job(
         )
     except PipelineCancelled:
         logger.info("OCR pipeline cancelled job_id=%s", job_id)
+        jobs.job_store.update_job(job_id, status="cancelled", stage="ocr", completed_at=jobs.datetime_from_timestamp(time.time()))
         try:
             shutil.rmtree(job_dir)
         except Exception as exc:
@@ -62,6 +65,7 @@ def run_ocr_pipeline_job(
         jobs.update_job_meta(
             job_dir, processing_completed_at=time.time(), ocr_completed_at=time.time()
         )
+        jobs.job_store.update_job(job_id, status="failed", error_message=str(exc))
         jobs.notify_jobs_update()
         return
     finally:
@@ -73,6 +77,7 @@ def run_ocr_pipeline_job(
         jobs.update_job_meta(
             job_dir, processing_completed_at=time.time(), ocr_completed_at=time.time()
         )
+        jobs.job_store.update_job(job_id, status="completed", stage="ocr")
     jobs.notify_jobs_update()
     if enable_translate:
         batch_config = {
@@ -82,9 +87,12 @@ def run_ocr_pipeline_job(
         }
         jobs.write_batch_config(job_dir, batch_config)
         jobs.notify_jobs_update()
-        threading.Thread(
-            target=batch.run_batch_translate_job, args=(job_id, job_dir, batch_config), daemon=True
-        ).start()
+        if spawn_translate_thread:
+            threading.Thread(
+                target=batch.run_batch_translate_job, args=(job_id, job_dir, batch_config), daemon=True
+            ).start()
+        else:
+            batch.run_batch_translate_job(job_id, job_dir, batch_config)
 
 
 def enqueue_job_from_upload(
@@ -115,6 +123,24 @@ def enqueue_job_from_upload(
             "ocr_started_at": now_ts,
         },
     )
+    jobs.job_store.create_job(
+        job_id=job_id,
+        job_type="ocr_overlay",
+        stage="queued",
+        job_name=job_name,
+        target_lang=translate_target_lang if enable_translate else None,
+        document_mode=normalized_document_mode,
+        payload={
+            "dpi": dpi,
+            "start_page": start_page,
+            "end_page": end_page,
+            "translate_target_lang": translate_target_lang,
+            "translate_model": translate_model,
+            "keep_lang": keep_lang,
+            "enable_translate": enable_translate,
+            "document_mode": normalized_document_mode,
+        },
+    )
 
     pdf_filename = secure_filename(f"{job_id}.pdf")
     pdf_path = job_dir / pdf_filename
@@ -123,26 +149,6 @@ def enqueue_job_from_upload(
     else:
         raise FileNotFoundError(f"Missing PDF: {source_pdf}")
 
-    cancel_event = threading.Event()
-    jobs.set_active_upload({"event": cancel_event, "job_id": job_id, "started_at": time.time()})
-
-    threading.Thread(
-        target=run_ocr_pipeline_job,
-        args=(
-            job_id,
-            job_dir,
-            pdf_path,
-            dpi,
-            start_page,
-            end_page,
-            translate_target_lang,
-            translate_model,
-            keep_lang,
-            enable_translate,
-            normalized_document_mode,
-            cancel_event,
-        ),
-        daemon=True,
-    ).start()
+    jobs.notify_jobs_update()
 
     return job_id

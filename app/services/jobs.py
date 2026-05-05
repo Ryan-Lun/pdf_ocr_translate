@@ -6,16 +6,35 @@ import re
 import shutil
 import time
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from flask import url_for
 
-from . import state
+from . import job_store, state
+
+DB_STATUS_BY_BATCH = {
+    "running": "running",
+    "queued": "queued",
+    "completed": "completed",
+    "failed": "failed",
+    "canceled": "cancelled",
+    "cancelled": "cancelled",
+}
 
 
 def safe_job_id(job_id: str) -> bool:
     return bool(re.fullmatch(r"[a-f0-9]{32}", job_id))
+
+
+def datetime_from_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, (int, float)):
+        return None
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def normalize_job_name(value: Any) -> str | None:
@@ -104,18 +123,74 @@ def notify_jobs_update() -> None:
         state.JOBS_EVENT.notify_all()
 
 
+def _safe_update_job_store(job_id: str, **updates: Any) -> None:
+    try:
+        job_store.update_job(job_id, **updates)
+    except Exception:
+        return
+
+
+def _job_store_status_for_doc_stage(doc_stage: str) -> str:
+    if doc_stage == "failed":
+        return "failed"
+    if doc_stage == "completed":
+        return "completed"
+    return "running"
+
+
+def _job_store_status_for_word_stage(word_stage: str) -> str:
+    if word_stage == "failed":
+        return "failed"
+    if word_stage == "cancelled":
+        return "cancelled"
+    if word_stage == "completed":
+        return "completed"
+    if word_stage == "uploaded":
+        return "queued"
+    return "running"
+
+
+def _job_store_status_for_ocr(job_dir_path: Path, meta: dict[str, Any] | None = None) -> tuple[str, str]:
+    job_id = job_dir_path.name
+    batch_config = load_batch_config(job_dir_path)
+    batch_state = str((load_batch_status(job_dir_path) or {}).get("status") or "").lower()
+    debug_ready = (job_dir_path / "overlay_debug.pdf").exists()
+    edited_ready = (job_dir_path / "edited.pdf").exists()
+    meta = meta or load_job_meta(job_dir_path) or {}
+    if batch_state in {"failed", "canceled", "cancelled"}:
+        return "failed", "translate"
+    if edited_ready and (batch_state == "completed" or not batch_config):
+        return "completed", "render"
+    if batch_state in {"running", "validating", "finalizing", "in_progress"}:
+        return "running", "translate"
+    if debug_ready:
+        return "running" if batch_config else "completed", "ocr"
+    if meta.get("ocr_completed_at") and not batch_config:
+        return "completed", "ocr"
+    return "running", "ocr"
+
+
+def infer_job_store_status(job_dir_path: Path, meta: dict[str, Any]) -> tuple[str, str]:
+    job_type = str(meta.get("job_type") or get_job_type(job_dir_path))
+    if job_type == "doc_workspace":
+        stage = str(meta.get("doc_stage") or "uploaded").lower()
+        return _job_store_status_for_doc_stage(stage), stage
+    if job_type == "word_translate":
+        stage = str(meta.get("word_stage") or "uploaded").lower()
+        return _job_store_status_for_word_stage(stage), stage
+    return _job_store_status_for_ocr(job_dir_path, meta)
+
+
 def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
     state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
     jobs = []
-    for job_dir_path in sorted(state.JOB_ROOT.iterdir()):
-        if not job_dir_path.is_dir():
-            continue
-        job_id = job_dir_path.name
-        if not safe_job_id(job_id):
-            continue
-        current_job_type = get_job_type(job_dir_path)
-        if job_type and current_job_type != job_type:
-            continue
+    records = job_store.list_jobs(job_type)
+
+    for record in records:
+        job_dir_path = job_dir(record.job_id)
+        current_job_type = record.job_type
+        job_id = record.job_id
+        job_meta = load_job_meta(job_dir_path) or {}
 
         pdf_path = job_dir_path / f"{job_id}.pdf"
         debug_pdf_path = job_dir_path / "overlay_debug.pdf"
@@ -148,7 +223,6 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
             docx_ts,
             created_at,
         )
-        job_meta = load_job_meta(job_dir_path) or {}
         word_source_name = str(job_meta.get("source_filename") or "").strip()
         if word_source_name:
             source_docx_path = job_dir_path / word_source_name
@@ -175,7 +249,7 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
             duration_seconds = max(0.0, updated_at - created_at)
 
         if current_job_type == "doc_workspace":
-            doc_stage = str(job_meta.get("doc_stage") or "uploaded").lower()
+            doc_stage = str(record.stage or job_meta.get("doc_stage") or "uploaded").lower()
             status_map = {
                 "uploaded": ("uploaded", "已上傳"),
                 "structure_running": ("structure", "辨識中"),
@@ -232,7 +306,7 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
             continue
 
         if current_job_type == "word_translate":
-            word_stage = str(job_meta.get("word_stage") or "uploaded").lower()
+            word_stage = str(record.stage or job_meta.get("word_stage") or "uploaded").lower()
             status_map = {
                 "uploaded": ("uploaded", "已上傳"),
                 "translate_running": ("translate", "翻譯中"),
@@ -254,9 +328,9 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
                     "status_label": status_label,
                     "status": status_label,
                     "job_name": job_name,
-                    "progress": float(job_meta.get("progress") or 0.0),
+                    "progress": float(job_meta.get("progress") or record.progress or 0.0),
                     "avg_quality": float(job_meta.get("avg_quality") or 0.0),
-                    "target_lang": job_meta.get("target_lang"),
+                    "target_lang": record.target_lang or job_meta.get("target_lang"),
                     "download_name": build_docx_name(job_id, job_name),
                     "source_docx_url": url_for(
                         "jobs.job_file", job_id=job_id, filename=word_source_name
@@ -332,8 +406,8 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
                 )
                 if edited_pdf_path.exists()
                 else None,
-            }
-        )
+                }
+            )
     jobs.sort(key=lambda item: item["updated_at"], reverse=True)
     return jobs
 
@@ -361,6 +435,24 @@ def job_meta_path(job_dir_path: Path) -> Path:
 def write_job_meta(job_dir_path: Path, meta: dict[str, Any]) -> None:
     job_meta_path(job_dir_path).write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    job_id = job_dir_path.name
+    if not safe_job_id(job_id):
+        return
+    job_type = str(meta.get("job_type") or get_job_type(job_dir_path))
+    status, stage = infer_job_store_status(job_dir_path, meta)
+    progress = float(meta.get("progress") or 0.0)
+    _safe_update_job_store(
+        job_id,
+        job_type=job_type,
+        status=status,
+        stage=stage,
+        progress=progress,
+        job_name=normalize_job_name(meta.get("job_name")),
+        target_lang=str(meta.get("target_lang") or "") or None,
+        document_mode=str(meta.get("document_mode") or "") or None,
+        started_at=datetime_from_timestamp(meta.get("processing_started_at")),
+        completed_at=datetime_from_timestamp(meta.get("processing_completed_at")),
     )
 
 
@@ -404,6 +496,12 @@ def write_batch_status(job_dir_path: Path, status: str, **meta: Any) -> None:
     }
     batch_status_path(job_dir_path).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    _safe_update_job_store(
+        job_dir_path.name,
+        status=DB_STATUS_BY_BATCH.get(status.lower(), "running"),
+        stage="translate",
+        error_message=str(meta.get("error") or "") or None,
     )
     notify_jobs_update()
 
@@ -553,6 +651,7 @@ def delete_job_dir(job_id: str) -> tuple[bool, str | None]:
         shutil.rmtree(job_dir_path)
     except Exception as exc:
         return False, str(exc)
+    _safe_update_job_store(job_id, status="cancelled", completed_at=datetime.now(timezone.utc))
     notify_jobs_update()
     return True, None
 

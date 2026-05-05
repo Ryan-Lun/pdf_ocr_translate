@@ -751,18 +751,16 @@ def enqueue_word_job_from_upload(
             "avg_quality": 0.0,
         },
     )
+    jobs.job_store.create_job(
+        job_id=job_id,
+        job_type="word_translate",
+        stage="uploaded",
+        job_name=display_name,
+        target_lang=target_lang,
+        payload={
+            "target_lang": target_lang,
+            "retain_terms": retain_terms,
+        },
+    )
     jobs.notify_jobs_update()
-    threading.Thread(
-        target=_run_word_job,
-        args=(
-            job_id,
-            job_dir,
-            source_path,
-            processing_source_path,
-            output_path,
-            target_lang,
-            retain_terms,
-        ),
-        daemon=True,
-    ).start()
     return job_id
