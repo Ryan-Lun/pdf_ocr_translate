@@ -687,3 +687,101 @@ def test_scanned_document_mode_writes_back_to_ocr_boxes():
     assert len(boxes) == 1
     assert boxes[0]["id"] == 0
     assert boxes[0]["text"] == "translated scan"
+
+
+def test_general_mode_chart_blocks_fall_back_to_ocr_lines_for_batch_items():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": ["圖表標題", "X軸標籤", "Y軸標籤"],
+            "rec_polys": [
+                [[0, 0], [100, 0], [100, 20], [0, 20]],
+                [[0, 30], [100, 30], [100, 50], [0, 50]],
+                [[0, 60], [100, 60], [100, 80], [0, 80]],
+            ],
+        }
+    ]
+    pp_pages = {
+        0: {
+            "parsing_res_list": [
+                {
+                    "block_content": "圖表標題\nX軸標籤\nY軸標籤",
+                    "block_bbox": [0, 0, 120, 100],
+                    "should_translate": True,
+                    "block_label": "chart",
+                }
+            ],
+            "table_res_list": [],
+        }
+    }
+
+    items, _, key_map, _ = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        pp_pages=pp_pages,
+        document_mode="general",
+    )
+
+    assert [item["custom_id"] for item in items] == [
+        "p0000-l0000",
+        "p0000-l0001",
+        "p0000-l0002",
+    ]
+    assert key_map == {
+        "p0000-l0000": {
+            "source_text": "圖表標題",
+            "source_normalized": "圖表標題",
+        },
+        "p0000-l0001": {
+            "source_text": "X軸標籤",
+            "source_normalized": "X軸標籤",
+        },
+        "p0000-l0002": {
+            "source_text": "Y軸標籤",
+            "source_normalized": "Y軸標籤",
+        },
+    }
+
+
+def test_general_mode_chart_blocks_fall_back_to_ocr_lines_for_edits_payload():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": ["圖表標題", "X軸標籤"],
+            "rec_polys": [
+                [[0, 0], [100, 0], [100, 20], [0, 20]],
+                [[0, 30], [100, 30], [100, 50], [0, 50]],
+            ],
+        }
+    ]
+    pp_pages = {
+        0: {
+            "parsing_res_list": [
+                {
+                    "block_content": "圖表標題\nX軸標籤",
+                    "block_bbox": [0, 0, 120, 60],
+                    "should_translate": True,
+                    "block_label": "chart",
+                }
+            ],
+            "table_res_list": [],
+        }
+    }
+
+    payload = build_edits_payload_from_translations(
+        ocr_pages,
+        {
+            "p0000-l0000": "chart title",
+            "p0000-l0001": "x axis",
+            "p0000-b0000": "should not be used",
+        },
+        pp_pages=pp_pages,
+        document_mode="general",
+    )
+
+    boxes = payload["pages"][0]["boxes"]
+    assert len(boxes) == 2
+    assert [box["id"] for box in boxes] == [0, 1]
+    assert [box["text"] for box in boxes] == ["chart title", "x axis"]

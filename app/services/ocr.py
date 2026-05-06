@@ -322,7 +322,7 @@ def iter_merged_cells(pp_page: dict[str, Any] | None) -> list[dict[str, Any]]:
             if not (isinstance(box, list) and len(box) == 4):
                 continue
             text = str(cell.get("merged_text") or "").strip()
-            print("[iter_merged_cells]", text)
+            # print("[iter_merged_cells]", text)
             if not text:
                 continue
             original_components = cell.get("original_ocr_components") or []

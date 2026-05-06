@@ -35,6 +35,8 @@ const fontColorEl = document.getElementById("fontColor");
 const deleteBtn = document.getElementById("deleteBox");
 const addBoxBtn = document.getElementById("addBox");
 const copyBoxBtn = document.getElementById("copyBox");
+const batchApplyBoxesBtn = document.getElementById("batchApplyBoxes");
+const batchDeleteBoxesBtn = document.getElementById("batchDeleteBoxes");
 const saveBtn = document.getElementById("saveBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 const batchTranslateBtn = document.getElementById("batchTranslateBtn");
@@ -60,6 +62,14 @@ const savePromptBtn = document.getElementById("savePromptBtn");
 const glossaryPromptBtn = document.getElementById("glossaryPromptBtn");
 const glossaryPromptModal = document.getElementById("glossaryPromptModal");
 const closeGlossaryPrompt = document.getElementById("closeGlossaryPrompt");
+const batchPageModal = document.getElementById("batchPageModal");
+const batchPageSourceHintEl = document.getElementById("batchPageSourceHint");
+const batchPageAllEl = document.getElementById("batchPageAll");
+const batchPageAfterEl = document.getElementById("batchPageAfter");
+const batchPageInputEl = document.getElementById("batchPageInput");
+const confirmBatchPageModalBtn = document.getElementById("confirmBatchPageModal");
+const cancelBatchPageModalBtn = document.getElementById("cancelBatchPageModal");
+const closeBatchPageModalBtn = document.getElementById("closeBatchPageModal");
 
 // if (window.pdfjsLib) {
 //   window.pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -84,6 +94,7 @@ function setStatus(message) {
 
 let glossaryEntries = [];
 let currentJobId = null;
+let batchPageModalResolver = null;
 
 function renderGlossary() {
   if (!glossaryListEl) return;
@@ -179,6 +190,39 @@ function openGlossaryModal() {
 function closeGlossaryModal() {
   if (!glossaryPromptModal) return;
   glossaryPromptModal.hidden = true;
+}
+
+function setBatchPagePreset(mode) {
+  if (!batchPageAllEl || !batchPageAfterEl || !batchPageInputEl) return;
+  batchPageAllEl.checked = mode === "all";
+  batchPageAfterEl.checked = mode === "after";
+  batchPageInputEl.disabled = mode === "all" || mode === "after";
+}
+
+function openBatchPageModal(sourcePageIdx, modeLabel) {
+  if (!batchPageModal) return Promise.resolve(null);
+  if (batchPageSourceHintEl) {
+    batchPageSourceHintEl.textContent = `來源頁：第 ${sourcePageIdx + 1} 頁。請設定要${modeLabel}的目標頁。`;
+  }
+  if (batchPageInputEl) {
+    batchPageInputEl.value = "";
+  }
+  setBatchPagePreset("all");
+  batchPageModal.hidden = false;
+  return new Promise((resolve) => {
+    batchPageModalResolver = resolve;
+    confirmBatchPageModalBtn?.focus();
+  });
+}
+
+function finishBatchPageModal(result) {
+  if (!batchPageModal) return;
+  batchPageModal.hidden = true;
+  const resolver = batchPageModalResolver;
+  batchPageModalResolver = null;
+  if (resolver) {
+    resolver(result);
+  }
 }
 
 function setBatchButtonState(status) {
@@ -549,6 +593,294 @@ function copySelectedBoxes() {
     pasteCount: 0,
   };
   setStatus(`Copied ${selected.length} box${selected.length > 1 ? "es" : ""}.`);
+}
+
+function getPageDimensions(page) {
+  const width = Number(page?.imageSize?.[0]) || 1;
+  const height = Number(page?.imageSize?.[1]) || 1;
+  return { width, height };
+}
+
+function normalizeTextForMatch(text) {
+  return String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function getNormalizedBbox(page, bbox) {
+  const { width, height } = getPageDimensions(page);
+  return {
+    x: bbox.x / width,
+    y: bbox.y / height,
+    w: bbox.w / width,
+    h: bbox.h / height,
+  };
+}
+
+function denormalizeBbox(page, normalized) {
+  const { width, height } = getPageDimensions(page);
+  return {
+    x: normalized.x * width,
+    y: normalized.y * height,
+    w: Math.max(1, normalized.w * width),
+    h: Math.max(1, normalized.h * height),
+  };
+}
+
+function clampBboxToPage(page, bbox) {
+  const next = { ...bbox };
+  if (page.imageSize && page.imageSize.length === 2) {
+    const maxX = Math.max(0, page.imageSize[0] - next.w);
+    const maxY = Math.max(0, page.imageSize[1] - next.h);
+    next.x = Math.min(Math.max(0, next.x), maxX);
+    next.y = Math.min(Math.max(0, next.y), maxY);
+    next.w = Math.min(next.w, page.imageSize[0] - next.x);
+    next.h = Math.min(next.h, page.imageSize[1] - next.y);
+  }
+  return next;
+}
+
+function getNextBoxId(page) {
+  return page.boxes.length ? Math.max(...page.boxes.map((box) => Number(box.id) || 0)) + 1 : 0;
+}
+
+function parsePageSelectionInput(input, totalPages, excludedPageIdxs = []) {
+  const raw = String(input || "").trim().toLowerCase();
+  const excluded = new Set(excludedPageIdxs);
+  const allPageIdxs = Array.from({ length: totalPages }, (_, idx) => idx).filter(
+    (idx) => !excluded.has(idx),
+  );
+  if (!raw || raw === "all" || raw === "全部") {
+    return allPageIdxs;
+  }
+  if (raw === "after" || raw === "之後") {
+    const minExcluded = excludedPageIdxs.length ? Math.min(...excludedPageIdxs) : -1;
+    return allPageIdxs.filter((idx) => idx > minExcluded);
+  }
+
+  const result = new Set();
+  raw.split(",").forEach((token) => {
+    const value = token.trim();
+    if (!value) return;
+    const rangeMatch = value.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (rangeMatch) {
+      const start = Number.parseInt(rangeMatch[1], 10);
+      const end = Number.parseInt(rangeMatch[2], 10);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+      const from = Math.max(1, Math.min(start, end));
+      const to = Math.min(totalPages, Math.max(start, end));
+      for (let pageNo = from; pageNo <= to; pageNo += 1) {
+        const pageIdx = pageNo - 1;
+        if (!excluded.has(pageIdx)) {
+          result.add(pageIdx);
+        }
+      }
+      return;
+    }
+    const pageNo = Number.parseInt(value, 10);
+    if (!Number.isFinite(pageNo)) return;
+    const pageIdx = pageNo - 1;
+    if (pageIdx >= 0 && pageIdx < totalPages && !excluded.has(pageIdx)) {
+      result.add(pageIdx);
+    }
+  });
+  return Array.from(result).sort((a, b) => a - b);
+}
+
+async function askBatchTargetPages(sourcePageIdx, modeLabel, excludedPageIdxs = []) {
+  const selection = await openBatchPageModal(sourcePageIdx, modeLabel);
+  if (!selection) return null;
+
+  let pageIdxs = [];
+  if (selection.mode === "all") {
+    pageIdxs = parsePageSelectionInput("all", state.pages.length, excludedPageIdxs);
+  } else if (selection.mode === "after") {
+    pageIdxs = parsePageSelectionInput("after", state.pages.length, excludedPageIdxs);
+  } else {
+    pageIdxs = parsePageSelectionInput(selection.pages, state.pages.length, excludedPageIdxs);
+  }
+  if (!pageIdxs.length) {
+    setStatus("沒有符合的目標頁。");
+    return null;
+  }
+  return pageIdxs;
+}
+
+function getSingleSourceSelection() {
+  const selected = getSelectedBoxes();
+  if (!selected.length) {
+    setStatus("請先選取文字框。");
+    return null;
+  }
+  const sourcePageIdxs = new Set(selected.map((item) => item.pageIdx));
+  if (sourcePageIdxs.size !== 1) {
+    setStatus("批次套用需從同一頁選取來源文字框。");
+    return null;
+  }
+  const sourcePageIdx = selected[0].pageIdx;
+  return {
+    sourcePageIdx,
+    sourcePage: state.pages[sourcePageIdx],
+    selected,
+  };
+}
+
+function buildBatchTemplate(selected, sourcePage) {
+  return selected.map(({ box }) => ({
+    sourceId: box.id,
+    normalizedBbox: getNormalizedBbox(sourcePage, box.bbox),
+    text: box.text,
+    fontSize: box.fontSize,
+    color: box.color,
+    noClip: !!box.noClip,
+  }));
+}
+
+function computeIoU(a, b) {
+  const left = Math.max(a.x, b.x);
+  const top = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.w, b.x + b.w);
+  const bottom = Math.min(a.y + a.h, b.y + b.h);
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  if (intersection <= 0) return 0;
+  const areaA = Math.max(0, a.w) * Math.max(0, a.h);
+  const areaB = Math.max(0, b.w) * Math.max(0, b.h);
+  const union = areaA + areaB - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+async function batchApplySelectedBoxes() {
+  const selection = getSingleSourceSelection();
+  if (!selection) return;
+  const targetPageIdxs = await askBatchTargetPages(
+    selection.sourcePageIdx,
+    "套用",
+    [selection.sourcePageIdx],
+  );
+  if (!targetPageIdxs?.length) return;
+
+  const template = buildBatchTemplate(selection.selected, selection.sourcePage);
+  const { width: sourceWidth, height: sourceHeight } = getPageDimensions(selection.sourcePage);
+  const actions = [];
+  let addedCount = 0;
+
+  targetPageIdxs.forEach((targetPageIdx) => {
+    const targetPage = state.pages[targetPageIdx];
+    if (!targetPage) return;
+    const { width: targetWidth, height: targetHeight } = getPageDimensions(targetPage);
+    const fontScale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+    let nextId = getNextBoxId(targetPage);
+    const addedBoxes = [];
+
+    template.forEach((item) => {
+      const bbox = clampBboxToPage(targetPage, denormalizeBbox(targetPage, item.normalizedBbox));
+      const newBox = {
+        id: nextId++,
+        bbox,
+        text: item.text,
+        fontSize: Math.max(8, item.fontSize * fontScale),
+        color: item.color,
+        noClip: item.noClip,
+        autoGenerated: false,
+        deleted: false,
+        element: null,
+      };
+      targetPage.boxes.push(newBox);
+      createBoxElement(targetPageIdx, targetPage.boxes.length - 1);
+      addedBoxes.push({ pageIdx: targetPageIdx, box: cloneBoxData(newBox) });
+      addedCount += 1;
+    });
+
+    if (addedBoxes.length) {
+      actions.push({ type: "add_boxes", boxes: addedBoxes });
+    }
+  });
+
+  if (!actions.length) {
+    setStatus("沒有新增任何文字框。");
+    return;
+  }
+  pushAction(actions.length === 1 ? actions[0] : { type: "batch", actions });
+  setStatus(`已批次套用 ${addedCount} 個文字框到 ${targetPageIdxs.length} 頁。`);
+}
+
+async function batchDeleteMatchingBoxes() {
+  const selection = getSingleSourceSelection();
+  if (!selection) return;
+  const targetPageIdxs = await askBatchTargetPages(
+    selection.sourcePageIdx,
+    "刪除",
+    [selection.sourcePageIdx],
+  );
+  if (!targetPageIdxs?.length) return;
+
+  const template = buildBatchTemplate(selection.selected, selection.sourcePage);
+  const actions = [];
+  let deletedCount = 0;
+
+  const sourceDeletedEntries = selection.selected.map(({ pageIdx, box }) => ({
+    pageIdx,
+    box: cloneBoxData(box),
+  }));
+  selection.selected.forEach(({ page, box }) => {
+    box.deleted = true;
+    updateBoxElement(page, box);
+    deletedCount += 1;
+  });
+  if (sourceDeletedEntries.length) {
+    actions.push({ type: "delete_boxes", boxes: sourceDeletedEntries });
+  }
+
+  targetPageIdxs.forEach((targetPageIdx) => {
+    const targetPage = state.pages[targetPageIdx];
+    if (!targetPage) return;
+    const usedBoxIds = new Set();
+    const deletedEntries = [];
+
+    template.forEach((item) => {
+      const expectedBbox = denormalizeBbox(targetPage, item.normalizedBbox);
+      const expectedText = normalizeTextForMatch(item.text);
+      let bestCandidate = null;
+      let bestScore = 0;
+
+      targetPage.boxes.forEach((candidate) => {
+        if (!candidate || candidate.deleted || usedBoxIds.has(candidate.id)) return;
+        const iou = computeIoU(candidate.bbox, expectedBbox);
+        const centerDx = Math.abs(
+          candidate.bbox.x + candidate.bbox.w / 2 - (expectedBbox.x + expectedBbox.w / 2),
+        );
+        const centerDy = Math.abs(
+          candidate.bbox.y + candidate.bbox.h / 2 - (expectedBbox.y + expectedBbox.h / 2),
+        );
+        const distancePenalty = (centerDx + centerDy) / 10000;
+        const textBonus =
+          expectedText && normalizeTextForMatch(candidate.text) === expectedText ? 0.2 : 0;
+        const score = iou + textBonus - distancePenalty;
+        if (score > bestScore) {
+          bestScore = score;
+          bestCandidate = candidate;
+        }
+      });
+
+      if (bestCandidate && bestScore >= 0.25) {
+        usedBoxIds.add(bestCandidate.id);
+        deletedEntries.push({ pageIdx: targetPageIdx, box: cloneBoxData(bestCandidate) });
+        bestCandidate.deleted = true;
+        updateBoxElement(targetPage, bestCandidate);
+        deletedCount += 1;
+      }
+    });
+
+    if (deletedEntries.length) {
+      actions.push({ type: "delete_boxes", boxes: deletedEntries });
+    }
+  });
+
+  if (!actions.length) {
+    setStatus("沒有找到可批次刪除的對應文字框。");
+    return;
+  }
+  clearSelection();
+  pushAction(actions.length === 1 ? actions[0] : { type: "batch", actions });
+  setStatus(`已批次刪除 ${deletedCount} 個對應文字框。`);
 }
 
 function pasteClipboardBoxes() {
@@ -1846,6 +2178,18 @@ function bindControls() {
     });
   }
 
+  if (batchApplyBoxesBtn) {
+    batchApplyBoxesBtn.addEventListener("click", () => {
+      batchApplySelectedBoxes();
+    });
+  }
+
+  if (batchDeleteBoxesBtn) {
+    batchDeleteBoxesBtn.addEventListener("click", () => {
+      batchDeleteMatchingBoxes();
+    });
+  }
+
   if (addGlossaryBtn) {
     addGlossaryBtn.addEventListener("click", () => {
       addGlossaryEntry();
@@ -1870,6 +2214,71 @@ function bindControls() {
     });
   }
 
+  if (batchPageAllEl) {
+    batchPageAllEl.addEventListener("change", () => {
+      if (batchPageAllEl.checked) {
+        setBatchPagePreset("all");
+      } else {
+        setBatchPagePreset("manual");
+      }
+    });
+  }
+
+  if (batchPageAfterEl) {
+    batchPageAfterEl.addEventListener("change", () => {
+      if (batchPageAfterEl.checked) {
+        setBatchPagePreset("after");
+      } else {
+        setBatchPagePreset("manual");
+      }
+    });
+  }
+
+  if (batchPageInputEl) {
+    batchPageInputEl.addEventListener("input", () => {
+      if (!batchPageInputEl.disabled && batchPageInputEl.value.trim()) {
+        setBatchPagePreset("manual");
+      }
+    });
+    batchPageInputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        confirmBatchPageModalBtn?.click();
+      }
+    });
+  }
+
+  if (confirmBatchPageModalBtn) {
+    confirmBatchPageModalBtn.addEventListener("click", () => {
+      if (batchPageAllEl?.checked) {
+        finishBatchPageModal({ mode: "all", pages: "" });
+        return;
+      }
+      if (batchPageAfterEl?.checked) {
+        finishBatchPageModal({ mode: "after", pages: "" });
+        return;
+      }
+      const raw = batchPageInputEl?.value?.trim() || "";
+      if (!raw) {
+        setStatus("請勾選全部/之後，或輸入指定頁碼。");
+        return;
+      }
+      finishBatchPageModal({ mode: "manual", pages: raw });
+    });
+  }
+
+  if (cancelBatchPageModalBtn) {
+    cancelBatchPageModalBtn.addEventListener("click", () => {
+      finishBatchPageModal(null);
+    });
+  }
+
+  if (closeBatchPageModalBtn) {
+    closeBatchPageModalBtn.addEventListener("click", () => {
+      finishBatchPageModal(null);
+    });
+  }
+
   if (glossaryPromptModal) {
     glossaryPromptModal.addEventListener("click", (event) => {
       if (event.target === glossaryPromptModal) {
@@ -1878,8 +2287,20 @@ function bindControls() {
     });
   }
 
+  if (batchPageModal) {
+    batchPageModal.addEventListener("click", (event) => {
+      if (event.target === batchPageModal) {
+        finishBatchPageModal(null);
+      }
+    });
+  }
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      if (batchPageModal && !batchPageModal.hidden) {
+        finishBatchPageModal(null);
+        return;
+      }
       closeGlossaryModal();
     }
   });

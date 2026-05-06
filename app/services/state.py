@@ -56,6 +56,7 @@ AZURE_BATCH_SYSTEM_PROMPT = os.getenv(
             "Translate the text from Chinese to English accurately and literally.",
             "Do NOT summarize, paraphrase, explain, or add content.",
             "Preserve all numbers, codes, references, and formatting.",
+            "If the input is a standalone year, number, code, table number, figure number, symbol, unit, abbreviation, or non-sentence fragment, do not explain it. Return only the translated or preserved text. Examples: 2017年 -> 2017、2018年 -> 2018、N/A -> N/A",
             "CRITICAL FORMATTING RULE 1: You MUST insert a line break strictly before every numbered item (e.g., '2.', '3.', '4.').",
             "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",
             "Strictly prohibit duplicate words or expressions with identical meanings; if they appear, you must remove the redundancy and keep only one.",

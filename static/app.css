@@ -521,6 +521,10 @@ button.primary:hover {
   margin-top: 0.6rem;
 }
 
+.button-row button {
+  width: 100%;
+}
+
 .glossary-list {
   display: grid;
   gap: 0.5rem;
@@ -575,6 +579,10 @@ button.primary:hover {
   grid-template-rows: auto 1fr;
 }
 
+.modal-card--compact {
+  width: min(520px, 92vw);
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -593,6 +601,31 @@ button.primary:hover {
   display: grid;
   gap: 1rem;
   overflow: auto;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.25rem 0;
+}
+
+.check-row span {
+  margin: 0;
+  color: var(--ink);
+}
+
+.check-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
 }
 
 .status {

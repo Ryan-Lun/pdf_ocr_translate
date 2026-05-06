@@ -187,6 +187,26 @@ def bbox_list_overlaps_tables(
     return False
 
 
+def is_chart_block(block: dict[str, Any] | None) -> bool:
+    return str((block or {}).get("label") or "").strip().lower() == "chart"
+
+
+def should_skip_ocr_line_for_structured_blocks(
+    bbox: list[float] | None,
+    paragraph_blocks: list[dict[str, Any]],
+) -> bool:
+    if not bbox or len(bbox) != 4:
+        return False
+    for block in paragraph_blocks:
+        if not block.get("should_translate"):
+            continue
+        if is_chart_block(block):
+            continue
+        if bbox_list_overlaps_tables(bbox, [block.get("bbox")], min_overlap_ratio=0.15):
+            return True
+    return False
+
+
 def get_azure_client():
     return openai_config.create_sync_client()
 
@@ -204,6 +224,7 @@ def resolve_batch_prompt(target_lang: str, override: str | None = None) -> str:
             f"Translate the text to {target_lang} accurately and literally.",
             "Do NOT summarize, paraphrase, explain, or add content.",
             "Preserve all numbers, codes, references, and formatting.",
+            "If the input is a standalone year, number, code, table number, figure number, symbol, unit, abbreviation, or non-sentence fragment, do not explain it. Return only the translated or preserved text. Examples: 2017年 -> 2017、2018年 -> 2018、N/A -> N/A",
             "CRITICAL FORMATTING RULE 1: You MUST insert a line break strictly before every numbered item (e.g., '2.', '3.', '4.').",
             "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",
             "Strictly prohibit duplicate words or expressions with identical meanings; if they appear, you must remove the redundancy and keep only one.",
@@ -320,6 +341,8 @@ def build_batch_items(
             for block in paragraph_blocks:
                 if not block.get("should_translate"):
                     continue
+                if is_chart_block(block):
+                    continue
                 if table_bboxes and bbox_list_overlaps_tables(block.get("bbox"), table_bboxes):
                     continue
                 block_idx = int(block.get("block_index", 0))
@@ -335,8 +358,6 @@ def build_batch_items(
         for idx, text in enumerate(texts):
             if merged_only:
                 continue
-            if has_paragraph_flags:
-                continue
             if skip_table_lines and table_bboxes and idx < len(rec_polys):
                 bbox = poly_to_bbox(rec_polys[idx])
                 if bbox:
@@ -350,6 +371,28 @@ def build_batch_items(
                         table_bboxes,
                     ):
                         continue
+                    if has_paragraph_flags and should_skip_ocr_line_for_structured_blocks(
+                        [
+                            float(bbox["x"]),
+                            float(bbox["y"]),
+                            float(bbox["x"]) + float(bbox["w"]),
+                            float(bbox["y"]) + float(bbox["h"]),
+                        ],
+                        paragraph_blocks,
+                    ):
+                        continue
+            elif has_paragraph_flags and idx < len(rec_polys):
+                bbox = poly_to_bbox(rec_polys[idx])
+                if bbox and should_skip_ocr_line_for_structured_blocks(
+                    [
+                        float(bbox["x"]),
+                        float(bbox["y"]),
+                        float(bbox["x"]) + float(bbox["w"]),
+                        float(bbox["y"]) + float(bbox["h"]),
+                    ],
+                    paragraph_blocks,
+                ):
+                    continue
             custom_id = f"p{page_idx:04d}-l{idx:04d}"
             _add_item(custom_id, text)
 
@@ -453,6 +496,7 @@ def build_edits_payload_from_translations(
         table_bboxes = ocr.collect_table_bboxes(pp_page) if merged_cells else []
         skip_table_lines = bool(table_bboxes)
         has_paragraph_flags = use_structured_blocks and ocr.has_paragraph_translate_flags(pp_page)
+        paragraph_blocks = ocr.iter_paragraph_blocks(pp_page) if use_structured_blocks else []
         
 
         for idx, poly in enumerate(rec_polys):
@@ -471,8 +515,6 @@ def build_edits_payload_from_translations(
                 continue
             if merged_only:
                 continue
-            if has_paragraph_flags:
-                continue
             if skip_table_lines and table_bboxes:
                 if bbox_list_overlaps_tables(
                     [
@@ -484,6 +526,16 @@ def build_edits_payload_from_translations(
                     table_bboxes,
                 ):
                     continue
+            if has_paragraph_flags and should_skip_ocr_line_for_structured_blocks(
+                [
+                    float(bbox["x"]),
+                    float(bbox["y"]),
+                    float(bbox["x"]) + float(bbox["w"]),
+                    float(bbox["y"]) + float(bbox["h"]),
+                ],
+                paragraph_blocks,
+            ):
+                continue
             boxes.append(
                 {
                     "id": idx,
@@ -495,11 +547,12 @@ def build_edits_payload_from_translations(
                 }
             )
 
-        paragraph_blocks = ocr.iter_paragraph_blocks(pp_page) if use_structured_blocks else []
         if paragraph_blocks and not merged_only:
             base_id = 200000
             for block in paragraph_blocks:
                 if not block.get("should_translate"):
+                    continue
+                if is_chart_block(block):
                     continue
                 if table_bboxes and bbox_list_overlaps_tables(block.get("bbox"), table_bboxes):
                     continue
