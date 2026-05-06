@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>功能入口</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+  </head>
+  <body class="home home-hub">
+    <main class="shell">
+      <section class="launcher-shell">
+        <div class="w-100">
+          <div class="launcher-intro">
+            <h1>功能入口</h1>
+          </div>
+          <div class="launcher-grid launcher-grid--triple">
+            <a class="launcher-card" href="{{ url_for('.overlay_workspace') }}">
+              <div class="launcher-card__tile">
+                <i class="bi bi-file-earmark-pdf launcher-card__icon" aria-hidden="true"></i>
+              </div>
+              <div class="launcher-card__label">PDF 原版面翻譯</div>
+            </a>
+            <a class="launcher-card" href="{{ url_for('.doc_workspace_page') }}">
+              <div class="launcher-card__tile">
+                <i class="bi bi-file-earmark-pdf launcher-card__icon" aria-hidden="true"></i>
+              </div>
+              <div class="launcher-card__label">PDF 翻譯重建</div>
+            </a>
+            <a class="launcher-card" href="{{ url_for('.word_workspace_page') }}">
+              <div class="launcher-card__tile">
+                <i class="bi bi-file-earmark-word launcher-card__icon" aria-hidden="true"></i>
+              </div>
+              <div class="launcher-card__label">Word 原版面翻譯</div>
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDF 原版面翻譯</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+  </head>
+  <body class="home">
+    <main class="shell">
+      <header class="hero">
+        <div class="hero-title-split">
+          <h1>PDF 原版面翻譯</h1>
+          <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
+        </div>
+        <p class="eyebrow">PDF -> OCR -> Translate -> Overlay</p>
+      </header>
+      <section class="upload-card">
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('.upload') }}">
+          <label class="file-input">
+            <span>選擇 PDF（可多選）</span>
+            <input id="overlayUploadInput" type="file" name="pdf" accept="application/pdf" multiple />
+          </label>
+          <div id="uploadFiles" class="upload-files">
+            <div class="upload-files-header">
+              <span id="uploadFilesSummary">尚未選擇檔案</span>
+              <button id="uploadFilesToggle" class="ghost" type="button" style="display:none">展開</button>
+            </div>
+            <div id="uploadFilesList" class="upload-files-list" style="display:none"></div>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>開始頁</span>
+              <input type="number" name="start" value="1" min="1" />
+            </label>
+            <label>
+              <span>結束頁</span>
+              <input type="number" name="end" placeholder="可留空" min="1" />
+            </label>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>啟用翻譯</span>
+              <input type="checkbox" name="translate" checked />
+            </label>
+            <label>
+              <span>文件模式</span>
+              <select name="document_mode">
+                <option value="form" selected>表單文件</option>
+                <option value="general">一般文件</option>
+                <option value="scanned">掃描文件</option>
+              </select>
+            </label>
+            <label>
+              <span>翻譯目標</span>
+              <select name="keep_lang">
+                <option value="all" selected>原文</option>
+                <option value="zh">中文</option>
+                <option value="en">英文</option>
+              </select>
+            </label>
+            <label>
+              <span>翻譯語言</span>
+              <select name="target_lang">
+                <option value="en" selected>English (en)</option>
+                <option value="zh">中文 (zh)</option>
+              </select>
+            </label>
+            <label>
+              <span>翻譯模型</span>
+              <select name="model">
+                <option value="{{ batch_model }}" selected>{{ batch_model }}</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-note">
+            <span>注意事項 : 此模式翻譯時間較久，翻譯完成後請檢查輸出結果</span>
+            <p><code>表單文件</code><br>適用頁面以表格為主的文件<br>(Q-2005, Q-2001, Q-2010, Q-2014, Q-2013, Q-2011, Q-2156,<br>Q-2001, Q-2473, Q-2006, Q-2007, Q-2300, Q-2285, Q-2286,<br>Q-2027, Q-2039, Q-2088, Q-2404, Q-2531, Q-2530, Q-2439,<br>Q-2005, Q-2497, Q-2305)</p>
+            <p><code>一般文件</code><br>適用 Q-2305 格式的文件</p>
+            <p><code>掃描文件</code><br>適用頁面以掃描為主的文件<br>(Q-2024, Q-2031, Q-2112, Q-2034, Q-2255, Q-2350, Q-2060)</p>
+          </div>
+          <button class="primary" type="submit">開始批次處理</button>
+        </form>
+      </section>
+      <section class="upload-card jobs-board">
+        <div class="jobs-header">
+          <div>
+            <p class="eyebrow">Manage</p>
+            <h2>任務列表</h2>
+          </div>
+          <div class="jobs-actions">
+            <button id="jobsSelectAll" class="ghost" type="button">全部勾選</button>
+            <button id="jobsSelectNone" class="ghost" type="button">取消勾選</button>
+            <button id="jobsDownload" class="ghost" type="button">下載翻譯文件</button>
+            <button id="jobsRefresh" class="ghost" type="button">重新整理</button>
+          </div>
+        </div>
+        <div id="jobsEmpty" class="hint">No processed files yet.</div>
+        <div id="jobsList" class="jobs-list"></div>
+      </section>
+    </main>
+    <script>
+      const jobsList = document.getElementById("jobsList");
+      const jobsEmpty = document.getElementById("jobsEmpty");
+      const jobsRefresh = document.getElementById("jobsRefresh");
+      const jobsDownload = document.getElementById("jobsDownload");
+      const jobsSelectAll = document.getElementById("jobsSelectAll");
+      const jobsSelectNone = document.getElementById("jobsSelectNone");
+      const uploadInput = document.getElementById("overlayUploadInput");
+      const uploadFilesSummary = document.getElementById("uploadFilesSummary");
+      const uploadFilesToggle = document.getElementById("uploadFilesToggle");
+      const uploadFilesList = document.getElementById("uploadFilesList");
+      const selectedJobs = new Set();
+      let jobsLoading = false;
+      let jobsSource = null;
+
+      function formatDate(ts) {
+        if (!ts) return "Unknown";
+        return new Date(ts * 1000).toLocaleString();
+      }
+
+      function formatDuration(seconds) {
+        if (seconds == null || Number.isNaN(seconds)) return "";
+        const total = Math.max(0, Math.floor(seconds));
+        const mins = Math.floor(total / 60);
+        const secs = total % 60;
+        if (mins > 0) return `${mins}分${secs}秒`;
+        return `${secs}秒`;
+      }
+
+      function isActiveJob(job) {
+        return ["queued", "running", "cancel_requested"].includes(job.job_status);
+      }
+
+      function canRetryJob(job) {
+        return ["failed", "cancelled"].includes(job.job_status);
+      }
+
+      async function cancelJob(jobId) {
+        const res = await fetch(`/api/job/${jobId}/cancel`, { method: "POST" });
+        if (!res.ok) throw new Error("cancel failed");
+      }
+
+      async function retryJob(jobId) {
+        const res = await fetch(`/api/job/${jobId}/retry`, { method: "POST" });
+        if (!res.ok) throw new Error("retry failed");
+      }
+
+      function renderJobs(jobs) {
+        jobsList.innerHTML = "";
+        if (!jobs || jobs.length === 0) {
+          jobsEmpty.style.display = "block";
+          return;
+        }
+        jobsEmpty.style.display = "none";
+        const available = new Set();
+        jobs.forEach((job) => {
+          available.add(job.job_id);
+          const card = document.createElement("article");
+          card.className = "job-card";
+
+          const selectWrap = document.createElement("label");
+          selectWrap.className = "job-select";
+          const selectInput = document.createElement("input");
+          selectInput.type = "checkbox";
+          selectInput.className = "job-check";
+          selectInput.dataset.jobId = job.job_id;
+          selectInput.checked = selectedJobs.has(job.job_id);
+          selectInput.addEventListener("change", () => {
+            if (selectInput.checked) selectedJobs.add(job.job_id);
+            else selectedJobs.delete(job.job_id);
+          });
+          selectWrap.appendChild(selectInput);
+
+          const idTag = document.createElement("div");
+          idTag.className = "job-id";
+          idTag.textContent = job.job_id.slice(0, 8);
+
+          const title = document.createElement("div");
+          title.className = "job-title";
+          title.textContent = job.job_name && job.job_name.trim()
+            ? job.job_name
+            : `Job ${job.job_id.slice(0, 8)}`;
+
+          const meta = document.createElement("div");
+          meta.className = "job-meta";
+          const statusLabel = job.status_label || job.status || "Unknown";
+          const durationLabel = formatDuration(job.duration_seconds);
+          const durationText = durationLabel ? ` · 處理時間: ${durationLabel}` : "";
+          const ocrDuration = formatDuration(job.ocr_duration_seconds);
+          const translateDuration = formatDuration(job.translate_duration_seconds);
+          const ocrText = ocrDuration ? ` · OCR: ${ocrDuration}` : "";
+          const translateText = translateDuration ? ` · 翻譯: ${translateDuration}` : "";
+          meta.textContent = `Updated: ${formatDate(job.updated_at)} · Status: ${statusLabel}${durationText}${ocrText}${translateText}`;
+
+          const actions = document.createElement("div");
+          actions.className = "job-actions";
+
+          if (isActiveJob(job)) {
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "ghost";
+            cancelBtn.textContent = job.job_status === "cancel_requested" ? "取消中" : "取消";
+            cancelBtn.disabled = job.job_status === "cancel_requested";
+            cancelBtn.addEventListener("click", async () => {
+              cancelBtn.disabled = true;
+              try {
+                await cancelJob(job.job_id);
+              } catch (error) {
+                alert("Cancel failed. Please try again.");
+              } finally {
+                loadJobs();
+              }
+            });
+            actions.appendChild(cancelBtn);
+          }
+
+          if (!isActiveJob(job) && (job.debug_pdf_url || job.edited_pdf_url)) {
+            const editLink = document.createElement("a");
+            editLink.href = job.editor_url;
+            editLink.textContent = "編輯";
+            editLink.className = "ghost";
+            actions.appendChild(editLink);
+          } else {
+            const pendingEdit = document.createElement("span");
+            pendingEdit.className = "job-muted";
+            pendingEdit.textContent = "Processing...";
+            actions.appendChild(pendingEdit);
+          }
+
+          if (job.edited_pdf_url) {
+            const downloadLink = document.createElement("a");
+            downloadLink.href = `${job.edited_pdf_url}?download=1`;
+            downloadLink.textContent = "下載已翻譯文件";
+            downloadLink.className = "ghost";
+            downloadLink.download = job.download_name || `${job.job_id}.pdf`;
+            actions.appendChild(downloadLink);
+          }
+
+          if (canRetryJob(job)) {
+            const retryBtn = document.createElement("button");
+            retryBtn.type = "button";
+            retryBtn.className = "ghost";
+            retryBtn.textContent = "重試";
+            retryBtn.addEventListener("click", async () => {
+              retryBtn.disabled = true;
+              try {
+                await retryJob(job.job_id);
+              } catch (error) {
+                alert("Retry failed. Please try again.");
+              } finally {
+                loadJobs();
+              }
+            });
+            actions.appendChild(retryBtn);
+          }
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "danger job-delete";
+          deleteBtn.textContent = "刪除";
+          deleteBtn.addEventListener("click", async () => {
+            const ok = confirm(`Delete job ${job.job_id}? This cannot be undone.`);
+            if (!ok) return;
+            deleteBtn.disabled = true;
+            try {
+              const res = await fetch(`/api/job/${job.job_id}`, { method: "DELETE" });
+              if (!res.ok) alert("Delete failed. Please try again.");
+            } catch (error) {
+              alert("Delete failed. Please try again.");
+            } finally {
+              deleteBtn.disabled = false;
+              loadJobs();
+            }
+          });
+          actions.appendChild(deleteBtn);
+
+          card.appendChild(selectWrap);
+          card.appendChild(idTag);
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(actions);
+          jobsList.appendChild(card);
+        });
+        Array.from(selectedJobs).forEach((jobId) => {
+          if (!available.has(jobId)) selectedJobs.delete(jobId);
+        });
+      }
+
+      async function loadJobs() {
+        if (jobsLoading) return;
+        jobsLoading = true;
+        jobsList.innerHTML = '<div class="hint">Loading...</div>';
+        try {
+          const res = await fetch("/api/jobs");
+          if (!res.ok) return renderJobs([]);
+          const data = await res.json();
+          renderJobs(data.jobs || []);
+        } catch (error) {
+          renderJobs([]);
+        } finally {
+          jobsLoading = false;
+        }
+      }
+
+      function connectJobsStream() {
+        if (!window.EventSource) return;
+        if (jobsSource) jobsSource.close();
+        jobsSource = new EventSource("/api/jobs/stream");
+        jobsSource.addEventListener("jobs", (event) => {
+          try {
+            renderJobs((JSON.parse(event.data) || {}).jobs || []);
+          } catch (error) {}
+        });
+        jobsSource.onerror = () => {
+          if (jobsSource) {
+            jobsSource.close();
+            jobsSource = null;
+          }
+          setTimeout(connectJobsStream, 5000);
+        };
+      }
+
+      async function downloadTranslatedBatch() {
+        if (selectedJobs.size === 0) {
+          alert("請先勾選要下載的任務。");
+          return;
+        }
+        jobsDownload.disabled = true;
+        try {
+          const res = await fetch("/api/jobs/download-translated", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ job_ids: Array.from(selectedJobs) }),
+          });
+          if (!res.ok) {
+            let msg = "下載失敗，沒有可用的已翻譯文件。";
+            try {
+              const body = await res.json();
+              if (body && body.error) msg = body.error;
+            } catch (error) {
+              msg = "下載失敗，請稍後再試。";
+            }
+            alert(msg);
+            return;
+          }
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = "translated_pdfs.zip";
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          URL.revokeObjectURL(url);
+        } catch (error) {
+          alert("下載失敗，請稍後再試。");
+        } finally {
+          jobsDownload.disabled = false;
+        }
+      }
+
+      function setAllSelections(checked) {
+        const inputs = jobsList.querySelectorAll("input.job-check");
+        inputs.forEach((input) => {
+          const jobId = input.dataset.jobId;
+          if (!jobId) return;
+          input.checked = checked;
+          if (checked) selectedJobs.add(jobId);
+          else selectedJobs.delete(jobId);
+        });
+      }
+
+      function bindUploadFiles() {
+        let filesExpanded = false;
+        const renderUploadFiles = () => {
+          const files = Array.from(uploadInput.files || []);
+          if (!files.length) {
+            uploadFilesSummary.textContent = "尚未選擇檔案";
+            uploadFilesToggle.style.display = "none";
+            uploadFilesList.style.display = "none";
+            uploadFilesList.innerHTML = "";
+            filesExpanded = false;
+            uploadFilesToggle.textContent = "展開";
+            return;
+          }
+          uploadFilesSummary.textContent = `已選 ${files.length} 個檔案`;
+          uploadFilesToggle.style.display = "inline-flex";
+          uploadFilesToggle.textContent = filesExpanded ? "收合" : "展開";
+          if (!filesExpanded) {
+            uploadFilesList.style.display = "none";
+            uploadFilesList.innerHTML = "";
+            return;
+          }
+          uploadFilesList.innerHTML = `<ul>${files.map((file) => `<li>${file.name}</li>`).join("")}</ul>`;
+          uploadFilesList.style.display = "block";
+        };
+        uploadFilesToggle.addEventListener("click", () => {
+          filesExpanded = !filesExpanded;
+          renderUploadFiles();
+        });
+        uploadInput.addEventListener("change", renderUploadFiles);
+        renderUploadFiles();
+      }
+
+      jobsRefresh.addEventListener("click", loadJobs);
+      jobsDownload.addEventListener("click", downloadTranslatedBatch);
+      jobsSelectAll.addEventListener("click", () => setAllSelections(true));
+      jobsSelectNone.addEventListener("click", () => setAllSelections(false));
+      bindUploadFiles();
+      loadJobs();
+      connectJobsStream();
+    </script>
+  </body>
+</html>

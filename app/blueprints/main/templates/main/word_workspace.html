@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Word 原版面翻譯</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+  </head>
+  <body class="home">
+    <main class="shell">
+      <header class="hero">
+        <div class="hero-title-split">
+          <h1>Word 原版面翻譯</h1>
+          <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
+        </div>
+        <p class="eyebrow">DOCX -> Translate -> DOCX</p>
+      </header>
+      <section class="upload-card upload-card-doc">
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('.upload_word_workspace') }}">
+          <label class="file-input">
+            <span>選擇 Word（.doc / .docx，可多選）</span>
+            <input type="file" name="docx" accept=".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple />
+          </label>
+          <div class="form-grid">
+            <label>
+              <span>翻譯語言</span>
+              <select name="target_lang">
+                <option value="en" selected>English (en)</option>
+                <option value="zh">中文 (zh)</option>
+              </select>
+            </label>
+          </div>
+          <!-- <label>
+            <span>保留術語</span>
+            <textarea name="retain_terms" rows="4" placeholder="每行或逗號分隔，例如：AcmeCorp, ProjectX"></textarea>
+          </label> -->
+          <button class="primary" type="submit">開始 Word 翻譯</button>
+        </form>
+      </section>
+      <section class="upload-card jobs-board">
+        <div class="jobs-header">
+          <div>
+            <p class="eyebrow">Word</p>
+            <h2>Word 翻譯任務</h2>
+          </div>
+          <div class="jobs-actions">
+            <button id="wordJobsRefresh" class="ghost" type="button">重新整理</button>
+          </div>
+        </div>
+        <div id="wordJobsEmpty" class="hint">No Word jobs yet.</div>
+        <div id="wordJobsList" class="jobs-list"></div>
+      </section>
+    </main>
+    <script>
+      const wordJobsList = document.getElementById("wordJobsList");
+      const wordJobsEmpty = document.getElementById("wordJobsEmpty");
+      const wordJobsRefresh = document.getElementById("wordJobsRefresh");
+      let wordJobsLoading = false;
+
+      function formatDate(ts) {
+        if (!ts) return "Unknown";
+        return new Date(ts * 1000).toLocaleString();
+      }
+
+      function formatDuration(seconds) {
+        if (seconds == null || Number.isNaN(seconds)) return "";
+        const total = Math.max(0, Math.floor(seconds));
+        const mins = Math.floor(total / 60);
+        const secs = total % 60;
+        if (mins > 0) return `${mins}分${secs}秒`;
+        return `${secs}秒`;
+      }
+
+      function isActiveJob(job) {
+        return ["queued", "running", "cancel_requested"].includes(job.job_status);
+      }
+
+      function canRetryJob(job) {
+        return ["failed", "cancelled"].includes(job.job_status);
+      }
+
+      async function cancelJob(jobId) {
+        const res = await fetch(`/api/job/${jobId}/cancel`, { method: "POST" });
+        if (!res.ok) throw new Error("cancel failed");
+      }
+
+      async function retryJob(jobId) {
+        const res = await fetch(`/api/job/${jobId}/retry`, { method: "POST" });
+        if (!res.ok) throw new Error("retry failed");
+      }
+
+      function renderWordJobs(jobs) {
+        wordJobsList.innerHTML = "";
+        if (!jobs || jobs.length === 0) {
+          wordJobsEmpty.style.display = "block";
+          return;
+        }
+        wordJobsEmpty.style.display = "none";
+        jobs.forEach((job) => {
+          const card = document.createElement("article");
+          card.className = "job-card doc-job-card";
+
+          const idTag = document.createElement("div");
+          idTag.className = "job-id";
+          idTag.textContent = job.job_id.slice(0, 8);
+
+          const title = document.createElement("div");
+          title.className = "job-title";
+          title.textContent = job.job_name && job.job_name.trim()
+            ? job.job_name
+            : `Word ${job.job_id.slice(0, 8)}`;
+
+          const meta = document.createElement("div");
+          meta.className = "job-meta";
+          const durationLabel = formatDuration(job.duration_seconds);
+          const durationText = durationLabel ? ` · 處理時間: ${durationLabel}` : "";
+          const progressText = typeof job.progress === "number" ? ` · 進度: ${job.progress.toFixed(0)}%` : "";
+          const qualityText = typeof job.avg_quality === "number" && job.avg_quality > 0
+            ? ` · 品質: ${job.avg_quality.toFixed(1)}/40`
+            : "";
+          meta.textContent = `Updated: ${formatDate(job.updated_at)} · Status: ${job.status_label || "Unknown"}${durationText}${progressText}${qualityText}`;
+
+          const actions = document.createElement("div");
+          actions.className = "job-actions";
+
+          if (isActiveJob(job)) {
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "ghost";
+            cancelBtn.textContent = job.job_status === "cancel_requested" ? "取消中" : "取消";
+            cancelBtn.disabled = job.job_status === "cancel_requested";
+            cancelBtn.addEventListener("click", async () => {
+              if (cancelBtn.disabled) return;
+              cancelBtn.disabled = true;
+              try {
+                await cancelJob(job.job_id);
+              } catch (error) {
+                alert("Cancel failed. Please try again.");
+              } finally {
+                loadWordJobs();
+              }
+            });
+            actions.appendChild(cancelBtn);
+          }
+
+          if (job.docx_url) {
+            const docxLink = document.createElement("a");
+            docxLink.href = `${job.docx_url}?download=1`;
+            docxLink.textContent = "下載翻譯 Word";
+            docxLink.className = "ghost";
+            docxLink.download = job.download_name || `${job.job_id}.docx`;
+            actions.appendChild(docxLink);
+          }
+
+          if (canRetryJob(job)) {
+            const retryBtn = document.createElement("button");
+            retryBtn.type = "button";
+            retryBtn.className = "ghost";
+            retryBtn.textContent = "重試";
+            retryBtn.addEventListener("click", async () => {
+              retryBtn.disabled = true;
+              try {
+                await retryJob(job.job_id);
+              } catch (error) {
+                alert("Retry failed. Please try again.");
+              } finally {
+                loadWordJobs();
+              }
+            });
+            actions.appendChild(retryBtn);
+          }
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "danger job-delete";
+          deleteBtn.textContent = "刪除";
+          deleteBtn.addEventListener("click", async () => {
+            const ok = confirm(`Delete job ${job.job_id}? This cannot be undone.`);
+            if (!ok) return;
+            deleteBtn.disabled = true;
+            try {
+              const res = await fetch(`/api/job/${job.job_id}`, { method: "DELETE" });
+              if (!res.ok) alert("Delete failed. Please try again.");
+            } catch (error) {
+              alert("Delete failed. Please try again.");
+            } finally {
+              deleteBtn.disabled = false;
+              loadWordJobs();
+            }
+          });
+          actions.appendChild(deleteBtn);
+
+          card.appendChild(idTag);
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(actions);
+          wordJobsList.appendChild(card);
+        });
+      }
+
+      async function loadWordJobs() {
+        if (wordJobsLoading) return;
+        wordJobsLoading = true;
+        wordJobsList.innerHTML = '<div class="hint">Loading...</div>';
+        try {
+          const res = await fetch("/api/word-jobs");
+          if (!res.ok) return renderWordJobs([]);
+          const data = await res.json();
+          renderWordJobs(data.jobs || []);
+        } catch (error) {
+          renderWordJobs([]);
+        } finally {
+          wordJobsLoading = false;
+        }
+      }
+
+      wordJobsRefresh.addEventListener("click", loadWordJobs);
+      loadWordJobs();
+      setInterval(loadWordJobs, 10000);
+    </script>
+  </body>
+</html>
