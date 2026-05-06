@@ -51,6 +51,8 @@ const zoomRangeEl = document.getElementById("zoomRange");
 const zoomNumberEl = document.getElementById("zoomNumber");
 const pagesEl = document.getElementById("pages");
 const thumbsEl = document.getElementById("thumbs");
+const toggleThumbsBtn = document.getElementById("toggleThumbsBtn");
+const viewerEl = document.querySelector(".viewer");
 const editedLink = document.getElementById("editedPdfLink");
 const previewEl = document.getElementById("pdfPreview");
 const previewDebugBtn = document.getElementById("previewDebug");
@@ -99,6 +101,13 @@ function setStatus(message) {
   if (statusEl) {
     statusEl.textContent = message;
   }
+}
+
+function setThumbsCollapsed(collapsed) {
+  if (!viewerEl || !toggleThumbsBtn) return;
+  viewerEl.classList.toggle("is-thumbs-collapsed", collapsed);
+  toggleThumbsBtn.textContent = collapsed ? "顯示頁面縮圖" : "隱藏頁面縮圖";
+  toggleThumbsBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
 }
 
 function setSelectionMode(mode) {
@@ -2303,6 +2312,13 @@ function bindControls() {
     );
   }
 
+  if (toggleThumbsBtn) {
+    toggleThumbsBtn.addEventListener("click", () => {
+      const collapsed = viewerEl?.classList.contains("is-thumbs-collapsed");
+      setThumbsCollapsed(!collapsed);
+    });
+  }
+
   if (deleteBtn) {
     deleteBtn.addEventListener("click", () => {
       deleteSelectedBoxes();
@@ -2644,5 +2660,6 @@ async function init() {
 }
 
 if (document.body.classList.contains("editor")) {
+  setThumbsCollapsed(false);
   init();
 }

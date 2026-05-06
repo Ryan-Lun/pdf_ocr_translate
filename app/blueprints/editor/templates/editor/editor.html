@@ -23,16 +23,15 @@
   </head>
   <body class="editor" data-job-id="{{ job_id }}">
     <header class="topbar">
-      <div>
-        <p class="eyebrow">Editing job</p>
-        <h1>翻譯編輯</h1>
-        <p id="status" class="hint"></p>
+      <div class="topbar-brand">
+        <div class="topbar-title">
+          <h2>翻譯編輯</h2>
+          <!-- <p id="status" class="hint"></p> -->
+        </div>
       </div>
       <div class="topbar-actions">
-        <a class="ghost" href="{{ url_for('main.index') }}">回首頁</a>
         <a id="editedPdfLink" class="ghost" href="#" target="_blank" rel="noopener" style="display:none">預覽已編輯 PDF</a>
         <a class="ghost" href="{{ debug_pdf_url }}" target="_blank" rel="noopener">預覽除錯 PDF</a>
-        <button id="regionTranslateBtn" class="ghost" type="button">補翻選區</button>
         <button id="batchTranslateBtn" class="ghost">重新翻譯</button>
         <button id="batchRestoreBtn" class="ghost">還原翻譯內容/位置</button>
         <button id="glossaryPromptBtn" class="ghost" type="button">詞彙/提示詞</button>
@@ -42,68 +41,73 @@
     </header>
     <main class="workspace">
       <aside class="panel">
-        <section>
-          <h2>頁面</h2>
-          <div class="input-row page-row">
-            <button id="prevPage" class="ghost" type="button">上一頁</button>
-            <select id="pageSelect"></select>
-            <button id="nextPage" class="ghost" type="button">下一頁</button>
-            <!-- <select id="pageSelect"></select> -->
-          </div>
-          <label>
-            <span>縮放 (%)</span>
-            <div class="input-row">
-              <input id="zoomRange" type="range" min="25" max="200" value="50" />
-              <input id="zoomNumber" type="number" min="25" max="200" value="50" />
+        <div class="panel-scroll">
+          <section>
+            <h2>頁面</h2>
+            <div class="input-row page-row">
+              <button id="prevPage" class="ghost" type="button">上一頁</button>
+              <select id="pageSelect"></select>
+              <button id="nextPage" class="ghost" type="button">下一頁</button>
             </div>
-          </label>
-        </section>
-        <section>
-          <h2>編輯工具</h2>
-          <label>
-            <span>字體大小</span>
-            <div class="input-row">
-              <input id="fontSize" type="range" min="8" max="72" value="16" />
-              <input id="fontSizeNumber" type="number" min="8" max="72" value="16" />
+            <label>
+              <span>縮放 (%)</span>
+              <div class="input-row">
+                <input id="zoomRange" type="range" min="25" max="200" value="50" />
+                <input id="zoomNumber" type="number" min="25" max="200" value="50" />
+              </div>
+            </label>
+          </section>
+          <section>
+            <h2>編輯工具</h2>
+            <label>
+              <span>字體大小</span>
+              <div class="input-row">
+                <input id="fontSize" type="range" min="8" max="72" value="16" />
+                <input id="fontSizeNumber" type="number" min="8" max="72" value="16" />
+              </div>
+            </label>
+            <label>
+              <span>字體顏色</span>
+              <input id="fontColor" type="color" value="#0000ff" />
+            </label>
+            <div class="button-row">
+              <button id="regionTranslateBtn" class="ghost" type="button">補翻選區</button>
             </div>
-          </label>
-          <label>
-            <span>字體顏色</span>
-            <input id="fontColor" type="color" value="#0000ff" />
-          </label>
-          <div class="button-row">
-            <button id="addBox" class="ghost">新增文字框</button>
-          </div>
-          <div class="button-row">
-            <button id="copyBox" class="ghost">複製文字框</button>
-          </div>
-          <div class="button-row">
-            <button id="batchApplyBoxes" class="ghost">批次套用到其他頁</button>
-          </div>
-          <div class="button-row">
-            <button id="batchDeleteBoxes" class="ghost">批次刪除其他頁對應框</button>
-          </div>
-          <div class="button-row">
-            <button id="deleteBox" class="danger">刪除文字框</button>
-          </div>
-        </section>
-        
-        <section>
-          <h2>快捷鍵</h2>
-          <p class="hint">
-            拖曳文字框移動，拖曳八點調整大小。<br />
-            Ctrl + 點選可多選，框選可快速選取。<br />
-            多選後可同步調整文字框大小。<br />
-            批次套用/刪除需從同一頁選取來源文字框。<br />
-            按 Delete 刪除選取的文字框。
-          </p>
-        </section>
-        
+            <div class="button-row">
+              <button id="addBox" class="ghost">新增文字框</button>
+            </div>
+            <div class="button-row">
+              <button id="copyBox" class="ghost">複製文字框</button>
+            </div>
+            <div class="button-row">
+              <button id="batchApplyBoxes" class="ghost">批次套用到其他頁</button>
+            </div>
+            <div class="button-row">
+              <button id="batchDeleteBoxes" class="ghost">批次刪除其他頁對應框</button>
+            </div>
+            <div class="button-row">
+              <button id="deleteBox" class="danger">刪除文字框</button>
+            </div>
+            <div class="button-row">
+              <button id="toggleThumbsBtn" class="ghost" type="button" aria-expanded="true">隱藏頁面縮圖</button>
+            </div>
+          </section>
+          
+          <section>
+            <h2>快捷鍵</h2>
+            <p class="hint">
+              拖曳文字框移動，拖曳八點調整大小。<br />
+              Ctrl + 點選可多選，框選可快速選取。<br />
+              多選後可同步調整文字框大小。<br />
+              批次套用/刪除需從同一頁選取來源文字框。<br />
+              按 Delete 刪除選取的文字框。
+            </p>
+          </section>
+        </div>
       </aside>
       <section class="canvas">
         <div class="viewer">
           <aside class="thumbs">
-            <!-- <div class="thumbs-header">Pages</div> -->
             <div id="thumbs" class="thumbs-list"></div>
           </aside>
           <div id="pages" class="pages"></div>
