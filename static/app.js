@@ -1202,7 +1202,8 @@ function polyToBbox(poly) {
   };
 }
 
-function buildState(data) {
+function buildState(data, options = {}) {
+  const { activePageIdx = 0 } = options;
   state.pdfUrl = data.pdf_url || null;
   state.pdfDoc = null;
   state.downloadName = data.download_name || "edited.pdf";
@@ -1247,7 +1248,8 @@ function buildState(data) {
       scale: 1,
     };
   });
-  state.activePageIdx = 0;
+  const maxIdx = Math.max(0, state.pages.length - 1);
+  state.activePageIdx = Math.max(0, Math.min(activePageIdx, maxIdx));
   state.zoom = 0.5;
   if (zoomRangeEl) zoomRangeEl.value = "50";
   if (zoomNumberEl) zoomNumberEl.value = "50";
@@ -2198,14 +2200,15 @@ async function confirmRegionPreview() {
       setStatus(body.error ? `補翻失敗：${body.error}` : "補翻失敗。");
       return;
     }
-    await loadJobData(jobId);
+    await loadJobData(jobId, { preserveActivePage: true });
     setStatus(body.boxes_added ? `補翻完成，新增 ${body.boxes_added} 個文字框。` : "補翻完成，但沒有新增文字框。");
   } catch (error) {
     setStatus("補翻失敗。");
   }
 }
 
-async function loadJobData(jobId) {
+async function loadJobData(jobId, options = {}) {
+  const { preserveActivePage = false } = options;
   setStatus("Loading OCR data...");
   const res = await fetch(`/api/job/${jobId}`);
   if (!res.ok) {
@@ -2213,8 +2216,13 @@ async function loadJobData(jobId) {
     return null;
   }
   const data = await res.json();
-  buildState(data);
+  const targetPageIdx = preserveActivePage ? (state.activePageIdx ?? 0) : 0;
+  buildState(data, { activePageIdx: targetPageIdx });
   renderPages();
+  if (preserveActivePage) {
+    setActivePage(targetPageIdx, { scroll: false });
+    state.pages[state.activePageIdx]?.element?.scrollIntoView({ behavior: "auto", block: "start" });
+  }
   updateEditedLink(data.edited_pdf_url);
   if (previewEditedBtn) {
     previewEditedBtn.disabled = !data.edited_pdf_url;
@@ -2233,7 +2241,7 @@ async function pollBatchStatus(jobId) {
   if (status.status === "running" || status.status === "queued") {
     setTimeout(() => pollBatchStatus(jobId), 5000);
   } else if (status.status === "completed") {
-    await loadJobData(jobId);
+    await loadJobData(jobId, { preserveActivePage: true });
   }
   return status;
 }
@@ -2745,7 +2753,7 @@ function bindControls() {
           setStatus(body.error ? `回復失敗：${body.error}` : "回復失敗。");
           return;
         }
-        await loadJobData(jobId);
+        await loadJobData(jobId, { preserveActivePage: true });
         setStatus("已回復翻譯結果。");
       } catch (error) {
         setStatus("回復失敗。");

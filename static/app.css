@@ -435,7 +435,7 @@ input[type="range"] {
 button,
 .ghost {
   font-family: var(--font-main);
-  border-radius: 999px;
+  border-radius: 15px;
   padding: 0.6rem 1.5rem;
   border: none;
   cursor: pointer;
@@ -507,7 +507,7 @@ button.primary:hover {
 
 .topbar-actions {
   display: flex;
-  gap: 1rem;
+  gap: 0.5rem;
   flex-wrap: wrap;
 }
 
