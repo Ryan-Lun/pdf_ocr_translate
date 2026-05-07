@@ -31,6 +31,7 @@ dependencies = [
   "torch<2.7.0",
   "torchvision<0.22.0",
   "uvicorn>=0.40.0",
+  "spacy>=3.8.14",
 ]
 
 [[tool.uv.index]]

@@ -191,6 +191,24 @@ def is_chart_block(block: dict[str, Any] | None) -> bool:
     return str((block or {}).get("label") or "").strip().lower() == "chart"
 
 
+def should_translate_structured_block(
+    block: dict[str, Any] | None,
+    *,
+    document_mode: str,
+    merged_only: bool,
+) -> bool:
+    if not block or not block.get("should_translate"):
+        return False
+    if is_chart_block(block):
+        return False
+    if not merged_only:
+        return True
+    if resolve_document_mode(document_mode) != "form":
+        return False
+    label = str(block.get("label") or "").strip().lower()
+    return label in {"figure_title", "header"}
+
+
 def should_skip_ocr_line_for_structured_blocks(
     bbox: list[float] | None,
     paragraph_blocks: list[dict[str, Any]],
@@ -389,11 +407,13 @@ def build_batch_items(
         skip_table_lines = bool(table_bboxes)
         has_paragraph_flags = use_structured_blocks and ocr.has_paragraph_translate_flags(pp_page)
         paragraph_blocks = ocr.iter_paragraph_blocks(pp_page) if use_structured_blocks else []
-        if use_structured_blocks and not merged_only:
+        if use_structured_blocks:
             for block in paragraph_blocks:
-                if not block.get("should_translate"):
-                    continue
-                if is_chart_block(block):
+                if not should_translate_structured_block(
+                    block,
+                    document_mode=document_mode,
+                    merged_only=merged_only,
+                ):
                     continue
                 if table_bboxes and bbox_list_overlaps_tables(block.get("bbox"), table_bboxes):
                     continue
@@ -599,12 +619,14 @@ def build_edits_payload_from_translations(
                 }
             )
 
-        if paragraph_blocks and not merged_only:
+        if paragraph_blocks:
             base_id = 200000
             for block in paragraph_blocks:
-                if not block.get("should_translate"):
-                    continue
-                if is_chart_block(block):
+                if not should_translate_structured_block(
+                    block,
+                    document_mode=document_mode,
+                    merged_only=merged_only,
+                ):
                     continue
                 if table_bboxes and bbox_list_overlaps_tables(block.get("bbox"), table_bboxes):
                     continue

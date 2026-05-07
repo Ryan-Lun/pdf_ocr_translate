@@ -42,6 +42,8 @@ const batchApplyBoxesBtn = document.getElementById("batchApplyBoxes");
 const batchDeleteBoxesBtn = document.getElementById("batchDeleteBoxes");
 const saveBtn = document.getElementById("saveBtn");
 const downloadBtn = document.getElementById("downloadBtn");
+const menuBtn = document.getElementById("menuBtn");
+const menuDropdown = document.getElementById("menuDropdown");
 const regionTranslateBtn = document.getElementById("regionTranslateBtn");
 const batchTranslateBtn = document.getElementById("batchTranslateBtn");
 const batchRestoreBtn = document.getElementById("batchRestoreBtn");
@@ -54,6 +56,8 @@ const pagesEl = document.getElementById("pages");
 const thumbsEl = document.getElementById("thumbs");
 const toggleThumbsBtn = document.getElementById("toggleThumbsBtn");
 const toggleViewModeBtn = document.getElementById("toggleViewModeBtn");
+const sidebarEl = document.querySelector(".editor-sidebar");
+const sidebarRailButtons = Array.from(document.querySelectorAll(".sidebar-rail__item"));
 const viewerEl = document.querySelector(".viewer");
 const editedLink = document.getElementById("editedPdfLink");
 const previewEl = document.getElementById("pdfPreview");
@@ -106,10 +110,28 @@ function setStatus(message) {
 }
 
 function setThumbsCollapsed(collapsed) {
-  if (!viewerEl || !toggleThumbsBtn) return;
-  viewerEl.classList.toggle("is-thumbs-collapsed", collapsed);
+  if (!sidebarEl || !toggleThumbsBtn) return;
+  sidebarEl.classList.toggle("is-thumbs-collapsed", collapsed);
   toggleThumbsBtn.textContent = collapsed ? "顯示頁面縮圖" : "隱藏頁面縮圖";
   toggleThumbsBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+}
+
+function setActiveSidebarRail(targetId) {
+  sidebarRailButtons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.sidebarTarget === targetId);
+  });
+}
+
+function setSidebarSection(targetId) {
+  const sections = ["sidebarPagesSection", "sidebarToolsSection", "sidebarShortcutsSection"];
+  sections.forEach((sectionId) => {
+    const sectionEl = document.getElementById(sectionId);
+    if (!sectionEl) return;
+    const active = sectionId === targetId;
+    sectionEl.hidden = !active;
+    sectionEl.classList.toggle("is-active", active);
+  });
+  setActiveSidebarRail(targetId);
 }
 
 function syncViewModeButton() {
@@ -2350,6 +2372,19 @@ function bindControls() {
     applyFontSize(value);
   };
 
+  if (menuBtn && menuDropdown) {
+    menuBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      menuDropdown.hidden = !menuDropdown.hidden;
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!menuDropdown.hidden && !menuDropdown.contains(event.target) && event.target !== menuBtn) {
+        menuDropdown.hidden = true;
+      }
+    });
+  }
+
   if (fontSizeEl) {
     fontSizeEl.addEventListener("input", () => {
       applyFontSize(Number(fontSizeEl.value));
@@ -2469,7 +2504,7 @@ function bindControls() {
 
   if (toggleThumbsBtn) {
     toggleThumbsBtn.addEventListener("click", () => {
-      const collapsed = viewerEl?.classList.contains("is-thumbs-collapsed");
+      const collapsed = sidebarEl?.classList.contains("is-thumbs-collapsed");
       setThumbsCollapsed(!collapsed);
     });
   }
@@ -2479,6 +2514,14 @@ function bindControls() {
       setViewMode(state.viewMode === "continuous" ? "single" : "continuous");
     });
   }
+
+  sidebarRailButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const targetId = button.dataset.sidebarTarget;
+      if (!targetId) return;
+      setSidebarSection(targetId);
+    });
+  });
 
   if (deleteBtn) {
     deleteBtn.addEventListener("click", () => {
@@ -2823,5 +2866,6 @@ async function init() {
 if (document.body.classList.contains("editor")) {
   setThumbsCollapsed(false);
   syncViewModeButton();
+  setSidebarSection("sidebarPagesSection");
   init();
 }
