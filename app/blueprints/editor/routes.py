@@ -20,8 +20,10 @@ def editor(job_id: str) -> str:
     job_dir = jobs.job_dir(job_id)
     if not job_dir.exists():
         abort(404)
+    job_name = jobs.get_job_name(job_dir)
     return render_template(
         "editor/editor.html",
         job_id=job_id,
+        job_name=job_name,
         debug_pdf_url=url_for("jobs.job_file", job_id=job_id, filename="overlay_debug.pdf"),
     )

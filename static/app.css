@@ -32,7 +32,7 @@ code {
   background: rgba(21, 36, 43, 0.08);
   padding: 0.1rem 0.3rem;
   border-radius: 6px;
-  font-size: 0.9em;
+  font-size: 0.9rem;
 }
 
 .shell {
@@ -500,6 +500,27 @@ button.primary:hover {
   min-width: 0;
 }
 
+.topbar-title h2 {
+  margin: 0.2rem 0 0;
+}
+
+.topbar-meta {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+}
+
+.topbar-filename {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0.25rem 0 0;
+  font-size: 0.9rem;
+}
+
 .topbar h1 {
   margin: 0.3rem 0 0;
   font-size: clamp(1.8rem, 3vw, 2.4rem);
@@ -512,7 +533,7 @@ button.primary:hover {
 }
 
 body.editor {
-  --editor-nav-height: 90px;
+  --editor-nav-height: 65px;
   height: 100vh;
   overflow: hidden;
   background: #f3f5f7;
@@ -583,7 +604,7 @@ body.editor .panel {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0 0.8rem 0 0.5rem;
+  padding: 0.3rem 0.8rem 0 0.5rem;
 }
 
 .panel h2 {

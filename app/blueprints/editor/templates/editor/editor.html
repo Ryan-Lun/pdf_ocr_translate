@@ -25,15 +25,21 @@
     <header class="topbar">
       <div class="topbar-brand">
         <div class="topbar-title">
-          <h2>翻譯編輯</h2>
-          <!-- <p id="status" class="hint"></p> -->
+          <p class="topbar-filename">
+            <span>PDF 原版面翻譯 > 翻譯編輯 > {{ job_name or "未命名文件" }}</span>
+          </p>
+          <!-- <p class="hint topbar-meta">
+            <span>文件：{{ job_name or "未命名文件" }}</span>
+            <span>ID：{{ job_id }}</span>
+          </p> -->
+          <p id="status" class="hint topbar-meta"></p>
         </div>
       </div>
       <div class="topbar-actions">
         <a id="editedPdfLink" class="ghost" href="#" target="_blank" rel="noopener" style="display:none">預覽已編輯 PDF</a>
         <a class="ghost" href="{{ debug_pdf_url }}" target="_blank" rel="noopener">預覽除錯 PDF</a>
         <button id="batchTranslateBtn" class="ghost">重新翻譯</button>
-        <button id="batchRestoreBtn" class="ghost">還原翻譯內容/位置</button>
+        <button id="batchRestoreBtn" class="ghost">還原翻譯內容和位置</button>
         <button id="glossaryPromptBtn" class="ghost" type="button">詞彙/提示詞</button>
         <button id="saveBtn" class="primary">儲存編輯</button>
         <button id="downloadBtn" class="ghost">下載已編輯 PDF</button>
@@ -56,6 +62,12 @@
                 <input id="zoomNumber" type="number" min="25" max="200" value="50" />
               </div>
             </label>
+            <div class="button-row">
+              <button id="toggleThumbsBtn" class="ghost" type="button" aria-expanded="true">隱藏頁面縮圖</button>
+            </div>
+            <div class="button-row">
+              <button id="toggleViewModeBtn" class="ghost" type="button" aria-pressed="false">切換到連續模式</button>
+            </div>
           </section>
           <section>
             <h2>編輯工具</h2>
@@ -80,22 +92,15 @@
               <button id="copyBox" class="ghost">複製文字框</button>
             </div>
             <div class="button-row">
-              <button id="batchApplyBoxes" class="ghost">批次套用到其他頁</button>
+              <button id="batchApplyBoxes" class="ghost">批次新增文字框</button>
             </div>
             <div class="button-row">
-              <button id="batchDeleteBoxes" class="ghost">批次刪除其他頁對應框</button>
+              <button id="batchDeleteBoxes" class="ghost">批次刪除文字框</button>
             </div>
             <div class="button-row">
               <button id="deleteBox" class="danger">刪除文字框</button>
             </div>
-            <div class="button-row">
-              <button id="toggleThumbsBtn" class="ghost" type="button" aria-expanded="true">隱藏頁面縮圖</button>
-            </div>
-            <div class="button-row">
-              <button id="toggleViewModeBtn" class="ghost" type="button" aria-pressed="false">切換到連續模式</button>
-            </div>
           </section>
-          
           <section>
             <h2>快捷鍵</h2>
             <p class="hint">

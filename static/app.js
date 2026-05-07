@@ -195,7 +195,7 @@ function renderGlossary() {
   if (!glossaryEntries.length) {
     const empty = document.createElement("div");
     empty.className = "hint";
-    empty.textContent = "尚未加入詞彙對照。";
+    empty.textContent = "尚未加入詞彙對照";
     glossaryListEl.appendChild(empty);
     return;
   }
@@ -255,9 +255,9 @@ async function saveSystemPrompt(jobId) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ system_prompt: prompt }),
     });
-    setStatus("已儲存提示詞。");
+    setStatus("已儲存提示詞");
   } catch (error) {
-    setStatus("儲存提示詞失敗。");
+    setStatus("儲存提示詞失敗");
   }
 }
 
@@ -265,7 +265,7 @@ function addGlossaryEntry() {
   const cn = glossaryCnEl?.value?.trim();
   const en = glossaryEnEl?.value?.trim();
   if (!cn || !en) {
-    setStatus("請輸入中文與英文詞彙。");
+    setStatus("請輸入中文與英文詞彙");
     return;
   }
   glossaryEntries.unshift({ cn, en });
@@ -295,7 +295,7 @@ function setBatchPagePreset(mode) {
 function openBatchPageModal(sourcePageIdx, modeLabel) {
   if (!batchPageModal) return Promise.resolve(null);
   if (batchPageSourceHintEl) {
-    batchPageSourceHintEl.textContent = `來源頁：第 ${sourcePageIdx + 1} 頁。請設定要${modeLabel}的目標頁。`;
+    batchPageSourceHintEl.textContent = `來源頁：第 ${sourcePageIdx + 1} 頁請設定要${modeLabel}的目標頁`;
   }
   if (batchPageInputEl) {
     batchPageInputEl.value = "";
@@ -333,7 +333,7 @@ function renderBatchStatus(status) {
   if (!status || !statusEl) return;
   const label = status.status || "unknown";
   if (label === "completed") {
-    setStatus("Batch 翻譯完成，已更新編輯內容。");
+    setStatus("Batch 翻譯完成，已更新編輯內容");
   } else if (label === "running" || label === "queued") {
     setStatus("Batch 翻譯進行中...");
   } else if (label === "failed") {
@@ -804,7 +804,7 @@ async function askBatchTargetPages(sourcePageIdx, modeLabel, excludedPageIdxs = 
     pageIdxs = parsePageSelectionInput(selection.pages, state.pages.length, excludedPageIdxs);
   }
   if (!pageIdxs.length) {
-    setStatus("沒有符合的目標頁。");
+    setStatus("沒有符合的目標頁");
     return null;
   }
   return pageIdxs;
@@ -813,12 +813,12 @@ async function askBatchTargetPages(sourcePageIdx, modeLabel, excludedPageIdxs = 
 function getSingleSourceSelection() {
   const selected = getSelectedBoxes();
   if (!selected.length) {
-    setStatus("請先選取文字框。");
+    setStatus("請先選取文字框");
     return null;
   }
   const sourcePageIdxs = new Set(selected.map((item) => item.pageIdx));
   if (sourcePageIdxs.size !== 1) {
-    setStatus("批次套用需從同一頁選取來源文字框。");
+    setStatus("批次套用需從同一頁選取來源文字框");
     return null;
   }
   const sourcePageIdx = selected[0].pageIdx;
@@ -901,11 +901,11 @@ async function batchApplySelectedBoxes() {
   });
 
   if (!actions.length) {
-    setStatus("沒有新增任何文字框。");
+    setStatus("沒有新增任何文字框");
     return;
   }
   pushAction(actions.length === 1 ? actions[0] : { type: "batch", actions });
-  setStatus(`已批次套用 ${addedCount} 個文字框到 ${targetPageIdxs.length} 頁。`);
+  setStatus(`已批次套用 ${addedCount} 個文字框到 ${targetPageIdxs.length} 頁`);
 }
 
 async function batchDeleteMatchingBoxes() {
@@ -981,12 +981,12 @@ async function batchDeleteMatchingBoxes() {
   });
 
   if (!actions.length) {
-    setStatus("沒有找到可批次刪除的對應文字框。");
+    setStatus("沒有找到可批次刪除的對應文字框");
     return;
   }
   clearSelection();
   pushAction(actions.length === 1 ? actions[0] : { type: "batch", actions });
-  setStatus(`已批次刪除 ${deletedCount} 個對應文字框。`);
+  setStatus(`已批次刪除 ${deletedCount} 個對應文字框`);
 }
 
 function pasteClipboardBoxes() {
@@ -1320,7 +1320,7 @@ async function loadPdfDocument(pdfUrl) {
     state.pdfDoc = null;
     state.pdfUrl = null;
     renderPages();
-    setStatus("PDF 載入失敗。");
+    setStatus("PDF 載入失敗");
   }
 }
 
@@ -2144,7 +2144,7 @@ async function retranslateSelectedRegion(pageIdx, bbox) {
   setSelectionMode("boxes");
   const saved = await saveEdits(false, { silent: true });
   if (!saved) {
-    setStatus("補翻前儲存失敗，已取消補翻。");
+    setStatus("補翻前儲存失敗，已取消補翻");
     return;
   }
   setStatus(`擷取第 ${page.pageIndex + 1} 頁選取區域中...`);
@@ -2159,7 +2159,7 @@ async function retranslateSelectedRegion(pageIdx, bbox) {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setStatus(body.error ? `擷取失敗：${body.error}` : "擷取失敗。");
+      setStatus(body.error ? `擷取失敗：${body.error}` : "擷取失敗");
       return;
     }
     openRegionPreviewModal({
@@ -2170,9 +2170,9 @@ async function retranslateSelectedRegion(pageIdx, bbox) {
       source_text: body.source_text || "",
       image_data_url: body.image_data_url || "",
     });
-    setStatus("請確認擷取區域與 OCR 結果。");
+    setStatus("請確認擷取區域與 OCR 結果");
   } catch (error) {
-    setStatus("擷取失敗。");
+    setStatus("擷取失敗");
   }
 }
 
@@ -2197,13 +2197,13 @@ async function confirmRegionPreview() {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setStatus(body.error ? `補翻失敗：${body.error}` : "補翻失敗。");
+      setStatus(body.error ? `補翻失敗：${body.error}` : "補翻失敗");
       return;
     }
     await loadJobData(jobId, { preserveActivePage: true });
-    setStatus(body.boxes_added ? `補翻完成，新增 ${body.boxes_added} 個文字框。` : "補翻完成，但沒有新增文字框。");
+    setStatus(body.boxes_added ? `補翻完成，新增 ${body.boxes_added} 個文字框` : "補翻完成，但沒有新增文字框");
   } catch (error) {
-    setStatus("補翻失敗。");
+    setStatus("補翻失敗");
   }
 }
 
@@ -2543,14 +2543,14 @@ function bindControls() {
   if (cancelRegionPreviewBtn) {
     cancelRegionPreviewBtn.addEventListener("click", () => {
       closeRegionPreviewModal();
-      setStatus("已取消補翻。");
+      setStatus("已取消補翻");
     });
   }
 
   if (closeRegionPreviewBtn) {
     closeRegionPreviewBtn.addEventListener("click", () => {
       closeRegionPreviewModal();
-      setStatus("已取消補翻。");
+      setStatus("已取消補翻");
     });
   }
 
@@ -2600,7 +2600,7 @@ function bindControls() {
       }
       const raw = batchPageInputEl?.value?.trim() || "";
       if (!raw) {
-        setStatus("請勾選全部/之後，或輸入指定頁碼。");
+        setStatus("請勾選全部/之後，或輸入指定頁碼");
         return;
       }
       finishBatchPageModal({ mode: "manual", pages: raw });
@@ -2631,7 +2631,7 @@ function bindControls() {
     regionPreviewModal.addEventListener("click", (event) => {
       if (event.target === regionPreviewModal) {
         closeRegionPreviewModal();
-        setStatus("已取消補翻。");
+        setStatus("已取消補翻");
       }
     });
   }
@@ -2648,7 +2648,7 @@ function bindControls() {
     if (event.key === "Escape") {
       if (regionPreviewModal && !regionPreviewModal.hidden) {
         closeRegionPreviewModal();
-        setStatus("已取消補翻。");
+        setStatus("已取消補翻");
         return;
       }
       if (batchPageModal && !batchPageModal.hidden) {
@@ -2695,12 +2695,12 @@ function bindControls() {
     regionTranslateBtn.addEventListener("click", () => {
       if (state.selectionMode === "retranslate") {
         setSelectionMode("boxes");
-        setStatus("已取消補翻選區。");
+        setStatus("已取消補翻選區");
         return;
       }
       clearSelection();
       setSelectionMode("retranslate");
-      setStatus("請在頁面上框選要補翻的區域。");
+      setStatus("請在頁面上框選要補翻的區域");
     });
   }
 
@@ -2728,13 +2728,13 @@ function bindControls() {
       try {
         const res = await fetch(`/api/job/${jobId}/batch-translate`, { method: "POST" });
         if (!res.ok) {
-          setStatus("Batch 翻譯啟動失敗。");
+          setStatus("Batch 翻譯啟動失敗");
           setBatchButtonState("failed");
           return;
         }
         setTimeout(() => pollBatchStatus(jobId), 3000);
       } catch (error) {
-        setStatus("Batch 翻譯啟動失敗。");
+        setStatus("Batch 翻譯啟動失敗");
         setBatchButtonState("failed");
       }
     });
@@ -2750,13 +2750,13 @@ function bindControls() {
         const res = await fetch(`/api/job/${jobId}/batch-restore`, { method: "POST" });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
-          setStatus(body.error ? `回復失敗：${body.error}` : "回復失敗。");
+          setStatus(body.error ? `回復失敗：${body.error}` : "回復失敗");
           return;
         }
         await loadJobData(jobId, { preserveActivePage: true });
-        setStatus("已回復翻譯結果。");
+        setStatus("已回復翻譯結果");
       } catch (error) {
-        setStatus("回復失敗。");
+        setStatus("回復失敗");
       }
     });
   }
