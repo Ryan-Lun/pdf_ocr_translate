@@ -120,6 +120,7 @@ def enqueue_job_from_upload(
     keep_lang: str,
     enable_translate: bool,
     document_mode: str,
+    creator_name: str = "",
 ) -> str:
     job_id = uuid.uuid4().hex
     job_dir = jobs.job_dir(job_id)
@@ -131,6 +132,7 @@ def enqueue_job_from_upload(
         job_dir,
         {
             "job_name": job_name,
+            "creator_name": creator_name,
             "job_type": "ocr_overlay",
             "document_mode": normalized_document_mode,
             "processing_started_at": now_ts,

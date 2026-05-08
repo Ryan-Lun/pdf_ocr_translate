@@ -40,6 +40,12 @@
           </div>
           <div class="form-grid">
             <label>
+              <span>使用者名稱</span>
+              <input type="text" name="creator_name" maxlength="60" placeholder="請輸入姓名或工號" />
+            </label>
+          </div>
+          <div class="form-grid">
+            <label>
               <span>啟用翻譯</span>
               <input type="checkbox" name="translate" checked />
             </label>
@@ -192,6 +198,10 @@
           modeTag.className = `job-badge job-badge--${(job.document_mode || "form").toLowerCase()}`;
           modeTag.textContent = formatDocumentMode(job.document_mode);
 
+          const ownerTag = document.createElement("div");
+          ownerTag.className = "job-badge";
+          ownerTag.textContent = `建立者：${job.creator_name || "未填寫"}`;
+
           const header = document.createElement("div");
           header.className = "job-header";
 
@@ -206,6 +216,7 @@
 
           const headerMeta = document.createElement("div");
           headerMeta.className = "job-header-meta";
+          headerMeta.appendChild(ownerTag);
           headerMeta.appendChild(modeTag);
           headerMeta.appendChild(idTag);
           headerMain.appendChild(selectWrap);

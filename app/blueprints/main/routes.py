@@ -26,6 +26,11 @@ def _display_name_from_filename(filename: str, fallback: str) -> str:
     return jobs.sanitize_unicode_filename(raw_stem, fallback=fallback)
 
 
+def _display_creator_name(value: str, fallback: str = "") -> str:
+    cleaned = " ".join(str(value or "").split()).strip()
+    return jobs.sanitize_unicode_filename(cleaned, fallback=fallback) if cleaned else fallback
+
+
 @main_bp.route("/", methods=["GET"], endpoint="index")
 def index() -> str:
     return render_template("main/index.html")
@@ -64,6 +69,7 @@ def upload() -> str:
     translate_model = request.form.get("model", state.AZURE_BATCH_MODEL).strip() or state.AZURE_BATCH_MODEL
     keep_lang = request.form.get("keep_lang", "all").strip().lower() or "all"
     document_mode = jobs.normalize_document_mode(request.form.get("document_mode"))
+    creator_name = _display_creator_name(request.form.get("creator_name", ""))
     if keep_lang not in {"all", "zh", "en"}:
         keep_lang = "all"
 
@@ -87,6 +93,7 @@ def upload() -> str:
             keep_lang,
             enable_translate,
             document_mode,
+            creator_name,
         )
         try:
             tmp_path.unlink(missing_ok=True)
