@@ -536,6 +536,7 @@ wheels = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "greenlet"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -563,6 +564,8 @@ wheels = [
 ]
 
 [[package]]
+=======
+>>>>>>> 980baed (新增wsgi.py)
 name = "gunicorn"
 version = "25.3.0"
 source = { registry = "https://pypi.org/simple" }
