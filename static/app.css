@@ -261,11 +261,10 @@ code {
 .job-card {
   border: 1px solid var(--edge);
   border-radius: 14px;
-  padding: 1rem 1.2rem 1rem 2.6rem;
+  padding: 1rem 1.2rem;
   display: grid;
   gap: 0.5rem;
   background: rgba(255, 255, 255, 0.6);
-  position: relative;
 }
 
 .doc-job-card {
@@ -273,11 +272,9 @@ code {
 }
 
 .job-select {
-  position: absolute;
-  top: 0.75rem;
-  left: 0.9rem;
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
 }
 
 .job-check {
@@ -286,22 +283,84 @@ code {
   accent-color: var(--primary);
 }
 
-.job-id {
-  position: absolute;
-  top: 0.85rem;
-  right: 1.1rem;
+.job-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.job-header-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.job-header-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.job-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.8rem;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
   font-size: 0.75rem;
+  line-height: 1;
   color: var(--muted);
-  letter-spacing: 0.08em;
+  background: rgba(21, 36, 43, 0.06);
+  letter-spacing: 0.04em;
+}
+
+.job-badge--form {
+  color: #1f5f3a;
+  background: rgba(66, 145, 95, 0.16);
+}
+
+.job-badge--general {
+  color: #1f4f8a;
+  background: rgba(68, 128, 212, 0.16);
+}
+
+.job-badge--scanned {
+  color: #9a5314;
+  background: rgba(235, 154, 64, 0.2);
 }
 
 .job-title {
   font-weight: 700;
+  min-width: 0;
+  line-height: 1.35;
 }
 
 .job-meta {
   color: var(--muted);
   font-size: 0.9rem;
+  padding-left: 1.45rem;
+}
+
+@media (max-width: 720px) {
+  .job-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .job-header-main {
+    width: 100%;
+  }
+
+  .job-header-meta {
+    flex-wrap: wrap;
+    padding-left: 1.45rem;
+  }
 }
 
 .job-actions {
@@ -765,7 +824,7 @@ body.editor .workspace > * {
 
 .editor-sidebar {
   display: grid;
-  grid-template-columns: 70px 220px 170px; /* 固定三欄寬度 */
+  grid-template-columns: 70px 230px 170px; /* 固定三欄寬度 */
   gap: 0;
   min-height: 0;
   min-width: 0;
@@ -780,7 +839,7 @@ body.editor .workspace > * {
 }
 
 .editor-sidebar.is-thumbs-collapsed {
-  grid-template-columns: 70px 220px 170px; /* 隱藏時維持 Grid 比例 */
+  grid-template-columns: 70px 230px 170px; /* 隱藏時維持 Grid 比例 */
 }
 
 .editor-sidebar.is-thumbs-collapsed .thumbs {
@@ -875,6 +934,38 @@ body.editor .panel {
 
 .sidebar-section.is-active {
   display: grid;
+}
+
+.shortcut-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(0, 94px) minmax(0, 1fr);
+  align-items: start;
+  gap: 0.65rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 10px;
+  background: rgba(21, 36, 43, 0.035);
+}
+
+.shortcut-key {
+  color: #5a6b74;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.shortcut-key code {
+  white-space: nowrap;
+}
+
+.shortcut-desc {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  min-width: 0;
 }
 
 .panel h2 {
@@ -1082,6 +1173,7 @@ body.editor .canvas {
 .viewer {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  padding: 0.5rem;
   gap: 1rem;
   align-items: start;
   height: calc(100vh - 3.5rem);

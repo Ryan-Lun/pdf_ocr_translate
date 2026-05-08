@@ -128,6 +128,18 @@
         return `${secs}秒`;
       }
 
+      function formatDocumentMode(mode) {
+        switch ((mode || "").toLowerCase()) {
+          case "general":
+            return "一般文件";
+          case "scanned":
+            return "掃描文件";
+          case "form":
+          default:
+            return "表單文件";
+        }
+      }
+
       function isActiveJob(job) {
         return ["queued", "running", "cancel_requested"].includes(job.job_status);
       }
@@ -173,14 +185,33 @@
           selectWrap.appendChild(selectInput);
 
           const idTag = document.createElement("div");
-          idTag.className = "job-id";
+          idTag.className = "job-badge";
           idTag.textContent = job.job_id.slice(0, 8);
+
+          const modeTag = document.createElement("div");
+          modeTag.className = `job-badge job-badge--${(job.document_mode || "form").toLowerCase()}`;
+          modeTag.textContent = formatDocumentMode(job.document_mode);
+
+          const header = document.createElement("div");
+          header.className = "job-header";
+
+          const headerMain = document.createElement("div");
+          headerMain.className = "job-header-main";
 
           const title = document.createElement("div");
           title.className = "job-title";
           title.textContent = job.job_name && job.job_name.trim()
             ? job.job_name
             : `Job ${job.job_id.slice(0, 8)}`;
+
+          const headerMeta = document.createElement("div");
+          headerMeta.className = "job-header-meta";
+          headerMeta.appendChild(modeTag);
+          headerMeta.appendChild(idTag);
+          headerMain.appendChild(selectWrap);
+          headerMain.appendChild(title);
+          header.appendChild(headerMain);
+          header.appendChild(headerMeta);
 
           const meta = document.createElement("div");
           meta.className = "job-meta";
@@ -275,9 +306,7 @@
           });
           actions.appendChild(deleteBtn);
 
-          card.appendChild(selectWrap);
-          card.appendChild(idTag);
-          card.appendChild(title);
+          card.appendChild(header);
           card.appendChild(meta);
           card.appendChild(actions);
           jobsList.appendChild(card);

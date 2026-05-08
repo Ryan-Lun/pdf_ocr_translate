@@ -468,6 +468,9 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
                 "status_label": status_label,
                 "status": status_label,
                 "job_name": job_name,
+                "document_mode": normalize_document_mode(
+                    record.document_mode or job_meta.get("document_mode")
+                ),
                 "download_name": download_name,
                 "editor_url": url_for("editor.editor", job_id=job_id),
                 "debug_pdf_url": url_for(

@@ -191,6 +191,65 @@ def is_chart_block(block: dict[str, Any] | None) -> bool:
     return str((block or {}).get("label") or "").strip().lower() == "chart"
 
 
+def _bbox_contains(
+    outer: list[float] | None,
+    inner: list[float] | None,
+    *,
+    tolerance: float = 2.0,
+) -> bool:
+    if not outer or not inner or len(outer) != 4 or len(inner) != 4:
+        return False
+    return (
+        float(outer[0]) <= float(inner[0]) + tolerance
+        and float(outer[1]) <= float(inner[1]) + tolerance
+        and float(outer[2]) >= float(inner[2]) - tolerance
+        and float(outer[3]) >= float(inner[3]) - tolerance
+    )
+
+
+def filter_structured_blocks_for_mode(
+    paragraph_blocks: list[dict[str, Any]],
+    *,
+    document_mode: str,
+) -> list[dict[str, Any]]:
+    if resolve_document_mode(document_mode) != "form":
+        return paragraph_blocks
+
+    filtered: list[dict[str, Any]] = []
+    for idx, block in enumerate(paragraph_blocks):
+        label = str(block.get("label") or "").strip().lower()
+        if label not in {"figure_title", "header"}:
+            filtered.append(block)
+            continue
+
+        bbox = block.get("bbox")
+        if not (isinstance(bbox, list) and len(bbox) == 4):
+            filtered.append(block)
+            continue
+
+        is_union_block = False
+        for other_idx, other in enumerate(paragraph_blocks):
+            if idx == other_idx:
+                continue
+            other_label = str(other.get("label") or "").strip().lower()
+            if other_label != label:
+                continue
+            other_bbox = other.get("bbox")
+            if not _bbox_contains(bbox, other_bbox):
+                continue
+            block_area = max(0.0, float(bbox[2]) - float(bbox[0])) * max(0.0, float(bbox[3]) - float(bbox[1]))
+            other_area = max(0.0, float(other_bbox[2]) - float(other_bbox[0])) * max(0.0, float(other_bbox[3]) - float(other_bbox[1]))
+            if other_area <= 0 or block_area <= other_area:
+                continue
+            is_union_block = True
+            break
+
+        if not is_union_block:
+            filtered.append(block)
+
+    return filtered
+
+
 def should_translate_structured_block(
     block: dict[str, Any] | None,
     *,
@@ -407,6 +466,10 @@ def build_batch_items(
         skip_table_lines = bool(table_bboxes)
         has_paragraph_flags = use_structured_blocks and ocr.has_paragraph_translate_flags(pp_page)
         paragraph_blocks = ocr.iter_paragraph_blocks(pp_page) if use_structured_blocks else []
+        paragraph_blocks = filter_structured_blocks_for_mode(
+            paragraph_blocks,
+            document_mode=document_mode,
+        )
         if use_structured_blocks:
             for block in paragraph_blocks:
                 if not should_translate_structured_block(
@@ -569,6 +632,10 @@ def build_edits_payload_from_translations(
         skip_table_lines = bool(table_bboxes)
         has_paragraph_flags = use_structured_blocks and ocr.has_paragraph_translate_flags(pp_page)
         paragraph_blocks = ocr.iter_paragraph_blocks(pp_page) if use_structured_blocks else []
+        paragraph_blocks = filter_structured_blocks_for_mode(
+            paragraph_blocks,
+            document_mode=document_mode,
+        )
         
 
         for idx, poly in enumerate(rec_polys):
