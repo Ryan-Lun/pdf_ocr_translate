@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import glossary, jobs, ocr, openai_config, state, translation_memory
+from . import document_terms, glossary, jobs, ocr, openai_config, state, translation_memory
 
 logger = logging.getLogger(__name__)
 TERMINAL_BATCH_STATUSES = {"completed", "failed", "canceled", "cancelled"}
@@ -340,6 +340,36 @@ def translate_texts_for_region(
     return outputs
 
 
+def _get_tm_entry_with_fallback(
+    memory: dict[str, dict[str, Any]],
+    *,
+    source_text: str,
+    target_lang: str,
+    document_mode: str,
+    normalized_source: str,
+    canonical_source_text: str | None = None,
+    canonical_source_normalized: str | None = None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    tm_key, tm_entry = translation_memory.get_tm_entry(
+        memory,
+        source_text,
+        target_lang,
+        document_mode,
+        source_normalized=normalized_source,
+    )
+    if tm_key and tm_entry:
+        return tm_key, tm_entry
+    if canonical_source_normalized and canonical_source_normalized != normalized_source:
+        return translation_memory.get_tm_entry(
+            memory,
+            canonical_source_text or source_text,
+            target_lang,
+            document_mode,
+            source_normalized=canonical_source_normalized,
+        )
+    return None, None
+
+
 
 def resolve_batch_prompt(target_lang: str, override: str | None = None) -> str:
     if override:
@@ -379,6 +409,7 @@ def build_batch_items(
     mode = resolve_document_mode(document_mode)
     translate_merged_cells = use_merged_cells_for_mode(document_mode)
     use_structured_blocks = use_structured_blocks_for_mode(document_mode)
+    document_term_map = document_terms.build_document_term_map(pp_pages)
 
     with state.TRANSLATION_MEMORY_LOCK:
         translation_memory_data = translation_memory.load_translation_memory()
@@ -392,12 +423,17 @@ def build_batch_items(
             return
         if not re.search(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]", normalized_source):
             return
-        tm_key, tm_entry = translation_memory.get_tm_entry(
+        matched_term = document_terms.lookup_document_term(source_text, document_term_map)
+        canonical_source_text = str((matched_term or {}).get("best_source_text") or source_text)
+        canonical_source_normalized = str((matched_term or {}).get("canonical_key") or normalized_source)
+        tm_key, tm_entry = _get_tm_entry_with_fallback(
             translation_memory_data,
-            source_text,
-            target_lang,
-            document_mode,
-            source_normalized=normalized_source,
+            source_text=source_text,
+            target_lang=target_lang,
+            document_mode=document_mode,
+            normalized_source=normalized_source,
+            canonical_source_text=canonical_source_text,
+            canonical_source_normalized=canonical_source_normalized,
         )
         if tm_key and tm_entry:
             translated_text = translation_memory.extract_target_text(tm_entry)
@@ -405,33 +441,36 @@ def build_batch_items(
                 prefilled[custom_id] = translated_text
                 translation_memory.touch_entry(tm_entry)
                 if tm_key != translation_memory.make_tm_key(
-                    source_text,
+                    canonical_source_text,
                     target_lang,
                     document_mode,
-                    source_normalized=normalized_source,
+                    source_normalized=canonical_source_normalized,
                 ):
                     translation_memory.upsert_entry(
                         translation_memory_data,
-                        source_text,
+                        canonical_source_text,
                         translated_text,
                         target_lang,
                         document_mode,
-                        source_normalized=normalized_source,
+                        source_normalized=canonical_source_normalized,
                         source=str(tm_entry.get("source") or "batch"),
                     )
                 tm_dirty = True
                 return
-        clean = glossary.apply_glossary(normalized_source, glossary_entries)
+        clean = glossary.apply_glossary(
+            normalize_for_translation(canonical_source_text),
+            glossary_entries,
+        )
         if not clean:
             return
-        dedupe_key = normalized_source
+        dedupe_key = canonical_source_normalized
         if dedupe_key in seen:
             alias_map[custom_id] = seen[dedupe_key]
             return
         seen[dedupe_key] = custom_id
         key_map[custom_id] = {
-            "source_text": source_text,
-            "source_normalized": normalized_source,
+            "source_text": canonical_source_text,
+            "source_normalized": canonical_source_normalized,
         }
         items.append(
             {
@@ -580,11 +619,13 @@ def build_edits_payload_from_translations(
     mode = resolve_document_mode(document_mode)
     translate_merged_cells = use_merged_cells_for_mode(document_mode)
     use_structured_blocks = use_structured_blocks_for_mode(document_mode)
+    document_term_map = document_terms.build_document_term_map(pp_pages)
 
     def build_tm_meta(source_text: str) -> dict[str, Any]:
         if mode != "form":
             return {}
-        normalized_source = normalize_for_translation(source_text)
+        matched_term = document_terms.lookup_document_term(source_text, document_term_map)
+        normalized_source = str((matched_term or {}).get("canonical_key") or normalize_for_translation(source_text))
         if not normalized_source:
             return {}
         return {
@@ -608,6 +649,10 @@ def build_edits_payload_from_translations(
                 if not text:
                     continue
                 text = normalize_text(text)
+                text = document_terms.restore_term_surface(
+                    rec_texts[idx] if idx < len(rec_texts) else "",
+                    text,
+                )
                 if not text or is_numeric_only(text):
                     continue
                 bbox = poly_to_bbox(poly)
@@ -645,6 +690,10 @@ def build_edits_payload_from_translations(
                 continue
             
             text = normalize_text(text)
+            text = document_terms.restore_term_surface(
+                rec_texts[idx] if idx < len(rec_texts) else "",
+                text,
+            )
             if not text:
                 continue
             if is_numeric_only(text):
@@ -705,6 +754,10 @@ def build_edits_payload_from_translations(
                     continue
                 
                 block_text = normalize_text(block_text)
+                block_text = document_terms.restore_term_surface(
+                    block.get("text", ""),
+                    block_text,
+                )
                 if not block_text:
                     continue
                 if is_numeric_only(block_text):
@@ -742,6 +795,10 @@ def build_edits_payload_from_translations(
                     continue
                 
                 cell_text = normalize_text(cell_text)
+                cell_text = document_terms.restore_term_surface(
+                    cell.get("merged_text", ""),
+                    cell_text,
+                )
                 if not cell_text:
                     continue
                 if is_numeric_only(cell_text):

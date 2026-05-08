@@ -785,3 +785,167 @@ def test_general_mode_chart_blocks_fall_back_to_ocr_lines_for_edits_payload():
     assert len(boxes) == 2
     assert [box["id"] for box in boxes] == [0, 1]
     assert [box["text"] for box in boxes] == ["chart title", "x axis"]
+
+
+def test_document_terms_dedupe_short_labels_with_trailing_colon():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": [],
+            "rec_polys": [],
+        }
+    ]
+    pp_pages = {
+        0: {
+            "parsing_res_list": [],
+            "table_res_list": [
+                {
+                    "cell_box_list": [[0, 0, 120, 60]],
+                    "merged_cells": [
+                        {
+                            "cell_box": [0, 0, 60, 20],
+                            "merged_text": "檢查頻率：",
+                            "should_translate": True,
+                        },
+                        {
+                            "cell_box": [0, 20, 60, 40],
+                            "merged_text": "檢查頻率",
+                            "should_translate": True,
+                        },
+                    ],
+                }
+            ],
+        }
+    }
+
+    items, alias_map, key_map, prefilled = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        pp_pages=pp_pages,
+        document_mode="form",
+    )
+
+    assert [item["custom_id"] for item in items] == ["p0000-c0000"]
+    assert alias_map == {"p0000-c0001": "p0000-c0000"}
+    assert key_map == {
+        "p0000-c0000": {
+            "source_text": "檢查頻率",
+            "source_normalized": "檢查頻率",
+        }
+    }
+    assert items[0]["body"]["messages"][1]["content"] == "檢查頻率"
+    assert prefilled == {}
+
+
+def test_document_terms_prefill_short_label_from_canonical_tm(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
+    now_ts = time.time()
+    memory = {
+        translation_memory.make_tm_key(
+            "檢查頻率",
+            "en",
+            "form",
+            source_normalized="檢查頻率",
+        ): {
+            "source_text": "檢查頻率",
+            "source_normalized": "檢查頻率",
+            "target_text": "inspection frequency",
+            "target_lang": "en",
+            "document_mode": "form",
+            "created_at": now_ts,
+            "last_used": now_ts,
+            "source": "editor",
+            "count": 1,
+        }
+    }
+    state.TRANSLATION_MEMORY_PATH.write_text(
+        json.dumps(memory, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": [],
+            "rec_polys": [],
+        }
+    ]
+    pp_pages = {
+        0: {
+            "parsing_res_list": [],
+            "table_res_list": [
+                {
+                    "cell_box_list": [[0, 0, 120, 60]],
+                    "merged_cells": [
+                        {
+                            "cell_box": [0, 0, 60, 20],
+                            "merged_text": "檢查頻率：",
+                            "should_translate": True,
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+
+    items, alias_map, key_map, prefilled = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        pp_pages=pp_pages,
+        document_mode="form",
+    )
+
+    assert items == []
+    assert alias_map == {}
+    assert key_map == {}
+    assert prefilled == {"p0000-c0000": "inspection frequency"}
+
+
+def test_document_terms_restore_trailing_colon_in_payload():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": [],
+            "rec_polys": [],
+        }
+    ]
+    pp_pages = {
+        0: {
+            "parsing_res_list": [],
+            "table_res_list": [
+                {
+                    "cell_box_list": [[0, 0, 120, 60]],
+                    "merged_cells": [
+                        {
+                            "cell_box": [0, 0, 60, 20],
+                            "merged_text": "檢查頻率：",
+                            "should_translate": True,
+                        },
+                        {
+                            "cell_box": [0, 20, 60, 40],
+                            "merged_text": "檢查頻率",
+                            "should_translate": True,
+                        },
+                    ],
+                }
+            ],
+        }
+    }
+
+    payload = build_edits_payload_from_translations(
+        ocr_pages,
+        {
+            "p0000-c0000": "inspection frequency",
+            "p0000-c0001": "inspection frequency",
+        },
+        pp_pages=pp_pages,
+        document_mode="form",
+    )
+
+    boxes = payload["pages"][0]["boxes"]
+    assert [box["text"] for box in boxes] == ["inspection frequency:", "inspection frequency"]
+    assert [box["tm_source_normalized"] for box in boxes] == ["檢查頻率", "檢查頻率"]
