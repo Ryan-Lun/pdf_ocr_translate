@@ -38,7 +38,11 @@ def index() -> str:
 
 @main_bp.route("/workspace/pdf-overlay", methods=["GET"], endpoint="overlay_workspace")
 def overlay_workspace() -> str:
-    return render_template("main/overlay_workspace.html", batch_model=state.AZURE_BATCH_MODEL)
+    return render_template(
+        "main/overlay_workspace.html",
+        batch_model=state.AZURE_BATCH_MODEL,
+        realtime_model=state.PDF_REALTIME_TRANSLATE_MODEL,
+    )
 
 
 @main_bp.route("/workspace/pdf-doc", methods=["GET"], endpoint="doc_workspace_page")
@@ -66,7 +70,13 @@ def upload() -> str:
     end_page = int(end_page_raw) if end_page_raw else None
     enable_translate = request.form.get("translate") == "on"
     translate_target_lang = request.form.get("target_lang", "en").strip() or "en"
-    translate_model = request.form.get("model", state.AZURE_BATCH_MODEL).strip() or state.AZURE_BATCH_MODEL
+    translate_mode = jobs.normalize_translate_mode(request.form.get("translate_mode"))
+    default_translate_model = (
+        state.PDF_REALTIME_TRANSLATE_MODEL
+        if translate_mode == "realtime"
+        else state.AZURE_BATCH_MODEL
+    )
+    translate_model = request.form.get("model", default_translate_model).strip() or default_translate_model
     keep_lang = request.form.get("keep_lang", "all").strip().lower() or "all"
     document_mode = jobs.normalize_document_mode(request.form.get("document_mode"))
     creator_name = _display_creator_name(request.form.get("creator_name", ""))
@@ -90,6 +100,7 @@ def upload() -> str:
             end_page,
             translate_target_lang,
             translate_model,
+            translate_mode,
             keep_lang,
             enable_translate,
             document_mode,

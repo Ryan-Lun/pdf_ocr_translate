@@ -45,6 +45,15 @@ def get_doc_translate_deployment() -> str:
     ).strip()
 
 
+def get_pdf_realtime_translate_deployment() -> str:
+    return (
+        os.getenv("PDF_REALTIME_TRANSLATE_DEPLOYMENT")
+        or os.getenv("DOC_TRANSLATE_DEPLOYMENT")
+        or os.getenv("DOC_TRANSLATE_MODEL")
+        or "gpt-4.1-mini"
+    ).strip()
+
+
 def get_word_translate_deployment() -> str:
     return (
         os.getenv("WORD_TRANSLATE_DEPLOYMENT")

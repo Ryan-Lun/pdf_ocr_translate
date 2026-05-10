@@ -607,6 +607,20 @@ def build_translations_from_jsonl_text(
     return translations
 
 
+def apply_alias_map_to_translations(
+    translations: dict[str, str],
+    alias_map: dict[str, str] | None = None,
+) -> dict[str, str]:
+    resolved = dict(translations)
+    if alias_map:
+        for alias_id, canonical_id in alias_map.items():
+            if alias_id in resolved:
+                continue
+            if canonical_id in resolved:
+                resolved[alias_id] = resolved[canonical_id]
+    return resolved
+
+
 def build_edits_payload_from_translations(
     ocr_pages: list[dict[str, Any]],
     translations: dict[str, str],
@@ -828,6 +842,64 @@ def build_edits_payload_from_translations(
     return {"pages": pages_payload}
 
 
+def finalize_translation_job(
+    *,
+    job_id: str,
+    job_dir: Path,
+    ocr_pages: list[dict[str, Any]],
+    pp_pages: dict[int, dict[str, Any]] | None,
+    document_mode: str,
+    target_lang: str,
+    key_map: dict[str, dict[str, str]],
+    translations: dict[str, str],
+    status_meta: dict[str, Any],
+    backend_id: str,
+) -> None:
+    if key_map:
+        with state.TRANSLATION_MEMORY_LOCK:
+            memory = translation_memory.load_translation_memory()
+            now_ts = time.time()
+            source_name = "realtime" if str(backend_id).startswith("realtime") else "batch"
+            for custom_id, source_meta in key_map.items():
+                translated = translations.get(custom_id)
+                if translated:
+                    translation_memory.upsert_entry(
+                        memory,
+                        source_meta.get("source_text", ""),
+                        translated,
+                        target_lang,
+                        document_mode,
+                        source_normalized=source_meta.get("source_normalized"),
+                        source=source_name,
+                        now_ts=now_ts,
+                    )
+            translation_memory.write_translation_memory(memory)
+    edits_payload = build_edits_payload_from_translations(
+        ocr_pages,
+        translations,
+        pp_pages=pp_pages,
+        target_lang=target_lang,
+        document_mode=document_mode,
+    )
+    edits_path = job_dir / "edits.json"
+    edits_path.write_text(
+        json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    logger.info("Translation wrote edits.json=%s", edits_path.resolve())
+    ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)
+    logger.info("Translation wrote edited.pdf job_id=%s backend=%s", job_id, backend_id)
+    jobs.write_batch_status(job_dir, "completed", **status_meta, batch_id=backend_id)
+    now_ts = time.time()
+    jobs.set_job_state(
+        job_dir,
+        status="completed",
+        stage="completed",
+        progress=100.0,
+        completed_at=now_ts,
+        extra_meta={"translate_completed_at": now_ts},
+    )
+
+
 def run_batch_translate_job(
     job_id: str,
     job_dir: Path,
@@ -845,6 +917,7 @@ def run_batch_translate_job(
     existing_status = jobs.load_batch_status(job_dir) or {}
     batch_id = str(existing_status.get("batch_id") or "")
     status_meta = _build_batch_status_meta(job_id, target_lang, model_name, existing_status)
+    status_meta["translate_mode"] = jobs.normalize_translate_mode(config.get("translate_mode"))
 
     if batch_id and batch_id != "prefill_only" and not _is_terminal_batch_status(existing_status.get("status")):
         try:
@@ -1082,47 +1155,17 @@ def _finalize_batch_translate_job(
     translations = build_translations_from_jsonl_text(
         raw_text, alias_map=alias_map, prefilled=prefilled
     )
-    if key_map:
-        with state.TRANSLATION_MEMORY_LOCK:
-            memory = translation_memory.load_translation_memory()
-            now_ts = time.time()
-            for custom_id, source_meta in key_map.items():
-                translated = translations.get(custom_id)
-                if translated:
-                    translation_memory.upsert_entry(
-                        memory,
-                        source_meta.get("source_text", ""),
-                        translated,
-                        target_lang,
-                        document_mode,
-                        source_normalized=source_meta.get("source_normalized"),
-                        source="batch",
-                        now_ts=now_ts,
-                    )
-            translation_memory.write_translation_memory(memory)
-    edits_payload = build_edits_payload_from_translations(
-        ocr_pages,
-        translations,
+    finalize_translation_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        ocr_pages=ocr_pages,
         pp_pages=pp_pages,
-        target_lang=target_lang,
         document_mode=document_mode,
-    )
-    edits_path = job_dir / "edits.json"
-    edits_path.write_text(
-        json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    logger.info("Batch translate wrote edits.json=%s", edits_path.resolve())
-    ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)
-    logger.info("Batch translate wrote edited.pdf job_id=%s", job_id)
-    jobs.write_batch_status(job_dir, "completed", **status_meta, batch_id=batch_id)
-    now_ts = time.time()
-    jobs.set_job_state(
-        job_dir,
-        status="completed",
-        stage="completed",
-        progress=100.0,
-        completed_at=now_ts,
-        extra_meta={"translate_completed_at": now_ts},
+        target_lang=target_lang,
+        key_map=key_map,
+        translations=translations,
+        status_meta=status_meta,
+        backend_id=batch_id,
     )
 
 
@@ -1135,6 +1178,9 @@ def poll_active_batch_jobs(limit: int = 1) -> int:
         if record.status not in {"running", "cancel_requested"}:
             continue
         job_dir = jobs.job_dir(record.job_id)
+        config = jobs.load_batch_config(job_dir) or {}
+        if jobs.normalize_translate_mode(config.get("translate_mode")) != "batch":
+            continue
         batch_status = jobs.load_batch_status(job_dir) or {}
         batch_id = str(batch_status.get("batch_id") or "")
         batch_state = str(batch_status.get("status") or "").strip().lower()

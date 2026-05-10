@@ -92,6 +92,7 @@ def job_data(job_id: str):
         else None,
         "batch_status": jobs.load_batch_status(job_dir),
         "document_mode": document_mode,
+        "translate_mode": jobs.normalize_translate_mode(config.get("translate_mode")),
         "glossary": glossary.load_global_glossary(),
         "system_prompt": system_prompt,
         "pages": pages,
@@ -113,6 +114,9 @@ def batch_translate(job_id: str):
     record = jobs.job_store.get_job(job_id)
     payload = jobs.job_store.deserialize_payload(record)
     payload["resume_translate_only"] = True
+    payload["translate_mode"] = jobs.normalize_translate_mode(
+        config.get("translate_mode") or payload.get("translate_mode")
+    )
     jobs.job_store.update_job(
         job_id,
         status="queued",
@@ -121,7 +125,14 @@ def batch_translate(job_id: str):
         error_message=None,
         completed_at=None,
     )
-    jobs.write_batch_status(job_dir, "queued", job_id=job_id, model=config.get("model"), target_lang=config.get("target_lang"))
+    jobs.write_batch_status(
+        job_dir,
+        "queued",
+        job_id=job_id,
+        model=config.get("model"),
+        target_lang=config.get("target_lang"),
+        translate_mode=payload.get("translate_mode"),
+    )
     return jsonify({"ok": True, "status": {"status": "queued"}})
 
 

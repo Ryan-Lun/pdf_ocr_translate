@@ -74,8 +74,9 @@
             </label>
             <label>
               <span>翻譯模型</span>
-              <select name="model">
-                <option value="{{ batch_model }}" selected>{{ batch_model }}</option>
+              <select id="translateModelSelect" name="model">
+                <option value="{{ batch_model }}" data-mode="batch" selected>{{ batch_model }}</option>
+                <option value="{{ realtime_model }}" data-mode="realtime">{{ realtime_model }}</option>
               </select>
             </label>
           </div>
@@ -116,6 +117,8 @@
       const uploadFilesSummary = document.getElementById("uploadFilesSummary");
       const uploadFilesToggle = document.getElementById("uploadFilesToggle");
       const uploadFilesList = document.getElementById("uploadFilesList");
+      let translateModeSelect = document.getElementById("translateModeSelect");
+      const translateModelSelect = document.getElementById("translateModelSelect");
       const selectedJobs = new Set();
       let jobsLoading = false;
       let jobsSource = null;
@@ -148,6 +151,47 @@
 
       function isActiveJob(job) {
         return ["queued", "running", "cancel_requested"].includes(job.job_status);
+      }
+
+      function formatTranslateMode(mode) {
+        return (mode || "").toLowerCase() === "realtime" ? "Quick" : "Batch";
+      }
+
+      function ensureTranslateModeControl() {
+        if (translateModeSelect || !translateModelSelect) return;
+        const label = document.createElement("label");
+        const title = document.createElement("span");
+        title.textContent = "Translate Mode";
+        translateModeSelect = document.createElement("select");
+        translateModeSelect.id = "translateModeSelect";
+        translateModeSelect.name = "translate_mode";
+        const batchOption = document.createElement("option");
+        batchOption.value = "batch";
+        batchOption.textContent = "Batch";
+        batchOption.selected = true;
+        const realtimeOption = document.createElement("option");
+        realtimeOption.value = "realtime";
+        realtimeOption.textContent = "Quick";
+        label.appendChild(title);
+        translateModeSelect.appendChild(batchOption);
+        translateModeSelect.appendChild(realtimeOption);
+        label.appendChild(translateModeSelect);
+        const modelLabel = translateModelSelect.closest("label");
+        modelLabel?.before(label);
+      }
+
+      function syncTranslateModelSelection() {
+        const mode = (translateModeSelect?.value || "batch").toLowerCase();
+        if (!translateModelSelect) return;
+        let matched = false;
+        Array.from(translateModelSelect.options).forEach((option) => {
+          const visible = !option.dataset.mode || option.dataset.mode === mode;
+          option.hidden = !visible;
+          if (visible && !matched) {
+            option.selected = true;
+            matched = true;
+          }
+        });
       }
 
       function canRetryJob(job) {
@@ -197,6 +241,9 @@
           const modeTag = document.createElement("div");
           modeTag.className = `job-badge job-badge--${(job.document_mode || "form").toLowerCase()}`;
           modeTag.textContent = formatDocumentMode(job.document_mode);
+          const translateTag = document.createElement("div");
+          translateTag.className = "job-badge";
+          translateTag.textContent = formatTranslateMode(job.translate_mode);
 
           const ownerTag = document.createElement("div");
           ownerTag.className = "job-badge";
@@ -217,6 +264,7 @@
           const headerMeta = document.createElement("div");
           headerMeta.className = "job-header-meta";
           headerMeta.appendChild(ownerTag);
+          headerMeta.appendChild(translateTag);
           headerMeta.appendChild(modeTag);
           headerMeta.appendChild(idTag);
           headerMain.appendChild(selectWrap);
@@ -447,6 +495,9 @@
       jobsDownload.addEventListener("click", downloadTranslatedBatch);
       jobsSelectAll.addEventListener("click", () => setAllSelections(true));
       jobsSelectNone.addEventListener("click", () => setAllSelections(false));
+      ensureTranslateModeControl();
+      translateModeSelect?.addEventListener("change", syncTranslateModelSelection);
+      syncTranslateModelSelection();
       bindUploadFiles();
       loadJobs();
       connectJobsStream();

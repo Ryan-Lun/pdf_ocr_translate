@@ -105,6 +105,13 @@ def normalize_document_mode(value: Any) -> str:
     return "form"
 
 
+def normalize_translate_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    if mode == "realtime":
+        return "realtime"
+    return "batch"
+
+
 def build_download_base(job_id: str, job_name: str | None) -> str:
     base = job_name or "translated"
     safe = sanitize_unicode_filename(base, fallback="translated")
@@ -472,6 +479,10 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
                 "document_mode": normalize_document_mode(
                     record.document_mode or job_meta.get("document_mode")
                 ),
+                "translate_mode": normalize_translate_mode(
+                    (load_batch_config(job_dir_path) or {}).get("translate_mode")
+                    or job_meta.get("translate_mode")
+                ),
                 "download_name": download_name,
                 "editor_url": url_for("editor.editor", job_id=job_id),
                 "debug_pdf_url": url_for(
@@ -765,6 +776,7 @@ def retry_job(job_id: str) -> tuple[bool, str | None]:
                 job_id=job_id,
                 model=config.get("model"),
                 target_lang=config.get("target_lang"),
+                translate_mode=normalize_translate_mode(config.get("translate_mode")),
             )
         else:
             payload.pop("resume_translate_only", None)

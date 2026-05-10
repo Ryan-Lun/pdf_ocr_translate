@@ -66,6 +66,7 @@ AZURE_BATCH_SYSTEM_PROMPT = os.getenv(
 ).strip()
 
 DOC_TRANSLATE_MODEL = openai_config.get_doc_translate_deployment()
+PDF_REALTIME_TRANSLATE_MODEL = openai_config.get_pdf_realtime_translate_deployment()
 WORD_TRANSLATE_MODEL = openai_config.get_word_translate_deployment()
 WORD_QUALITY_MODEL = openai_config.get_word_quality_deployment()
 DOC_TRANSLATE_MAX_CHARS = int(os.getenv("DOC_TRANSLATE_MAX_CHARS", "4000"))
@@ -87,8 +88,14 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 WORKER_POLL_SECONDS = float(os.getenv("WORKER_POLL_SECONDS", "3"))
 WORKER_ID = os.getenv("WORKER_ID", f"{os.getenv('COMPUTERNAME', 'worker')}-{os.getpid()}")
 WORKER_OCR_MAX_RUNNING = int(os.getenv("WORKER_OCR_MAX_RUNNING", "1"))
+WORKER_PDF_TRANSLATE_MAX_RUNNING = int(os.getenv("WORKER_PDF_TRANSLATE_MAX_RUNNING", "1"))
 WORKER_DOC_MAX_RUNNING = int(os.getenv("WORKER_DOC_MAX_RUNNING", "1"))
 WORKER_WORD_MAX_RUNNING = int(os.getenv("WORKER_WORD_MAX_RUNNING", "1"))
+PDF_REALTIME_JOB_CONCURRENCY = max(1, int(os.getenv("PDF_REALTIME_JOB_CONCURRENCY", "4")))
+PDF_REALTIME_GLOBAL_CONCURRENCY = max(1, int(os.getenv("PDF_REALTIME_GLOBAL_CONCURRENCY", "8")))
+PDF_REALTIME_RPM_LIMIT = max(1, int(os.getenv("PDF_REALTIME_RPM_LIMIT", "300")))
+PDF_REALTIME_MAX_SEGMENTS_PER_REQUEST = max(1, int(os.getenv("PDF_REALTIME_MAX_SEGMENTS_PER_REQUEST", "30")))
+PDF_REALTIME_MAX_CHARS_PER_REQUEST = max(500, int(os.getenv("PDF_REALTIME_MAX_CHARS_PER_REQUEST", "8000")))
 STARTUP_WARMUP_ENABLED = os.getenv("STARTUP_WARMUP_ENABLED", "1").strip() == "1"
 STARTUP_WARMUP_BLOCKING = os.getenv("STARTUP_WARMUP_BLOCKING", "1").strip() == "1"
 STARTUP_WARMUP_BGE = os.getenv("STARTUP_WARMUP_BGE", "1").strip() == "1"

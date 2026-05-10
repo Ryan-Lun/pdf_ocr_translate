@@ -296,6 +296,7 @@ def claim_next_job(
 ) -> JobRecord | None:
     concurrency_limits = concurrency_limits or {}
     ocr_limit = max(0, int(concurrency_limits.get("ocr_overlay", 1)))
+    pdf_translate_limit = max(0, int(concurrency_limits.get("pdf_translate", 1)))
     doc_limit = max(0, int(concurrency_limits.get("doc_workspace", 1)))
     word_limit = max(0, int(concurrency_limits.get("word_translate", 1)))
     with session_scope() as session:
@@ -311,13 +312,21 @@ def claim_next_job(
                     WHERE status = :queued_status
                       AND cancel_requested = 0
                       AND (
-                        (job_type = 'ocr_overlay' AND :ocr_limit > 0 AND (
+                        (job_type = 'ocr_overlay' AND ISNULL(stage, '') <> 'translate' AND :ocr_limit > 0 AND (
                             SELECT COUNT(*)
                             FROM jobs AS active
                             WHERE active.job_type = 'ocr_overlay'
                               AND active.status IN ('running', 'cancel_requested')
                               AND ISNULL(active.stage, '') <> 'translate'
                         ) < :ocr_limit)
+                        OR
+                        (job_type = 'ocr_overlay' AND ISNULL(stage, '') = 'translate' AND :pdf_translate_limit > 0 AND (
+                            SELECT COUNT(*)
+                            FROM jobs AS active
+                            WHERE active.job_type = 'ocr_overlay'
+                              AND active.status IN ('running', 'cancel_requested')
+                              AND ISNULL(active.stage, '') = 'translate'
+                        ) < :pdf_translate_limit)
                         OR
                         (job_type = 'doc_workspace' AND :doc_limit > 0 AND (
                             SELECT COUNT(*)
@@ -350,6 +359,7 @@ def claim_next_job(
                 "running_status": "running",
                 "worker_id": worker_id,
                 "ocr_limit": ocr_limit,
+                "pdf_translate_limit": pdf_translate_limit,
                 "doc_limit": doc_limit,
                 "word_limit": word_limit,
             },

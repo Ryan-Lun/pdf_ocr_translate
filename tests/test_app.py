@@ -18,6 +18,70 @@ def test_upload_missing_pdf(client):
     assert resp.status_code == 400
 
 
+def test_upload_pdf_overlay_accepts_realtime_mode(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    captured: list[dict[str, str]] = []
+
+    def fake_enqueue(
+        source_pdf,
+        display_name,
+        dpi,
+        start_page,
+        end_page,
+        translate_target_lang,
+        translate_model,
+        translate_mode,
+        keep_lang,
+        enable_translate,
+        document_mode,
+        creator_name="",
+    ):
+        captured.append(
+            {
+                "display_name": display_name,
+                "translate_target_lang": translate_target_lang,
+                "translate_model": translate_model,
+                "translate_mode": translate_mode,
+                "keep_lang": keep_lang,
+                "enable_translate": str(enable_translate),
+                "document_mode": document_mode,
+            }
+        )
+        return "a" * 32
+
+    monkeypatch.setattr(
+        "app.blueprints.main.routes.pipeline.enqueue_job_from_upload",
+        fake_enqueue,
+    )
+
+    resp = client.post(
+        "/upload",
+        data={
+            "translate": "on",
+            "translate_mode": "realtime",
+            "target_lang": "en",
+            "model": "quick-model",
+            "document_mode": "general",
+            "pdf": (io.BytesIO(b"%PDF-1.4"), "sample.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 302
+    assert captured == [
+        {
+            "display_name": "sample",
+            "translate_target_lang": "en",
+            "translate_model": "quick-model",
+            "translate_mode": "realtime",
+            "keep_lang": "all",
+            "enable_translate": "True",
+            "document_mode": "general",
+        }
+    ]
+
+
 def test_invalid_job_routes(client):
     resp = client.get("/job/not-a-valid-job")
     assert resp.status_code == 404
