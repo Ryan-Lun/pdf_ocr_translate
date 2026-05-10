@@ -70,6 +70,7 @@ def test_save_job_writes_form_tm_from_editor_edits(client, tmp_path, monkeypatch
                         "font_size": 16,
                         "no_clip": False,
                         "color": "#0000ff",
+                        "text_align": "right",
                         "auto_generated": True,
                         "tm_source_text": "表格內容",
                         "tm_source_normalized": "表格內容",
@@ -88,6 +89,8 @@ def test_save_job_writes_form_tm_from_editor_edits(client, tmp_path, monkeypatch
 
     resp = client.post(f"/api/job/{job_id}/save", json=payload)
     assert resp.status_code == 200
+    saved = json.loads((job_dir / "edits.json").read_text(encoding="utf-8"))
+    assert saved["pages"][0]["boxes"][0]["text_align"] == "right"
 
     memory = json.loads(state.TRANSLATION_MEMORY_PATH.read_text(encoding="utf-8"))
     entry = memory["form|en|表格內容"]
@@ -265,6 +268,7 @@ def test_retranslate_region_replaces_overlapping_auto_boxes_only(client, tmp_pat
     assert boxes[2]["text"] == "merged paragraph translation"
     assert boxes[2]["auto_generated"] is True
     assert boxes[2]["no_clip"] is True
+    assert boxes[2]["text_align"] == "left"
     assert boxes[2]["source"] == "manual_region_retranslate"
     assert boxes[2]["tm_source_text"] == "補翻來源第一行\n補翻來源第二行"
 

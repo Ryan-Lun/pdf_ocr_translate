@@ -599,6 +599,7 @@ def retranslate_region(job_id: str):
                 "source": "manual_region_retranslate",
                 "font_size": state.DEFAULT_FONT_SIZE_PX,
                 "color": state.DEFAULT_TEXT_COLOR,
+                "text_align": "left",
                 **build_tm_meta(merged_source_text),
             }
         )

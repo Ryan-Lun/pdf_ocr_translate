@@ -20,6 +20,15 @@ except Exception:  # pragma: no cover - optional runtime dependency in tests
 
 logger = logging.getLogger(__name__)
 
+TEXT_ALIGN_LEFT = "left"
+TEXT_ALIGN_CENTER = "center"
+TEXT_ALIGN_RIGHT = "right"
+FITZ_TEXT_ALIGN = {
+    TEXT_ALIGN_LEFT: 0,
+    TEXT_ALIGN_CENTER: 1,
+    TEXT_ALIGN_RIGHT: 2,
+}
+
 
 def update_pp_json_should_translate(job_dir: Path) -> None:
     pp_dir = job_dir / "pp_json"
@@ -81,7 +90,15 @@ def _dedupe_box_signature(box: dict[str, Any]) -> tuple[Any, ...] | None:
             return None
     else:
         return None
-    return coords + (text, deleted)
+    return coords + (text, deleted, normalize_text_align(box.get("text_align")))
+
+
+def normalize_text_align(value: Any) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in FITZ_TEXT_ALIGN:
+            return normalized
+    return TEXT_ALIGN_LEFT
 
 
 def load_page_data(
@@ -98,6 +115,7 @@ def load_page_data(
         rec_scores: list[float] = []
         font_sizes: list[float] = []
         colors: list[str] = []
+        alignments: list[str] = []
         box_ids: list[int] = []
         no_clips: list[bool] = []
         auto_generated_flags: list[bool] = []
@@ -126,6 +144,7 @@ def load_page_data(
             rec_scores.append(1.0)
             font_sizes.append(float(box.get("font_size") or 0.0))
             colors.append(str(box.get("color") or state.DEFAULT_TEXT_COLOR))
+            alignments.append(normalize_text_align(box.get("text_align")))
             box_ids.append(int(box.get("id") or len(box_ids)))
             no_clips.append(bool(box.get("no_clip")))
             auto_generated_flags.append(bool(box.get("auto_generated", True)))
@@ -141,6 +160,7 @@ def load_page_data(
         rec_scores = data.get("rec_scores", []) or []
         font_sizes = []
         colors = []
+        alignments = []
         box_ids = []
         no_clips = []
         auto_generated_flags = []
@@ -168,6 +188,7 @@ def load_page_data(
         "rec_scores": rec_scores,
         "font_sizes": font_sizes,
         "colors": colors,
+        "alignments": alignments,
         "box_ids": box_ids,
         "no_clips": no_clips,
         "auto_generated_flags": auto_generated_flags,
@@ -676,33 +697,51 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
             color = hex_to_rgb(box.get("color"))
             rotate = rotation if rotation else 0
             no_clip = bool(box.get("no_clip"))
+            text_align = normalize_text_align(box.get("text_align"))
 
             sx = page_w / img_w
             sy = page_h / img_h
-            v_w = w * sx 
-            v_h = h * sy 
-            v_y = y * sy 
+            v_w = w * sx
+            v_h = h * sy
+            v_y = y * sy
 
             lines = wrap_text_lines(text, v_w, font_obj, font_size_pt)
             if not lines:
                 lines = [text]
-                
+
             line_height = max(1.0, font_size_pt * 1.2)
 
             cursor_v_y = v_y + line_height
             max_lines_in_box = max(1, int(v_h // line_height))
             allow_overflow = no_clip or len(lines) > max_lines_in_box
             max_v_y = v_y + v_h if not allow_overflow else page_h - line_height * 0.2
-            
+
             for idx, line in enumerate(lines):
                 overflow = cursor_v_y > max_v_y
                 if overflow and idx != 0:
                     break
 
                 y_cursor_px = cursor_v_y / sy
-                pt_unrot = px_point_to_pdf_pt(x, y_cursor_px, img_w, img_h, page_w, page_h, rotation)
+                text_width_pt = font_obj.text_length(line, font_size_pt)
+                max_offset_pt = max(0.0, v_w - text_width_pt)
+                if text_align == TEXT_ALIGN_CENTER:
+                    x_offset_pt = max_offset_pt / 2
+                elif text_align == TEXT_ALIGN_RIGHT:
+                    x_offset_pt = max_offset_pt
+                else:
+                    x_offset_pt = 0.0
+                x_cursor_px = x + (x_offset_pt / sx if sx else 0.0)
+                pt_unrot = px_point_to_pdf_pt(
+                    x_cursor_px,
+                    y_cursor_px,
+                    img_w,
+                    img_h,
+                    page_w,
+                    page_h,
+                    rotation,
+                )
                 baseline = fitz.Point(pt_unrot[0], pt_unrot[1])
-                
+
                 if fontfile:
                     shape.insert_text(
                         baseline,

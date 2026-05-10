@@ -1422,6 +1422,18 @@ body.editor .thumbs {
   display: block;
 }
 
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.segmented-control button.is-active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 .text-box.is-expanded .text {
   overflow: visible;
   height: auto;
