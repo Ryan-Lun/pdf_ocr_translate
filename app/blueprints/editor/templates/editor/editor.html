@@ -83,6 +83,10 @@
             <i class="bi bi-sliders2"></i>
             <span>工具</span>
           </button>
+          <button class="sidebar-rail__item" type="button" data-sidebar-target="sidebarConsistencySection">
+            <i class="bi bi-arrow-left-right"></i>
+            <span>一致性</span>
+          </button>
           <button class="sidebar-rail__item" type="button" data-sidebar-target="sidebarShortcutsSection">
             <i class="bi bi-keyboard"></i>
             <span>快捷鍵</span>
@@ -144,6 +148,61 @@
               </div>
               <div class="button-row">
                 <button id="deleteBox" class="danger">刪除文字框</button>
+              </div>
+            </section>
+            <section id="sidebarConsistencySection" class="sidebar-section" hidden>
+              <h2>一致性</h2>
+              <p class="hint">找出同一份文件中相同來源詞被翻成不同譯文的地方，集中調整。</p>
+              <div class="button-row">
+                <button id="refreshConsistencyBtn" class="ghost" type="button">重新掃描不一致詞彙</button>
+              </div>
+              <div id="consistencySummary" class="hint"></div>
+              <div id="consistencyList" class="consistency-list"></div>
+              <div id="consistencyDetail" class="consistency-detail" hidden>
+                <div class="consistency-detail__header">
+                  <h3 id="consistencySourceTitle">來源詞</h3>
+                  <p id="consistencySourceMeta" class="hint"></p>
+                </div>
+                <div id="consistencyVariantList" class="consistency-variants"></div>
+                <label>
+                  <span>統一譯文</span>
+                  <textarea id="consistencyTargetText" rows="4" placeholder="輸入要統一套用的譯文"></textarea>
+                </label>
+                <label class="check-row">
+                  <input id="consistencySyncTm" type="checkbox" />
+                  <span>同步到翻譯記憶</span>
+                </label>
+                <div class="button-row">
+                  <button id="applyConsistencyBtn" class="primary" type="button">套用到本文件全部匹配文字框</button>
+                </div>
+              </div>
+              <hr />
+              <h3>段落術語</h3>
+              <p class="hint">針對長段落中的重複術語做人工統一，不會整段覆蓋。</p>
+              <div id="paragraphTermSummary" class="hint"></div>
+              <div id="paragraphTermList" class="consistency-list"></div>
+              <div id="paragraphTermDetail" class="consistency-detail" hidden>
+                <div class="consistency-detail__header">
+                  <h3 id="paragraphTermTitle">來源術語</h3>
+                  <p id="paragraphTermMeta" class="hint"></p>
+                </div>
+                <div id="paragraphTermVariantList" class="consistency-variants"></div>
+                <div id="paragraphTermPreviewList" class="paragraph-term-previews"></div>
+                <label>
+                  <span>替換前</span>
+                  <input id="paragraphReplaceFrom" type="text" placeholder="目前段落中使用的譯法" />
+                </label>
+                <label>
+                  <span>替換後</span>
+                  <input id="paragraphReplaceTo" type="text" placeholder="要統一成的譯法" />
+                </label>
+                <label class="check-row">
+                  <input id="paragraphSyncTm" type="checkbox" />
+                  <span>同步到翻譯記憶</span>
+                </label>
+                <div class="button-row">
+                  <button id="applyParagraphTermBtn" class="primary" type="button">套用到包含此術語的段落</button>
+                </div>
               </div>
             </section>
             <section id="sidebarShortcutsSection" class="sidebar-section" hidden>

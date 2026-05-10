@@ -4,7 +4,7 @@ import io
 import json
 from pathlib import Path
 
-from app.services import jobs, state
+from app.services import jobs, state, translation_memory
 
 
 def test_index_ok(client):

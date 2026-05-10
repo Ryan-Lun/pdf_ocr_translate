@@ -20,6 +20,10 @@ const state = {
   pdfDoc: null,
   downloadName: null,
   pendingRegionPreview: null,
+  consistencyGroups: [],
+  selectedConsistencyKey: null,
+  paragraphTermGroups: [],
+  selectedParagraphTermKey: null,
 };
 
 const historyState = {
@@ -61,6 +65,27 @@ const toggleThumbsBtn = document.getElementById("toggleThumbsBtn");
 const toggleViewModeBtn = document.getElementById("toggleViewModeBtn");
 const sidebarEl = document.querySelector(".editor-sidebar");
 const sidebarRailButtons = Array.from(document.querySelectorAll(".sidebar-rail__item"));
+const refreshConsistencyBtn = document.getElementById("refreshConsistencyBtn");
+const consistencySummaryEl = document.getElementById("consistencySummary");
+const consistencyListEl = document.getElementById("consistencyList");
+const consistencyDetailEl = document.getElementById("consistencyDetail");
+const consistencySourceTitleEl = document.getElementById("consistencySourceTitle");
+const consistencySourceMetaEl = document.getElementById("consistencySourceMeta");
+const consistencyVariantListEl = document.getElementById("consistencyVariantList");
+const consistencyTargetTextEl = document.getElementById("consistencyTargetText");
+const consistencySyncTmEl = document.getElementById("consistencySyncTm");
+const applyConsistencyBtn = document.getElementById("applyConsistencyBtn");
+const paragraphTermSummaryEl = document.getElementById("paragraphTermSummary");
+const paragraphTermListEl = document.getElementById("paragraphTermList");
+const paragraphTermDetailEl = document.getElementById("paragraphTermDetail");
+const paragraphTermTitleEl = document.getElementById("paragraphTermTitle");
+const paragraphTermMetaEl = document.getElementById("paragraphTermMeta");
+const paragraphTermVariantListEl = document.getElementById("paragraphTermVariantList");
+const paragraphTermPreviewListEl = document.getElementById("paragraphTermPreviewList");
+const paragraphReplaceFromEl = document.getElementById("paragraphReplaceFrom");
+const paragraphReplaceToEl = document.getElementById("paragraphReplaceTo");
+const paragraphSyncTmEl = document.getElementById("paragraphSyncTm");
+const applyParagraphTermBtn = document.getElementById("applyParagraphTermBtn");
 const viewerEl = document.querySelector(".viewer");
 const editedLink = document.getElementById("editedPdfLink");
 const previewEl = document.getElementById("pdfPreview");
@@ -142,7 +167,7 @@ function setActiveSidebarRail(targetId) {
 }
 
 function setSidebarSection(targetId) {
-  const sections = ["sidebarPagesSection", "sidebarToolsSection", "sidebarShortcutsSection"];
+  const sections = ["sidebarPagesSection", "sidebarToolsSection", "sidebarConsistencySection", "sidebarShortcutsSection"];
   sections.forEach((sectionId) => {
     const sectionEl = document.getElementById(sectionId);
     if (!sectionEl) return;
@@ -151,6 +176,9 @@ function setSidebarSection(targetId) {
     sectionEl.classList.toggle("is-active", active);
   });
   setActiveSidebarRail(targetId);
+  if (targetId === "sidebarConsistencySection") {
+    refreshAllConsistencyPanels();
+  }
 }
 
 function syncViewModeButton() {
@@ -226,6 +254,425 @@ function normalizePreviewText(text) {
     .join("\n");
 }
 
+function normalizeConsistencyText(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function getConsistencyGroupByKey(key) {
+  return state.consistencyGroups.find((group) => group.key === key) || null;
+}
+
+function buildConsistencyGroups() {
+  const groups = new Map();
+  state.pages.forEach((page, pageIdx) => {
+    page.boxes.forEach((box, boxIdx) => {
+      if (!box || box.deleted) return;
+      const sourceNormalized = String(box.tmSourceNormalized || "").trim();
+      if (!sourceNormalized) return;
+      const targetText = normalizeConsistencyText(box.text);
+      if (!targetText) return;
+      const sourceText = String(box.tmSourceText || sourceNormalized).trim() || sourceNormalized;
+      const groupKey = sourceNormalized;
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, {
+          key: groupKey,
+          sourceNormalized,
+          sourceText,
+          boxes: [],
+          variantsMap: new Map(),
+        });
+      }
+      const group = groups.get(groupKey);
+      group.boxes.push({
+        pageIdx,
+        boxIdx,
+        pageNumber: (page.pageIndex ?? pageIdx) + 1,
+        boxId: box.id,
+        targetText,
+      });
+      if (!group.variantsMap.has(targetText)) {
+        group.variantsMap.set(targetText, {
+          text: targetText,
+          count: 0,
+          pages: new Set(),
+        });
+      }
+      const variant = group.variantsMap.get(targetText);
+      variant.count += 1;
+      variant.pages.add((page.pageIndex ?? pageIdx) + 1);
+    });
+  });
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      key: group.key,
+      sourceNormalized: group.sourceNormalized,
+      sourceText: group.sourceText,
+      boxes: group.boxes,
+      variants: Array.from(group.variantsMap.values()).map((variant) => ({
+        text: variant.text,
+        count: variant.count,
+        pages: Array.from(variant.pages).sort((a, b) => a - b),
+      })).sort((a, b) => b.count - a.count || a.text.localeCompare(b.text)),
+    }))
+    .filter((group) => group.variants.length > 1)
+    .sort((a, b) => b.boxes.length - a.boxes.length || b.variants.length - a.variants.length);
+}
+
+function renderConsistencyDetail(group) {
+  if (!consistencyDetailEl || !consistencySourceTitleEl || !consistencySourceMetaEl || !consistencyVariantListEl) return;
+  if (!group) {
+    consistencyDetailEl.hidden = true;
+    consistencyVariantListEl.innerHTML = "";
+    if (consistencyTargetTextEl) consistencyTargetTextEl.value = "";
+    return;
+  }
+  consistencyDetailEl.hidden = false;
+  consistencySourceTitleEl.textContent = group.sourceText || group.sourceNormalized;
+  consistencySourceMetaEl.textContent = `共 ${group.boxes.length} 個文字框，${group.variants.length} 種譯文`;
+  consistencyVariantListEl.innerHTML = "";
+  group.variants.forEach((variant, index) => {
+    const label = document.createElement("label");
+    label.className = "consistency-variant";
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "consistencyVariant";
+    radio.value = variant.text;
+    radio.checked = index === 0;
+    radio.addEventListener("change", () => {
+      if (radio.checked && consistencyTargetTextEl) {
+        consistencyTargetTextEl.value = variant.text;
+      }
+    });
+    const body = document.createElement("div");
+    body.className = "consistency-variant__body";
+    const title = document.createElement("p");
+    title.className = "consistency-variant__title";
+    title.textContent = variant.text;
+    const meta = document.createElement("p");
+    meta.className = "consistency-variant__meta";
+    meta.textContent = `出現 ${variant.count} 次，頁面 ${variant.pages.join(", ")}`;
+    body.appendChild(title);
+    body.appendChild(meta);
+    label.appendChild(radio);
+    label.appendChild(body);
+    consistencyVariantListEl.appendChild(label);
+  });
+  if (consistencyTargetTextEl) {
+    consistencyTargetTextEl.value = group.variants[0]?.text || "";
+  }
+}
+
+function renderConsistencyPanel() {
+  if (!consistencyListEl || !consistencySummaryEl) return;
+  consistencyListEl.innerHTML = "";
+  state.consistencyGroups = buildConsistencyGroups();
+  if (!state.consistencyGroups.length) {
+    state.selectedConsistencyKey = null;
+    consistencySummaryEl.textContent = "目前沒有偵測到文件內相同來源詞的譯文衝突。";
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "如果你剛修改過文字內容，可以按上方按鈕重新掃描。";
+    consistencyListEl.appendChild(empty);
+    renderConsistencyDetail(null);
+    return;
+  }
+
+  if (!getConsistencyGroupByKey(state.selectedConsistencyKey)) {
+    state.selectedConsistencyKey = state.consistencyGroups[0].key;
+  }
+  consistencySummaryEl.textContent = `找到 ${state.consistencyGroups.length} 組疑似不一致詞彙。`;
+  state.consistencyGroups.forEach((group) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "consistency-card";
+    if (group.key === state.selectedConsistencyKey) {
+      button.classList.add("is-active");
+    }
+    button.addEventListener("click", () => {
+      state.selectedConsistencyKey = group.key;
+      renderConsistencyPanel();
+    });
+    const title = document.createElement("p");
+    title.className = "consistency-card__title";
+    title.textContent = group.sourceText || group.sourceNormalized;
+    const meta = document.createElement("p");
+    meta.className = "consistency-card__meta";
+    meta.textContent = `${group.variants.length} 種譯文，${group.boxes.length} 個文字框`;
+    button.appendChild(title);
+    button.appendChild(meta);
+    consistencyListEl.appendChild(button);
+  });
+  renderConsistencyDetail(getConsistencyGroupByKey(state.selectedConsistencyKey));
+}
+
+function refreshConsistencyPanel() {
+  renderConsistencyPanel();
+}
+
+function normalizeSourceTerm(text) {
+  return String(text || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function escapeRegExp(text) {
+  return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isParagraphSourceText(text) {
+  const value = String(text || "").trim();
+  if (!value) return false;
+  return value.length >= 28 || /[\r\n]/.test(value) || /[，。,.;:；：!?]/.test(value);
+}
+
+function isShortSourceTerm(text) {
+  const value = String(text || "").trim();
+  if (!value) return false;
+  return value.length >= 2 && value.length <= 18 && !/[\r\n]/.test(value);
+}
+
+function getParagraphTermGroupByKey(key) {
+  return state.paragraphTermGroups.find((group) => group.key === key) || null;
+}
+
+function buildParagraphTermGroups() {
+  const candidateMap = new Map();
+  const paragraphBoxes = [];
+
+  const addCandidate = (sourceText, suggestedTarget = "") => {
+    const cleanedSource = String(sourceText || "").trim();
+    const normalizedSource = normalizeSourceTerm(cleanedSource);
+    if (!isShortSourceTerm(cleanedSource) || !normalizedSource) return;
+    if (!candidateMap.has(normalizedSource)) {
+      candidateMap.set(normalizedSource, {
+        key: normalizedSource,
+        sourceText: cleanedSource,
+        sourceNormalized: normalizedSource,
+        suggestedTarget: String(suggestedTarget || "").trim(),
+        candidateTargets: new Set(),
+      });
+    }
+    const candidate = candidateMap.get(normalizedSource);
+    if (cleanedSource.length < candidate.sourceText.length) {
+      candidate.sourceText = cleanedSource;
+    }
+    if (suggestedTarget) {
+      candidate.suggestedTarget = candidate.suggestedTarget || String(suggestedTarget).trim();
+      candidate.candidateTargets.add(String(suggestedTarget).trim());
+    }
+  };
+
+  glossaryEntries.forEach((entry) => {
+    if (!entry) return;
+    addCandidate(entry.cn, entry.en);
+  });
+
+  state.pages.forEach((page, pageIdx) => {
+    page.boxes.forEach((box, boxIdx) => {
+      if (!box || box.deleted) return;
+      const sourceText = String(box.tmSourceText || "").trim();
+      const sourceNormalized = normalizeSourceTerm(box.tmSourceNormalized || sourceText);
+      const targetText = normalizeConsistencyText(box.text);
+      if (isParagraphSourceText(sourceText)) {
+        paragraphBoxes.push({
+          pageIdx,
+          boxIdx,
+          pageNumber: (page.pageIndex ?? pageIdx) + 1,
+          sourceText,
+          sourceNormalized: normalizeSourceTerm(sourceText),
+          targetText,
+        });
+        return;
+      }
+      if (isShortSourceTerm(sourceText) && sourceNormalized) {
+        addCandidate(sourceText, targetText);
+      }
+    });
+  });
+
+  candidateMap.forEach((candidate) => {
+    const directCandidate = normalizeConsistencyText(candidate.suggestedTarget);
+    if (directCandidate) {
+      candidate.candidateTargets.add(directCandidate);
+    }
+  });
+
+  const groups = [];
+  candidateMap.forEach((candidate) => {
+    const matchedParagraphs = paragraphBoxes.filter((item) => item.sourceNormalized.includes(candidate.sourceNormalized));
+    if (matchedParagraphs.length < 2) return;
+
+    const variantMap = new Map();
+    let unmatchedCount = 0;
+    matchedParagraphs.forEach((item) => {
+      let matchedVariant = "";
+      Array.from(candidate.candidateTargets)
+        .sort((a, b) => b.length - a.length)
+        .some((term) => {
+          if (!term) return false;
+          const found = item.targetText.toLowerCase().includes(term.toLowerCase());
+          if (found) {
+            matchedVariant = term;
+          }
+          return found;
+        });
+
+      if (!matchedVariant) {
+        unmatchedCount += 1;
+      } else {
+        if (!variantMap.has(matchedVariant)) {
+          variantMap.set(matchedVariant, { text: matchedVariant, count: 0, pages: new Set() });
+        }
+        const variant = variantMap.get(matchedVariant);
+        variant.count += 1;
+        variant.pages.add(item.pageNumber);
+      }
+    });
+
+    const foundVariants = Array.from(variantMap.values()).map((variant) => ({
+      text: variant.text,
+      count: variant.count,
+      pages: Array.from(variant.pages).sort((a, b) => a - b),
+    })).sort((a, b) => b.count - a.count || a.text.localeCompare(b.text));
+
+    const hasConflict = foundVariants.length > 1
+      || (foundVariants.length === 1 && unmatchedCount > 0)
+      || (candidate.suggestedTarget
+        && foundVariants.some((variant) => normalizeConsistencyText(variant.text).toLowerCase() !== candidate.suggestedTarget.toLowerCase()));
+    if (!hasConflict) return;
+
+    groups.push({
+      key: candidate.key,
+      sourceText: candidate.sourceText,
+      sourceNormalized: candidate.sourceNormalized,
+      suggestedTarget: candidate.suggestedTarget,
+      foundVariants,
+      unmatchedCount,
+      paragraphBoxes: matchedParagraphs.map((item) => ({
+        pageIdx: item.pageIdx,
+        boxIdx: item.boxIdx,
+        pageNumber: item.pageNumber,
+        preview: item.targetText.slice(0, 140),
+      })),
+    });
+  });
+
+  return groups.sort((a, b) => b.paragraphBoxes.length - a.paragraphBoxes.length || b.foundVariants.length - a.foundVariants.length);
+}
+
+function renderParagraphTermDetail(group) {
+  if (!paragraphTermDetailEl || !paragraphTermTitleEl || !paragraphTermMetaEl || !paragraphTermVariantListEl || !paragraphTermPreviewListEl) return;
+  if (!group) {
+    paragraphTermDetailEl.hidden = true;
+    paragraphTermVariantListEl.innerHTML = "";
+    paragraphTermPreviewListEl.innerHTML = "";
+    if (paragraphReplaceFromEl) paragraphReplaceFromEl.value = "";
+    if (paragraphReplaceToEl) paragraphReplaceToEl.value = "";
+    return;
+  }
+
+  paragraphTermDetailEl.hidden = false;
+  paragraphTermTitleEl.textContent = group.sourceText;
+  paragraphTermMetaEl.textContent = `影響 ${group.paragraphBoxes.length} 個段落，已辨識 ${group.foundVariants.length} 種譯法`;
+  paragraphTermVariantListEl.innerHTML = "";
+  group.foundVariants.forEach((variant, index) => {
+    const card = document.createElement("div");
+    card.className = "consistency-variant";
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "paragraphTermVariant";
+    radio.value = variant.text;
+    radio.checked = index === 0;
+    radio.addEventListener("change", () => {
+      if (radio.checked && paragraphReplaceFromEl) {
+        paragraphReplaceFromEl.value = variant.text;
+      }
+    });
+    const body = document.createElement("div");
+    body.className = "consistency-variant__body";
+    const title = document.createElement("p");
+    title.className = "consistency-variant__title";
+    title.textContent = variant.text;
+    const meta = document.createElement("p");
+    meta.className = "consistency-variant__meta";
+    meta.textContent = `出現 ${variant.count} 次，頁面 ${variant.pages.join(", ")}`;
+    body.appendChild(title);
+    body.appendChild(meta);
+    card.appendChild(radio);
+    card.appendChild(body);
+    paragraphTermVariantListEl.appendChild(card);
+  });
+
+  paragraphTermPreviewListEl.innerHTML = "";
+  group.paragraphBoxes.slice(0, 6).forEach((item) => {
+    const preview = document.createElement("div");
+    preview.className = "paragraph-term-preview";
+    const meta = document.createElement("p");
+    meta.className = "paragraph-term-preview__meta";
+    meta.textContent = `第 ${item.pageNumber} 頁`;
+    const text = document.createElement("p");
+    text.className = "paragraph-term-preview__text";
+    text.textContent = item.preview;
+    preview.appendChild(meta);
+    preview.appendChild(text);
+    paragraphTermPreviewListEl.appendChild(preview);
+  });
+
+  if (paragraphReplaceFromEl) {
+    paragraphReplaceFromEl.value = group.foundVariants[0]?.text || "";
+  }
+  if (paragraphReplaceToEl) {
+    paragraphReplaceToEl.value = group.suggestedTarget || group.foundVariants[0]?.text || "";
+  }
+}
+
+function renderParagraphTermPanel() {
+  if (!paragraphTermListEl || !paragraphTermSummaryEl) return;
+  paragraphTermListEl.innerHTML = "";
+  state.paragraphTermGroups = buildParagraphTermGroups();
+  if (!state.paragraphTermGroups.length) {
+    state.selectedParagraphTermKey = null;
+    paragraphTermSummaryEl.textContent = "目前沒有偵測到需要人工統一的段落術語。";
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "系統會優先使用文件中短詞與 glossary 當成候選術語。";
+    paragraphTermListEl.appendChild(empty);
+    renderParagraphTermDetail(null);
+    return;
+  }
+
+  if (!getParagraphTermGroupByKey(state.selectedParagraphTermKey)) {
+    state.selectedParagraphTermKey = state.paragraphTermGroups[0].key;
+  }
+  paragraphTermSummaryEl.textContent = `找到 ${state.paragraphTermGroups.length} 組段落術語可人工統一。`;
+  state.paragraphTermGroups.forEach((group) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "consistency-card";
+    if (group.key === state.selectedParagraphTermKey) {
+      button.classList.add("is-active");
+    }
+    button.addEventListener("click", () => {
+      state.selectedParagraphTermKey = group.key;
+      renderParagraphTermPanel();
+    });
+    const title = document.createElement("p");
+    title.className = "consistency-card__title";
+    title.textContent = group.sourceText;
+    const meta = document.createElement("p");
+    meta.className = "consistency-card__meta";
+    meta.textContent = `${group.paragraphBoxes.length} 個段落，${group.foundVariants.length} 種已辨識譯法`;
+    button.appendChild(title);
+    button.appendChild(meta);
+    paragraphTermListEl.appendChild(button);
+  });
+  renderParagraphTermDetail(getParagraphTermGroupByKey(state.selectedParagraphTermKey));
+}
+
+function refreshAllConsistencyPanels() {
+  renderConsistencyPanel();
+  renderParagraphTermPanel();
+}
+
 let glossaryEntries = [];
 let currentJobId = null;
 let batchPageModalResolver = null;
@@ -270,6 +717,7 @@ async function loadGlossary() {
     const payload = await res.json();
     glossaryEntries = Array.isArray(payload.glossary) ? payload.glossary : [];
     renderGlossary();
+    refreshAllConsistencyPanels();
   } catch (error) {
     // ignore
   }
@@ -313,6 +761,7 @@ function addGlossaryEntry() {
   glossaryCnEl.value = "";
   glossaryEnEl.value = "";
   renderGlossary();
+  refreshAllConsistencyPanels();
   saveGlossary();
 }
 
@@ -2275,6 +2724,7 @@ async function loadJobData(jobId, options = {}) {
   const targetPageIdx = preserveActivePage ? (state.activePageIdx ?? 0) : 0;
   buildState(data, { activePageIdx: targetPageIdx });
   renderPages();
+  refreshAllConsistencyPanels();
   if (preserveActivePage) {
     setActivePage(targetPageIdx, { scroll: false });
     state.pages[state.activePageIdx]?.element?.scrollIntoView({ behavior: "auto", block: "start" });
@@ -2350,6 +2800,121 @@ async function saveEdits(shouldDownload = false, options = {}) {
     }
     if (downloadBtn) {
       downloadBtn.disabled = false;
+    }
+  }
+}
+
+async function applyConsistencyToDocument() {
+  const jobId = document.body.dataset.jobId;
+  const group = getConsistencyGroupByKey(state.selectedConsistencyKey);
+  const targetText = normalizePreviewText(consistencyTargetTextEl?.value || "");
+  if (!jobId || !group) return;
+  if (!targetText) {
+    setStatus("請先輸入要統一套用的譯文。");
+    return;
+  }
+
+  const updates = group.boxes.map(({ pageIdx, boxIdx }) => {
+    const page = state.pages[pageIdx];
+    const box = page?.boxes[boxIdx];
+    if (!page || !box || box.deleted) return null;
+    const before = cloneBoxData(box);
+    box.text = targetText;
+    const textEl = box.element?.querySelector(".text");
+    if (textEl) {
+      textEl.textContent = targetText;
+      textEl.innerText = targetText;
+    }
+    updateBoxElement(page, box);
+    return {
+      pageIdx,
+      boxId: box.id,
+      before,
+      after: cloneBoxData(box),
+    };
+  }).filter(Boolean).filter((update) => update.before.text !== update.after.text);
+
+  if (updates.length) {
+    pushAction({ type: "update_boxes", updates });
+  }
+  refreshConsistencyPanel();
+
+  const originalText = applyConsistencyBtn?.textContent || "套用到本文件全部匹配文字框";
+  if (applyConsistencyBtn) {
+    applyConsistencyBtn.disabled = true;
+    applyConsistencyBtn.textContent = "套用中...";
+  }
+  try {
+    const res = await fetch(`/api/job/${jobId}/consistency/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pages: buildSavePayload().pages,
+        source_normalized: group.sourceNormalized,
+        target_text: targetText,
+        sync_to_tm: !!consistencySyncTmEl?.checked,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setStatus(body.error ? `一致性套用失敗: ${body.error}` : "一致性套用失敗。");
+      return;
+    }
+    if (body.edited_pdf_url) {
+      updateEditedLink(body.edited_pdf_url);
+    }
+    setStatus(`已統一 ${body.updated_count || updates.length} 個文字框。`);
+  } catch (error) {
+    setStatus("一致性套用失敗。");
+  } finally {
+    if (applyConsistencyBtn) {
+      applyConsistencyBtn.disabled = false;
+      applyConsistencyBtn.textContent = originalText;
+    }
+  }
+}
+
+async function applyParagraphTermToDocument() {
+  const jobId = document.body.dataset.jobId;
+  const group = getParagraphTermGroupByKey(state.selectedParagraphTermKey);
+  const replaceFrom = normalizeConsistencyText(paragraphReplaceFromEl?.value || "");
+  const replaceTo = normalizeConsistencyText(paragraphReplaceToEl?.value || "");
+  if (!jobId || !group) return;
+  if (!replaceFrom || !replaceTo) {
+    setStatus("請先輸入段落術語的替換前與替換後內容。");
+    return;
+  }
+
+  const originalText = applyParagraphTermBtn?.textContent || "套用到包含此術語的段落";
+  if (applyParagraphTermBtn) {
+    applyParagraphTermBtn.disabled = true;
+    applyParagraphTermBtn.textContent = "套用中...";
+  }
+  try {
+    const res = await fetch(`/api/job/${jobId}/paragraph-term/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pages: buildSavePayload().pages,
+        source_term: group.sourceText,
+        replace_from: replaceFrom,
+        replace_to: replaceTo,
+        sync_to_tm: !!paragraphSyncTmEl?.checked,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setStatus(body.error ? `段落術語套用失敗: ${body.error}` : "段落術語套用失敗。");
+      return;
+    }
+    await loadJobData(jobId, { preserveActivePage: true });
+    setStatus(`已更新 ${body.updated_count || 0} 個段落文字框。`);
+  } catch (error) {
+    setStatus("段落術語套用失敗。");
+  } finally {
+    if (applyParagraphTermBtn) {
+      applyParagraphTermBtn.disabled = false;
+      applyParagraphTermBtn.textContent = originalText;
     }
   }
 }
@@ -2609,6 +3174,25 @@ function bindControls() {
   if (batchDeleteBoxesBtn) {
     batchDeleteBoxesBtn.addEventListener("click", () => {
       batchDeleteMatchingBoxes();
+    });
+  }
+
+  if (refreshConsistencyBtn) {
+    refreshConsistencyBtn.addEventListener("click", () => {
+      refreshAllConsistencyPanels();
+      setStatus("已重新掃描文件內的一致性問題。");
+    });
+  }
+
+  if (applyConsistencyBtn) {
+    applyConsistencyBtn.addEventListener("click", () => {
+      applyConsistencyToDocument();
+    });
+  }
+
+  if (applyParagraphTermBtn) {
+    applyParagraphTermBtn.addEventListener("click", () => {
+      applyParagraphTermToDocument();
     });
   }
 

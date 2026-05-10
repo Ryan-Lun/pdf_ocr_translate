@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
+from typing import Any
 
 from flask import Blueprint, Response, abort, jsonify, request, send_file, stream_with_context, url_for
 
@@ -18,6 +20,30 @@ api_bp = Blueprint(
     static_url_path="/static/api",
     url_prefix="/api",
 )
+
+
+def _load_job_translation_context(job_dir, payload: dict[str, Any] | None = None) -> tuple[str, str]:
+    config = jobs.load_batch_config(job_dir) or {}
+    document_mode = batch.resolve_document_mode(
+        config.get("document_mode") or (jobs.load_job_meta(job_dir) or {}).get("document_mode")
+    )
+    target_lang = str(config.get("target_lang") or "en")
+    if isinstance(payload, dict):
+        for page in payload.get("pages", []):
+            if not isinstance(page, dict):
+                continue
+            for box in page.get("boxes", []):
+                if not isinstance(box, dict):
+                    continue
+                box_mode = str(box.get("tm_document_mode") or "").strip()
+                box_lang = str(box.get("tm_target_lang") or "").strip()
+                if box_mode:
+                    document_mode = box_mode
+                if box_lang:
+                    target_lang = box_lang
+                if box_mode or box_lang:
+                    return document_mode, target_lang
+    return document_mode, target_lang
 
 
 @api_bp.route("/job/<job_id>", methods=["GET"], endpoint="job_data")
@@ -412,6 +438,187 @@ def save_job(job_id: str):
     return jsonify(
         {
             "ok": True,
+            "edited_pdf_url": url_for(
+                "jobs.job_file", job_id=job_id, filename=edited_pdf.name
+            ),
+        }
+    )
+
+
+@api_bp.route(
+    "/job/<job_id>/consistency/apply",
+    methods=["POST"],
+    endpoint="apply_consistency",
+)
+def apply_consistency(job_id: str):
+    if not jobs.safe_job_id(job_id):
+        abort(404)
+    job_dir = jobs.job_dir(job_id)
+    if not job_dir.exists():
+        abort(404)
+
+    payload = request.get_json(force=True) or {}
+    pages = payload.get("pages")
+    source_normalized = translation_memory.normalize_source_text(
+        payload.get("source_normalized") or ""
+    )
+    target_text = str(payload.get("target_text") or "").strip()
+    sync_to_tm = bool(payload.get("sync_to_tm"))
+    if not isinstance(pages, list):
+        return jsonify({"ok": False, "error": "Invalid pages payload."}), 400
+    if not source_normalized:
+        return jsonify({"ok": False, "error": "Missing source_normalized."}), 400
+    if not target_text:
+        return jsonify({"ok": False, "error": "Missing target_text."}), 400
+
+    updated_count = 0
+    representative_source_text = ""
+    target_lang = "en"
+    document_mode = "form"
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        boxes = page.get("boxes", [])
+        if not isinstance(boxes, list):
+            continue
+        for box in boxes:
+            if not isinstance(box, dict) or box.get("deleted"):
+                continue
+            box_source_normalized = translation_memory.normalize_source_text(
+                box.get("tm_source_normalized") or box.get("tm_source_text") or ""
+            )
+            if box_source_normalized != source_normalized:
+                continue
+            updated_count += 1
+            box["text"] = target_text
+            if not representative_source_text:
+                representative_source_text = str(
+                    box.get("tm_source_text") or box_source_normalized
+                ).strip()
+            if box.get("tm_target_lang"):
+                target_lang = str(box.get("tm_target_lang"))
+            if box.get("tm_document_mode"):
+                document_mode = str(box.get("tm_document_mode"))
+
+    edits_payload = {"pages": pages}
+    edits_path = job_dir / "edits.json"
+    edits_path.write_text(
+        json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    if sync_to_tm:
+        document_mode, target_lang = _load_job_translation_context(job_dir, edits_payload)
+        with state.TRANSLATION_MEMORY_LOCK:
+            memory = translation_memory.load_translation_memory()
+            translation_memory.upsert_entry(
+                memory,
+                representative_source_text or source_normalized,
+                target_text,
+                target_lang,
+                document_mode,
+                source_normalized=source_normalized,
+                source="editor_consistency",
+            )
+            translation_memory.write_translation_memory(memory)
+
+    try:
+        edited_pdf = ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    jobs.notify_jobs_update()
+    return jsonify(
+        {
+            "ok": True,
+            "updated_count": updated_count,
+            "edited_pdf_url": url_for(
+                "jobs.job_file", job_id=job_id, filename=edited_pdf.name
+            ),
+        }
+    )
+
+
+@api_bp.route(
+    "/job/<job_id>/paragraph-term/apply",
+    methods=["POST"],
+    endpoint="apply_paragraph_term",
+)
+def apply_paragraph_term(job_id: str):
+    if not jobs.safe_job_id(job_id):
+        abort(404)
+    job_dir = jobs.job_dir(job_id)
+    if not job_dir.exists():
+        abort(404)
+
+    payload = request.get_json(force=True) or {}
+    pages = payload.get("pages")
+    source_term = str(payload.get("source_term") or "").strip()
+    replace_from = str(payload.get("replace_from") or "").strip()
+    replace_to = str(payload.get("replace_to") or "").strip()
+    sync_to_tm = bool(payload.get("sync_to_tm"))
+    if not isinstance(pages, list):
+        return jsonify({"ok": False, "error": "Invalid pages payload."}), 400
+    if not source_term:
+        return jsonify({"ok": False, "error": "Missing source_term."}), 400
+    if not replace_from:
+        return jsonify({"ok": False, "error": "Missing replace_from."}), 400
+    if not replace_to:
+        return jsonify({"ok": False, "error": "Missing replace_to."}), 400
+
+    normalized_source_term = translation_memory.normalize_source_text(source_term)
+    replace_pattern = re.compile(re.escape(replace_from), re.IGNORECASE)
+    updated_count = 0
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        boxes = page.get("boxes", [])
+        if not isinstance(boxes, list):
+            continue
+        for box in boxes:
+            if not isinstance(box, dict) or box.get("deleted"):
+                continue
+            source_text = translation_memory.normalize_source_text(
+                box.get("tm_source_text") or box.get("tm_source_normalized") or ""
+            )
+            if not source_text or normalized_source_term not in source_text:
+                continue
+            current_text = str(box.get("text") or "")
+            next_text, replacements = replace_pattern.subn(replace_to, current_text)
+            if replacements <= 0:
+                continue
+            box["text"] = next_text
+            updated_count += 1
+
+    edits_payload = {"pages": pages}
+    edits_path = job_dir / "edits.json"
+    edits_path.write_text(
+        json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    if sync_to_tm:
+        document_mode, target_lang = _load_job_translation_context(job_dir, edits_payload)
+        with state.TRANSLATION_MEMORY_LOCK:
+            memory = translation_memory.load_translation_memory()
+            translation_memory.upsert_entry(
+                memory,
+                source_term,
+                replace_to,
+                target_lang,
+                document_mode,
+                source_normalized=normalized_source_term,
+                source="editor_paragraph_term",
+            )
+            translation_memory.write_translation_memory(memory)
+
+    try:
+        edited_pdf = ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    jobs.notify_jobs_update()
+    return jsonify(
+        {
+            "ok": True,
+            "updated_count": updated_count,
             "edited_pdf_url": url_for(
                 "jobs.job_file", job_id=job_id, filename=edited_pdf.name
             ),
