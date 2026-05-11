@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from flask import Blueprint, abort, redirect, render_template, request, url_for
 
-from ...services import doc_workspace, jobs, pipeline, state, word_translate
+from ...services import doc_workspace, jobs, pipeline, state, submit_quota, word_translate
 
 main_bp = Blueprint(
     "main",
@@ -29,6 +29,19 @@ def _display_name_from_filename(filename: str, fallback: str) -> str:
 def _display_creator_name(value: str, fallback: str = "") -> str:
     cleaned = " ".join(str(value or "").split()).strip()
     return jobs.sanitize_unicode_filename(cleaned, fallback=fallback) if cleaned else fallback
+
+
+def _enforce_submit_quota(creator_name: str = "") -> None:
+    allowed, limit, retry_after = submit_quota.check_and_record_submission(
+        creator_name,
+        request.remote_addr,
+    )
+    if allowed:
+        return
+    abort(
+        429,
+        f"Submission limit exceeded. Max {limit} submissions per minute per user. Retry after {int(retry_after)}s.",
+    )
 
 
 @main_bp.route("/", methods=["GET"], endpoint="index")
@@ -80,6 +93,7 @@ def upload() -> str:
     keep_lang = request.form.get("keep_lang", "all").strip().lower() or "all"
     document_mode = jobs.normalize_document_mode(request.form.get("document_mode"))
     creator_name = _display_creator_name(request.form.get("creator_name", ""))
+    _enforce_submit_quota(creator_name)
     if keep_lang not in {"all", "zh", "en"}:
         keep_lang = "all"
 
@@ -126,6 +140,7 @@ def upload_doc_workspace() -> str:
     state.UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
     target_lang = request.form.get("target_lang", "en").strip() or "en"
+    _enforce_submit_quota("")
 
     for file in files:
         if not file or file.filename == "":
@@ -161,6 +176,7 @@ def upload_word_workspace() -> str:
 
     target_lang = request.form.get("target_lang", "en").strip() or "en"
     retain_terms = request.form.get("retain_terms", "")
+    _enforce_submit_quota("")
 
     for file in files:
         if not file or file.filename == "":

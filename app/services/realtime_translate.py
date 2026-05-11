@@ -7,44 +7,119 @@ import random
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
-from . import batch, jobs, openai_config, state
+from . import batch, jobs, openai_config, rate_limiter, state
 
 logger = logging.getLogger(__name__)
 
 _GLOBAL_SEMAPHORE = threading.BoundedSemaphore(state.PDF_REALTIME_GLOBAL_CONCURRENCY)
 _NUMBERED_ITEM_RE = re.compile(r"(?<!\d)(\d+)\.(?=\s)")
+_REALTIME_DELIMITER_RE = re.compile(r"^<<<([^>\r\n]+)>>>\s*$", re.MULTILINE)
 
 
-def _unwrap_json_code_fences(text: str) -> str:
+def _unwrap_code_fences(text: str) -> str:
     cleaned = str(text or "").strip()
-    match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", cleaned, re.DOTALL | re.IGNORECASE)
+    match = re.match(r"^```(?:text|markdown)?\s*(.*?)\s*```$", cleaned, re.DOTALL | re.IGNORECASE)
     return match.group(1).strip() if match else cleaned
 
 
-def _build_chunk_prompt(
+def _realtime_debug_dir(job_dir: Path) -> Path:
+    return job_dir / "realtime_debug" / "chunks"
+
+
+def _write_debug_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(content or ""), encoding="utf-8")
+
+
+def _write_debug_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _chunk_debug_path(job_dir: Path, chunk_label: str) -> Path:
+    return _realtime_debug_dir(job_dir) / chunk_label
+
+
+def _record_chunk_request(
     *,
-    target_lang: str,
+    job_dir: Path,
+    chunk_label: str,
+    mode: str,
     system_prompt: str,
-) -> str:
-    prompt_parts = [batch.resolve_batch_prompt(target_lang, system_prompt)]
-    prompt_parts.append(
-        "\n".join(
-            [
-                "You will receive a JSON array of translation items.",
-                "Translate each item's text field and return valid JSON only.",
-                # "For each text value, preserve the batch formatting rules exactly.",
-                # "If a translated text contains multiple numbered items such as '1.' '2.' '3.', insert a line break strictly before the second and later numbered items.",
-                # "Do not add line breaks inside the same numbered item.",
-                "CRITICAL FORMATTING RULE 1: You MUST insert a line break strictly before every numbered item (e.g., '2.', '3.', '4.').",
-                "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",
-                'Return the shape: {"translations":[{"id":"...", "text":"..."}]}.',
-                "Do not omit ids. Do not add explanations.",
-            ]
-        )
+    payload: str,
+    expected_ids: list[str],
+) -> None:
+    chunk_dir = _chunk_debug_path(job_dir, chunk_label)
+    _write_debug_json(
+        chunk_dir / "request_meta.json",
+        {
+            "mode": mode,
+            "expected_ids": expected_ids,
+        },
     )
-    return "\n\n".join(part for part in prompt_parts if part).strip()
+    _write_debug_text(chunk_dir / "system_prompt.txt", system_prompt)
+    _write_debug_text(chunk_dir / "payload.txt", payload)
+
+
+def _record_chunk_response(
+    *,
+    job_dir: Path,
+    chunk_label: str,
+    attempt: int,
+    content: str,
+) -> None:
+    _write_debug_text(
+        _chunk_debug_path(job_dir, chunk_label) / f"response_attempt_{attempt}.txt",
+        content,
+    )
+
+
+def _record_chunk_error(
+    *,
+    job_dir: Path,
+    chunk_label: str,
+    attempt: int,
+    error: str,
+) -> None:
+    _write_debug_text(
+        _chunk_debug_path(job_dir, chunk_label) / f"error_attempt_{attempt}.txt",
+        error,
+    )
+
+
+def _record_chunk_parsed(
+    *,
+    job_dir: Path,
+    chunk_label: str,
+    translations: dict[str, str],
+) -> None:
+    _write_debug_json(
+        _chunk_debug_path(job_dir, chunk_label) / "parsed_translations.json",
+        translations,
+    )
+
+
+def _record_chunk_plan(job_dir: Path, chunks: list[list[dict[str, Any]]]) -> None:
+    payload: list[dict[str, Any]] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        ids: list[str] = []
+        chars = 0
+        for item in chunk:
+            custom_id, _, user_text = _extract_batch_item_payload(item)
+            ids.append(custom_id)
+            chars += len(user_text)
+        payload.append(
+            {
+                "chunk_label": f"chunk_{idx:04d}",
+                "size": len(chunk),
+                "chars": chars,
+                "ids": ids,
+            }
+        )
+    _write_debug_json(job_dir / "realtime_debug" / "chunk_plan.json", payload)
 
 
 def _normalize_numbered_item_breaks(text: str) -> str:
@@ -54,13 +129,20 @@ def _normalize_numbered_item_breaks(text: str) -> str:
     normalized_lines: list[str] = []
     for raw_line in str(text).splitlines():
         matches = list(_NUMBERED_ITEM_RE.finditer(raw_line))
-        if len(matches) <= 1:
+        if not matches:
+            normalized_lines.append(raw_line)
+            continue
+
+        prefix = raw_line[: matches[0].start()].rstrip()
+        split_from_first = bool(prefix) and prefix.endswith((":", "："))
+        split_matches = matches if split_from_first else matches[1:]
+        if not split_matches:
             normalized_lines.append(raw_line)
             continue
 
         segments: list[str] = []
         last = 0
-        for match in matches[1:]:
+        for match in split_matches:
             segment = raw_line[last:match.start()].rstrip()
             if segment:
                 segments.append(segment)
@@ -73,18 +155,55 @@ def _normalize_numbered_item_breaks(text: str) -> str:
     return "\n".join(normalized_lines)
 
 
-def _chunk_translation_items(
-    items: list[dict[str, str]],
+def _normalize_realtime_translation(text: str) -> str:
+    normalized = batch.normalize_text(str(text or ""))
+    normalized = batch.glossary.restore_protected_glossary_terms(normalized)
+    return _normalize_numbered_item_breaks(normalized)
+
+
+def _extract_batch_item_payload(item: dict[str, Any]) -> tuple[str, str, str]:
+    custom_id = str(item.get("custom_id") or "").strip()
+    body = item.get("body") or {}
+    messages = body.get("messages") or []
+    if len(messages) < 2:
+        raise RuntimeError(f"Invalid realtime batch item payload for {custom_id or 'unknown item'}.")
+    system_prompt = str(messages[0].get("content") or "")
+    user_text = str(messages[1].get("content") or "")
+    if not custom_id or not system_prompt or not user_text:
+        raise RuntimeError(f"Incomplete realtime batch item payload for {custom_id or 'unknown item'}.")
+    return custom_id, system_prompt, user_text
+
+
+def _build_chunk_prompt(*, system_prompt: str) -> str:
+    return "\n\n".join(
+        [
+            system_prompt,
+            "\n".join(
+                [
+                    "You will receive multiple translation items.",
+                    "Each item starts with a delimiter line exactly in the form <<<ID>>>.",
+                    "Translate the text under each delimiter.",
+                    "Return the translations using the exact same delimiters, ids, and order.",
+                    "Do not omit, rename, or add delimiters.",
+                    "Output only the translated items.",
+                ]
+            ),
+        ]
+    ).strip()
+
+
+def _chunk_batch_items(
+    items: list[dict[str, Any]],
     *,
     max_segments: int,
     max_chars: int,
-) -> list[list[dict[str, str]]]:
-    chunks: list[list[dict[str, str]]] = []
-    current: list[dict[str, str]] = []
+) -> list[list[dict[str, Any]]]:
+    chunks: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
     current_chars = 0
     for item in items:
-        text = str(item.get("text") or "")
-        item_chars = len(text)
+        _, _, user_text = _extract_batch_item_payload(item)
+        item_chars = len(user_text)
         if current and (len(current) >= max_segments or current_chars + item_chars > max_chars):
             chunks.append(current)
             current = []
@@ -94,6 +213,39 @@ def _chunk_translation_items(
     if current:
         chunks.append(current)
     return chunks
+
+
+def _serialize_translation_chunk(items: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for item in items:
+        custom_id, _, user_text = _extract_batch_item_payload(item)
+        parts.append(f"<<<{custom_id}>>>\n{user_text}")
+    return "\n\n".join(parts)
+
+
+def _parse_translation_chunk_output(output: str, expected_ids: list[str]) -> dict[str, str]:
+    cleaned = _unwrap_code_fences(output)
+    matches = list(_REALTIME_DELIMITER_RE.finditer(cleaned))
+    if len(matches) != len(expected_ids):
+        raise RuntimeError(
+            f"Expected {len(expected_ids)} delimiters but received {len(matches)}."
+        )
+
+    found_ids: list[str] = []
+    translations: dict[str, str] = {}
+    for idx, match in enumerate(matches):
+        custom_id = str(match.group(1) or "").strip()
+        found_ids.append(custom_id)
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(cleaned)
+        text = _normalize_realtime_translation(cleaned[start:end].strip())
+        if not text:
+            raise RuntimeError(f"Empty translation for {custom_id}.")
+        translations[custom_id] = text
+
+    if found_ids != expected_ids:
+        raise RuntimeError(f"Delimiter order mismatch. expected={expected_ids} actual={found_ids}")
+    return translations
 
 
 def _prepare_realtime_plan(
@@ -136,21 +288,107 @@ def _prepare_realtime_plan(
     }
 
 
+async def _translate_item(
+    client,
+    *,
+    job_dir: Path,
+    chunk_label: str,
+    item: dict[str, Any],
+    model_name: str,
+    request_delay: float,
+    max_retries: int = 4,
+) -> tuple[str, str]:
+    custom_id, system_prompt, user_text = _extract_batch_item_payload(item)
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_text},
+    ]
+    _record_chunk_request(
+        job_dir=job_dir,
+        chunk_label=chunk_label,
+        mode="single",
+        system_prompt=system_prompt,
+        payload=user_text,
+        expected_ids=[custom_id],
+    )
+    estimated_tokens = rate_limiter.estimate_messages_tokens(messages) + state.REALTIME_COMPLETION_TOKEN_BUDGET
+    for attempt in range(max_retries):
+        try:
+            await rate_limiter.REALTIME_RATE_LIMITER.acquire_async(model_name, estimated_tokens)
+            await asyncio.to_thread(_GLOBAL_SEMAPHORE.acquire)
+            try:
+                response = await client.chat.completions.with_raw_response.create(
+                    model=model_name,
+                    messages=messages,
+                    temperature=0,
+                    max_tokens=4000,
+                )
+            finally:
+                _GLOBAL_SEMAPHORE.release()
+            rate_limiter.REALTIME_RATE_LIMITER.update_from_headers(model_name, response.headers)
+            await asyncio.sleep(request_delay)
+            parsed = response.parse()
+            raw_content = str(parsed.choices[0].message.content or "").strip()
+            _record_chunk_response(
+                job_dir=job_dir,
+                chunk_label=chunk_label,
+                attempt=attempt + 1,
+                content=raw_content,
+            )
+            content = _normalize_realtime_translation(raw_content)
+            if content:
+                _record_chunk_parsed(
+                    job_dir=job_dir,
+                    chunk_label=chunk_label,
+                    translations={custom_id: content},
+                )
+                return custom_id, content
+            raise RuntimeError("Empty realtime translation response.")
+        except Exception as exc:
+            _record_chunk_error(
+                job_dir=job_dir,
+                chunk_label=chunk_label,
+                attempt=attempt + 1,
+                error=str(exc),
+            )
+            if attempt == max_retries - 1:
+                raise RuntimeError(f"Realtime item translation failed for {custom_id}: {exc}") from exc
+            await asyncio.sleep((2**attempt) + random.uniform(0, 0.5))
+    return custom_id, ""
+
+
 async def _translate_chunk(
     client,
     *,
-    chunk: list[dict[str, str]],
+    job_dir: Path,
+    chunk_label: str,
+    items: list[dict[str, Any]],
     model_name: str,
-    prompt: str,
     request_delay: float,
     max_retries: int = 4,
 ) -> dict[str, str]:
-    payload = json.dumps(chunk, ensure_ascii=False)
+    if not items:
+        return {}
+    first_id, system_prompt, _ = _extract_batch_item_payload(items[0])
+    expected_ids = [_extract_batch_item_payload(item)[0] for item in items]
+    prompt = _build_chunk_prompt(system_prompt=system_prompt)
+    payload = _serialize_translation_chunk(items)
+    _record_chunk_request(
+        job_dir=job_dir,
+        chunk_label=chunk_label,
+        mode="chunk",
+        system_prompt=prompt,
+        payload=payload,
+        expected_ids=expected_ids,
+    )
+    estimated_tokens = rate_limiter.estimate_text_tokens(prompt) + rate_limiter.estimate_text_tokens(payload) + state.REALTIME_COMPLETION_TOKEN_BUDGET
+
     for attempt in range(max_retries):
         try:
+            await rate_limiter.REALTIME_RATE_LIMITER.acquire_async(model_name, estimated_tokens)
             await asyncio.to_thread(_GLOBAL_SEMAPHORE.acquire)
             try:
-                response = await client.chat.completions.create(
+                response = await client.chat.completions.with_raw_response.create(
                     model=model_name,
                     messages=[
                         {"role": "system", "content": prompt},
@@ -161,28 +399,89 @@ async def _translate_chunk(
                 )
             finally:
                 _GLOBAL_SEMAPHORE.release()
+            rate_limiter.REALTIME_RATE_LIMITER.update_from_headers(model_name, response.headers)
             await asyncio.sleep(request_delay)
-            content = str(response.choices[0].message.content or "").strip()
-            data = json.loads(_unwrap_json_code_fences(content))
-            rows = data.get("translations", []) if isinstance(data, dict) else []
-            results: dict[str, str] = {}
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                custom_id = str(row.get("id") or "").strip()
-                text = batch.normalize_text(str(row.get("text") or ""))
-                text = batch.glossary.restore_protected_glossary_terms(text)
-                text = _normalize_numbered_item_breaks(text)
-                if custom_id and text:
-                    results[custom_id] = text
-            if results:
-                return results
-            raise RuntimeError("Empty realtime translation response.")
+            parsed = response.parse()
+            content = str(parsed.choices[0].message.content or "").strip()
+            _record_chunk_response(
+                job_dir=job_dir,
+                chunk_label=chunk_label,
+                attempt=attempt + 1,
+                content=content,
+            )
+            translations = _parse_translation_chunk_output(content, expected_ids)
+            if translations:
+                _record_chunk_parsed(
+                    job_dir=job_dir,
+                    chunk_label=chunk_label,
+                    translations=translations,
+                )
+                return translations
+            raise RuntimeError("Empty realtime chunk translation response.")
         except Exception as exc:
+            _record_chunk_error(
+                job_dir=job_dir,
+                chunk_label=chunk_label,
+                attempt=attempt + 1,
+                error=str(exc),
+            )
             if attempt == max_retries - 1:
-                raise RuntimeError(f"Realtime chunk translation failed: {exc}") from exc
+                raise RuntimeError(f"Realtime chunk translation failed for {first_id}: {exc}") from exc
             await asyncio.sleep((2**attempt) + random.uniform(0, 0.5))
     return {}
+
+
+async def _translate_chunk_with_fallback(
+    client,
+    *,
+    job_dir: Path,
+    chunk_label: str,
+    items: list[dict[str, Any]],
+    model_name: str,
+    request_delay: float,
+) -> dict[str, str]:
+    if not items:
+        return {}
+    if len(items) == 1:
+        custom_id, text = await _translate_item(
+            client,
+            job_dir=job_dir,
+            chunk_label=f"{chunk_label}__single",
+            item=items[0],
+            model_name=model_name,
+            request_delay=request_delay,
+        )
+        return {custom_id: text} if custom_id and text else {}
+    try:
+        return await _translate_chunk(
+            client,
+            job_dir=job_dir,
+            chunk_label=chunk_label,
+            items=items,
+            model_name=model_name,
+            request_delay=request_delay,
+        )
+    except Exception:
+        mid = max(1, len(items) // 2)
+        left = await _translate_chunk_with_fallback(
+            client,
+            job_dir=job_dir,
+            chunk_label=f"{chunk_label}__a",
+            items=items[:mid],
+            model_name=model_name,
+            request_delay=request_delay,
+        )
+        right = await _translate_chunk_with_fallback(
+            client,
+            job_dir=job_dir,
+            chunk_label=f"{chunk_label}__b",
+            items=items[mid:],
+            model_name=model_name,
+            request_delay=request_delay,
+        )
+        merged = dict(left)
+        merged.update(right)
+        return merged
 
 
 def run_realtime_translate_job(
@@ -233,18 +532,12 @@ def run_realtime_translate_job(
             )
             return True
 
-        chunk_items = [
-            {
-                "id": str(item.get("custom_id") or ""),
-                "text": str((((item.get("body") or {}).get("messages") or [{}, {}])[1]).get("content") or ""),
-            }
-            for item in batch_items
-        ]
-        chunks = _chunk_translation_items(
-            chunk_items,
+        chunks = _chunk_batch_items(
+            batch_items,
             max_segments=state.PDF_REALTIME_MAX_SEGMENTS_PER_REQUEST,
             max_chars=state.PDF_REALTIME_MAX_CHARS_PER_REQUEST,
         )
+        _record_chunk_plan(job_dir, chunks)
         jobs.write_batch_status(
             job_dir,
             "running",
@@ -257,28 +550,25 @@ def run_realtime_translate_job(
             client = openai_config.create_async_client()
             semaphore = asyncio.Semaphore(state.PDF_REALTIME_JOB_CONCURRENCY)
             request_delay = 60.0 / max(1, state.PDF_REALTIME_RPM_LIMIT)
-            prompt = _build_chunk_prompt(
-                target_lang=plan["target_lang"],
-                system_prompt=plan["system_prompt"],
-            )
             translations = batch.build_translations_from_jsonl_text("", prefilled=plan["prefilled"])
 
-            async def _task(index: int, chunk: list[dict[str, str]]) -> tuple[int, dict[str, str]]:
+            async def _task(index: int, realtime_items: list[dict[str, Any]]) -> tuple[int, dict[str, str]]:
                 async with semaphore:
-                    result = await _translate_chunk(
+                    chunk_translations = await _translate_chunk_with_fallback(
                         client,
-                        chunk=chunk,
+                        job_dir=job_dir,
+                        chunk_label=f"chunk_{index:04d}",
+                        items=realtime_items,
                         model_name=plan["model_name"],
-                        prompt=prompt,
                         request_delay=request_delay,
                     )
-                    return index, result
+                    return index, chunk_translations
 
             tasks = [_task(index, chunk) for index, chunk in enumerate(chunks, start=1)]
             completed = 0
             for coro in asyncio.as_completed(tasks):
-                _, chunk_result = await coro
-                translations.update(chunk_result)
+                _, chunk_translations = await coro
+                translations.update(chunk_translations)
                 completed += 1
                 progress = round((completed / max(1, len(chunks))) * 100.0, 2)
                 jobs.write_batch_status(

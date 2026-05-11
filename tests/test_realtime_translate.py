@@ -1,14 +1,77 @@
 from app.services import realtime_translate
 
 
-def test_build_chunk_prompt_repeats_numbered_item_rules():
-    prompt = realtime_translate._build_chunk_prompt(
-        target_lang="en",
-        system_prompt="base prompt",
+def test_extract_batch_item_payload_reuses_batch_messages():
+    custom_id, system_prompt, user_text = realtime_translate._extract_batch_item_payload(
+        {
+            "custom_id": "p0000-l0001",
+            "body": {
+                "messages": [
+                    {"role": "system", "content": "base prompt"},
+                    {"role": "user", "content": "source text"},
+                ]
+            },
+        }
     )
 
-    assert "line break strictly before the second and later numbered items" in prompt
-    assert "Do not add line breaks inside the same numbered item." in prompt
+    assert custom_id == "p0000-l0001"
+    assert system_prompt == "base prompt"
+    assert user_text == "source text"
+
+
+def test_chunk_roundtrip_serializes_and_parses_delimited_items():
+    items = [
+        {
+            "custom_id": "p0000-l0001",
+            "body": {
+                "messages": [
+                    {"role": "system", "content": "base prompt"},
+                    {"role": "user", "content": "第一段"},
+                ]
+            },
+        },
+        {
+            "custom_id": "p0000-l0002",
+            "body": {
+                "messages": [
+                    {"role": "system", "content": "base prompt"},
+                    {"role": "user", "content": "第二段"},
+                ]
+            },
+        },
+    ]
+
+    serialized = realtime_translate._serialize_translation_chunk(items)
+    assert "<<<p0000-l0001>>>" in serialized
+    assert "<<<p0000-l0002>>>" in serialized
+
+    parsed = realtime_translate._parse_translation_chunk_output(
+        "<<<p0000-l0001>>>\nFirst section\n\n<<<p0000-l0002>>>\nSecond section",
+        ["p0000-l0001", "p0000-l0002"],
+    )
+    assert parsed == {
+        "p0000-l0001": "First section",
+        "p0000-l0002": "Second section",
+    }
+
+
+def test_chunk_batch_items_respects_segment_limit():
+    items = []
+    for idx in range(3):
+        items.append(
+            {
+                "custom_id": f"p0000-l000{idx}",
+                "body": {
+                    "messages": [
+                        {"role": "system", "content": "base prompt"},
+                        {"role": "user", "content": f"文字 {idx}"},
+                    ]
+                },
+            }
+        )
+
+    chunks = realtime_translate._chunk_batch_items(items, max_segments=2, max_chars=100)
+    assert [len(chunk) for chunk in chunks] == [2, 1]
 
 
 def test_normalize_numbered_item_breaks_splits_later_items_on_same_line():
@@ -25,6 +88,14 @@ def test_normalize_numbered_item_breaks_preserves_single_item_line():
     assert realtime_translate._normalize_numbered_item_breaks(text) == text
 
 
+def test_normalize_numbered_item_breaks_splits_first_item_after_colon():
+    text = "Steps: 1. First step 2. Second step"
+
+    assert realtime_translate._normalize_numbered_item_breaks(text) == (
+        "Steps:\n1. First step\n2. Second step"
+    )
+
+
 def test_glossary_protection_wraps_and_restores_terms():
     protected = realtime_translate.batch.glossary.apply_glossary_with_protection(
         "本產品符合品質系統規範。",
@@ -36,4 +107,15 @@ def test_glossary_protection_wraps_and_restores_terms():
     assert (
         realtime_translate.batch.glossary.restore_protected_glossary_terms(protected)
         == "本產品符合Quality System Regulation。"
+    )
+
+
+def test_normalize_realtime_translation_restores_terms_and_numbered_items():
+    text = (
+        "1. First step [[[GLOSSARY_TERM_0001::Quality System Regulation]]] "
+        "2. Second step"
+    )
+
+    assert realtime_translate._normalize_realtime_translation(text) == (
+        "1. First step Quality System Regulation\n2. Second step"
     )

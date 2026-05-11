@@ -82,6 +82,31 @@ def test_upload_pdf_overlay_accepts_realtime_mode(client, tmp_path, monkeypatch)
     ]
 
 
+def test_upload_rejects_when_submit_quota_exceeded(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr(
+        "app.blueprints.main.routes.submit_quota.check_and_record_submission",
+        lambda creator_name, remote_addr: (False, 3, 12.0),
+    )
+
+    resp = client.post(
+        "/upload",
+        data={
+            "translate": "on",
+            "translate_mode": "realtime",
+            "target_lang": "en",
+            "model": "quick-model",
+            "document_mode": "general",
+            "creator_name": "alice",
+            "pdf": (io.BytesIO(b"%PDF-1.4"), "sample.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 429
+
+
 def test_invalid_job_routes(client):
     resp = client.get("/job/not-a-valid-job")
     assert resp.status_code == 404
