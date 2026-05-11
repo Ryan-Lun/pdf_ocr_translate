@@ -33,6 +33,7 @@ def run_ocr_pipeline_job(
     cancel_event: threading.Event,
 ) -> None:
     logger.info("OCR pipeline start job_id=%s", job_id)
+    normalized_document_mode = jobs.normalize_document_mode(document_mode)
     jobs.set_active_upload({"event": cancel_event, "job_id": job_id, "started_at": time.time()})
     jobs.set_job_state(job_dir, status="running", stage="ocr", started_at=time.time())
     try:
@@ -50,7 +51,7 @@ def run_ocr_pipeline_job(
             translate_model=translate_model,
             triton_url=state.TRITON_URL,
             keep_lang=keep_lang,
-            document_mode=jobs.normalize_document_mode(document_mode),
+            document_mode=normalized_document_mode,
             cancel_event=cancel_event,
         )
     except PipelineCancelled:
@@ -78,7 +79,8 @@ def run_ocr_pipeline_job(
         jobs.clear_active_upload(job_id)
 
     logger.info("OCR pipeline completed job_id=%s", job_id)
-    ocr.update_pp_json_should_translate(job_dir)
+    if normalized_document_mode != "general_force":
+        ocr.update_pp_json_should_translate(job_dir)
     if not enable_translate:
         now_ts = time.time()
         jobs.set_job_state(
@@ -94,7 +96,7 @@ def run_ocr_pipeline_job(
             "target_lang": translate_target_lang,
             "model": translate_model,
             "translate_mode": jobs.normalize_translate_mode(translate_mode),
-            "document_mode": jobs.normalize_document_mode(document_mode),
+            "document_mode": normalized_document_mode,
         }
         jobs.write_batch_config(job_dir, batch_config)
         jobs.set_job_state(

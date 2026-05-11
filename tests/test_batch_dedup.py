@@ -586,6 +586,165 @@ def test_general_document_mode_payload_skips_ocr_lines_inside_bilingual_structur
     assert payload["pages"][0]["boxes"] == []
 
 
+def test_general_force_translate_mode_keeps_bilingual_structured_blocks_for_batch_items():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": ["中文段落"],
+            "rec_polys": [
+                [[10, 10], [90, 10], [90, 30], [10, 30]],
+            ],
+        }
+    ]
+    pp_pages = {
+        0: {
+            "parsing_res_list": [
+                {
+                    "block_content": "中文段落 English paragraph",
+                    "block_bbox": [0, 0, 120, 40],
+                    "should_translate": False,
+                    "block_label": "text",
+                }
+            ],
+            "table_res_list": [],
+        }
+    }
+
+    items, alias_map, key_map, prefilled = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        pp_pages=pp_pages,
+        document_mode="general_force",
+    )
+
+    assert [item["custom_id"] for item in items] == ["p0000-b0000"]
+    assert alias_map == {}
+    assert key_map == {
+        "p0000-b0000": {
+            "source_text": "中文段落 English paragraph",
+            "source_normalized": "中文段落 English paragraph",
+        }
+    }
+    assert prefilled == {}
+
+
+def test_general_force_translate_mode_keeps_bilingual_structured_blocks_for_payload():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": ["中文段落"],
+            "rec_polys": [
+                [[10, 10], [90, 10], [90, 30], [10, 30]],
+            ],
+        }
+    ]
+    pp_pages = {
+        0: {
+            "parsing_res_list": [
+                {
+                    "block_content": "中文段落 English paragraph",
+                    "block_bbox": [0, 0, 120, 40],
+                    "should_translate": False,
+                    "block_label": "text",
+                }
+            ],
+            "table_res_list": [],
+        }
+    }
+
+    payload = build_edits_payload_from_translations(
+        ocr_pages,
+        {"p0000-b0000": "Translated bilingual block"},
+        pp_pages=pp_pages,
+        document_mode="general_force",
+    )
+
+    boxes = payload["pages"][0]["boxes"]
+    assert len(boxes) == 1
+    assert boxes[0]["id"] == 200000
+    assert boxes[0]["text"] == "Translated bilingual block"
+
+
+def test_general_force_translate_mode_skips_overlapping_header_ocr_line_for_batch_items():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": ["UnitedOrthopedicCorporation聯合骨科器材股份有限公司", "聯合骨科器材股份有限公司"],
+            "rec_polys": [
+                [[206, 131], [1011, 131], [1011, 176], [206, 176]],
+                [[559, 342], [1087, 342], [1087, 386], [559, 386]],
+            ],
+        }
+    ]
+    pp_pages = {
+        0: {
+            "parsing_res_list": [
+                {
+                    "block_content": "UnitedOrthopedicCorporation聯合骨科器材股份有限公司",
+                    "block_bbox": [209.8, 137.1, 1006.4, 169.3],
+                    "should_translate": False,
+                    "block_label": "header",
+                }
+            ],
+            "table_res_list": [],
+        }
+    }
+
+    items, _, key_map, _ = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        pp_pages=pp_pages,
+        document_mode="general_force",
+    )
+
+    assert [item["custom_id"] for item in items] == ["p0000-b0000", "p0000-l0001"]
+    assert "p0000-l0000" not in key_map
+
+
+def test_general_force_translate_mode_skips_overlapping_header_ocr_line_for_payload():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": ["UnitedOrthopedicCorporation聯合骨科器材股份有限公司", "聯合骨科器材股份有限公司"],
+            "rec_polys": [
+                [[206, 131], [1011, 131], [1011, 176], [206, 176]],
+                [[559, 342], [1087, 342], [1087, 386], [559, 386]],
+            ],
+        }
+    ]
+    pp_pages = {
+        0: {
+            "parsing_res_list": [
+                {
+                    "block_content": "UnitedOrthopedicCorporation聯合骨科器材股份有限公司",
+                    "block_bbox": [209.8, 137.1, 1006.4, 169.3],
+                    "should_translate": False,
+                    "block_label": "header",
+                }
+            ],
+            "table_res_list": [],
+        }
+    }
+
+    payload = build_edits_payload_from_translations(
+        ocr_pages,
+        {
+            "p0000-b0000": "United Orthopedic Corporation",
+            "p0000-l0000": "United Orthopedic Corporation",
+            "p0000-l0001": "United Orthopedic Corporation",
+        },
+        pp_pages=pp_pages,
+        document_mode="general_force",
+    )
+
+    boxes = payload["pages"][0]["boxes"]
+    assert [box["id"] for box in boxes] == [1, 200000]
+
+
 def test_scanned_document_mode_uses_ocr_lines_for_batch_items():
     ocr_pages = [
         {

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import io
 import json
+import threading
 from pathlib import Path
 
-from app.services import jobs, state, translation_memory
+from app.services import jobs, pipeline, state, translation_memory
 
 
 def test_index_ok(client):
@@ -82,6 +83,60 @@ def test_upload_pdf_overlay_accepts_realtime_mode(client, tmp_path, monkeypatch)
     ]
 
 
+def test_upload_pdf_overlay_accepts_general_force_translate_mode(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    captured: list[dict[str, str]] = []
+
+    def fake_enqueue(
+        source_pdf,
+        display_name,
+        dpi,
+        start_page,
+        end_page,
+        translate_target_lang,
+        translate_model,
+        translate_mode,
+        keep_lang,
+        enable_translate,
+        document_mode,
+        creator_name="",
+    ):
+        captured.append(
+            {
+                "display_name": display_name,
+                "document_mode": document_mode,
+            }
+        )
+        return "b" * 32
+
+    monkeypatch.setattr(
+        "app.blueprints.main.routes.pipeline.enqueue_job_from_upload",
+        fake_enqueue,
+    )
+
+    resp = client.post(
+        "/upload",
+        data={
+            "translate": "on",
+            "translate_mode": "batch",
+            "target_lang": "en",
+            "model": "batch-model",
+            "document_mode": "general_force",
+            "pdf": (io.BytesIO(b"%PDF-1.4"), "sample.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 302
+    assert captured == [
+        {
+            "display_name": "sample",
+            "document_mode": "general_force",
+        }
+    ]
+
+
 def test_upload_rejects_when_submit_quota_exceeded(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
@@ -124,6 +179,68 @@ def test_api_jobs_returns_json(client):
     payload = resp.get_json()
     assert isinstance(payload, dict)
     assert "jobs" in payload
+
+
+def test_run_ocr_pipeline_job_skips_paragraph_align_for_general_force(tmp_path, monkeypatch):
+    job_id = "d" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    pdf_path = job_dir / f"{job_id}.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4")
+
+    monkeypatch.setattr(pipeline.jobs, "set_active_upload", lambda payload: None)
+    monkeypatch.setattr(pipeline.jobs, "clear_active_upload", lambda current_job_id: None)
+    monkeypatch.setattr(pipeline.jobs, "set_job_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline.jobs, "write_batch_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline.jobs, "write_batch_status", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        pipeline.jobs.job_store,
+        "get_job",
+        lambda current_job_id: None,
+    )
+    monkeypatch.setattr(
+        pipeline.jobs.job_store,
+        "deserialize_payload",
+        lambda record: {},
+    )
+    monkeypatch.setattr(
+        pipeline.jobs.job_store,
+        "update_job",
+        lambda *args, **kwargs: None,
+    )
+
+    captured_modes: list[str] = []
+    monkeypatch.setattr(
+        pipeline,
+        "run_pipeline",
+        lambda **kwargs: captured_modes.append(str(kwargs.get("document_mode") or "")),
+    )
+
+    called_align: list[Path] = []
+    monkeypatch.setattr(
+        pipeline.ocr,
+        "update_pp_json_should_translate",
+        lambda current_job_dir: called_align.append(Path(current_job_dir)),
+    )
+
+    pipeline.run_ocr_pipeline_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        pdf_path=pdf_path,
+        dpi=200,
+        start_page=1,
+        end_page=None,
+        translate_target_lang="en",
+        translate_model="dummy-model",
+        translate_mode="batch",
+        keep_lang="all",
+        enable_translate=False,
+        document_mode="general_force",
+        cancel_event=threading.Event(),
+    )
+
+    assert captured_modes == ["general_force"]
+    assert called_align == []
 
 
 def test_glossary_get(client):

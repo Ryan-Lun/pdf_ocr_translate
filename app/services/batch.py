@@ -73,11 +73,11 @@ def resolve_document_mode(value: Any) -> str:
 
 
 def use_merged_cells_for_mode(document_mode: str) -> bool:
-    return resolve_document_mode(document_mode) in {"form", "general"}
+    return resolve_document_mode(document_mode) in {"form", "general", "general_force"}
 
 
 def use_structured_blocks_for_mode(document_mode: str) -> bool:
-    return resolve_document_mode(document_mode) in {"form", "general"}
+    return resolve_document_mode(document_mode) in {"form", "general", "general_force"}
 
 
 def prefer_merged_cells_only(document_mode: str, merged_cells: list[dict[str, Any]]) -> bool:
@@ -93,12 +93,16 @@ def _contains_english(text: str) -> bool:
 
 
 def should_translate_merged_cell(cell: dict[str, Any], document_mode: str) -> bool:
+    mode = resolve_document_mode(document_mode)
+    text = normalize_for_translation(str(cell.get("merged_text") or ""))
+    if not _contains_cjk(text):
+        return False
+    if mode == "general_force":
+        return True
     if not cell.get("should_translate"):
         return False
-    mode = resolve_document_mode(document_mode)
     if mode == "form":
         return True
-    text = normalize_for_translation(str(cell.get("merged_text") or ""))
     return _contains_cjk(text) and not _contains_english(text)
 
 
@@ -256,13 +260,19 @@ def should_translate_structured_block(
     document_mode: str,
     merged_only: bool,
 ) -> bool:
-    if not block or not block.get("should_translate"):
+    if not block:
         return False
     if is_chart_block(block):
         return False
+    mode = resolve_document_mode(document_mode)
+    text = normalize_for_translation(str(block.get("text") or ""))
+    if mode == "general_force":
+        return _contains_cjk(text)
+    if not block.get("should_translate"):
+        return False
     if not merged_only:
         return True
-    if resolve_document_mode(document_mode) != "form":
+    if mode != "form":
         return False
     label = str(block.get("label") or "").strip().lower()
     return label in {"figure_title", "header"}
@@ -520,6 +530,9 @@ def build_batch_items(
             paragraph_blocks,
             document_mode=document_mode,
         )
+        should_skip_paragraph_lines = has_paragraph_flags or (
+            mode == "general_force" and bool(paragraph_blocks)
+        )
         if use_structured_blocks:
             for block in paragraph_blocks:
                 if not should_translate_structured_block(
@@ -556,7 +569,7 @@ def build_batch_items(
                         table_bboxes,
                     ):
                         continue
-                    if has_paragraph_flags and should_skip_ocr_line_for_structured_blocks(
+                    if should_skip_paragraph_lines and should_skip_ocr_line_for_structured_blocks(
                         [
                             float(bbox["x"]),
                             float(bbox["y"]),
@@ -567,7 +580,7 @@ def build_batch_items(
                         document_mode=document_mode,
                     ):
                         continue
-            elif has_paragraph_flags and idx < len(rec_polys):
+            elif should_skip_paragraph_lines and idx < len(rec_polys):
                 bbox = poly_to_bbox(rec_polys[idx])
                 if bbox and should_skip_ocr_line_for_structured_blocks(
                     [
@@ -713,6 +726,9 @@ def build_edits_payload_from_translations(
             paragraph_blocks,
             document_mode=document_mode,
         )
+        should_skip_paragraph_lines = has_paragraph_flags or (
+            mode == "general_force" and bool(paragraph_blocks)
+        )
         
 
         for idx, poly in enumerate(rec_polys):
@@ -746,7 +762,7 @@ def build_edits_payload_from_translations(
                     table_bboxes,
                 ):
                     continue
-            if has_paragraph_flags and should_skip_ocr_line_for_structured_blocks(
+            if should_skip_paragraph_lines and should_skip_ocr_line_for_structured_blocks(
                 [
                     float(bbox["x"]),
                     float(bbox["y"]),
