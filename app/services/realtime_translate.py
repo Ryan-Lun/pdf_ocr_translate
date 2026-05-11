@@ -14,6 +14,7 @@ from . import batch, jobs, openai_config, state
 logger = logging.getLogger(__name__)
 
 _GLOBAL_SEMAPHORE = threading.BoundedSemaphore(state.PDF_REALTIME_GLOBAL_CONCURRENCY)
+_NUMBERED_ITEM_RE = re.compile(r"(?<!\d)(\d+)\.(?=\s)")
 
 
 def _unwrap_json_code_fences(text: str) -> str:
@@ -26,23 +27,50 @@ def _build_chunk_prompt(
     *,
     target_lang: str,
     system_prompt: str,
-    glossary_entries: list[tuple[str, str]],
 ) -> str:
     prompt_parts = [batch.resolve_batch_prompt(target_lang, system_prompt)]
-    glossary_prompt = batch._build_inline_glossary_instructions(glossary_entries)
-    if glossary_prompt:
-        prompt_parts.append(glossary_prompt)
     prompt_parts.append(
         "\n".join(
             [
                 "You will receive a JSON array of translation items.",
                 "Translate each item's text field and return valid JSON only.",
+                # "For each text value, preserve the batch formatting rules exactly.",
+                # "If a translated text contains multiple numbered items such as '1.' '2.' '3.', insert a line break strictly before the second and later numbered items.",
+                # "Do not add line breaks inside the same numbered item.",
+                "CRITICAL FORMATTING RULE 1: You MUST insert a line break strictly before every numbered item (e.g., '2.', '3.', '4.').",
+                "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",
                 'Return the shape: {"translations":[{"id":"...", "text":"..."}]}.',
                 "Do not omit ids. Do not add explanations.",
             ]
         )
     )
     return "\n\n".join(part for part in prompt_parts if part).strip()
+
+
+def _normalize_numbered_item_breaks(text: str) -> str:
+    if not text:
+        return ""
+
+    normalized_lines: list[str] = []
+    for raw_line in str(text).splitlines():
+        matches = list(_NUMBERED_ITEM_RE.finditer(raw_line))
+        if len(matches) <= 1:
+            normalized_lines.append(raw_line)
+            continue
+
+        segments: list[str] = []
+        last = 0
+        for match in matches[1:]:
+            segment = raw_line[last:match.start()].rstrip()
+            if segment:
+                segments.append(segment)
+            last = match.start()
+        tail = raw_line[last:].strip()
+        if tail:
+            segments.append(tail)
+        normalized_lines.extend(segments or [raw_line])
+
+    return "\n".join(normalized_lines)
 
 
 def _chunk_translation_items(
@@ -143,6 +171,8 @@ async def _translate_chunk(
                     continue
                 custom_id = str(row.get("id") or "").strip()
                 text = batch.normalize_text(str(row.get("text") or ""))
+                text = batch.glossary.restore_protected_glossary_terms(text)
+                text = _normalize_numbered_item_breaks(text)
                 if custom_id and text:
                     results[custom_id] = text
             if results:
@@ -230,7 +260,6 @@ def run_realtime_translate_job(
             prompt = _build_chunk_prompt(
                 target_lang=plan["target_lang"],
                 system_prompt=plan["system_prompt"],
-                glossary_entries=plan["glossary_entries"],
             )
             translations = batch.build_translations_from_jsonl_text("", prefilled=plan["prefilled"])
 

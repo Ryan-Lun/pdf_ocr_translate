@@ -313,12 +313,14 @@ def translate_texts_for_region(
         return []
 
     client = get_azure_client()
-    prompt_parts = [resolve_batch_prompt(target_lang, system_prompt)]
-    glossary_prompt = _build_inline_glossary_instructions(glossary_entries)
-    if glossary_prompt:
-        prompt_parts.append(glossary_prompt)
-    prompt_parts.append("Return only the translated text for the current input.")
-    final_prompt = "\n\n".join(part for part in prompt_parts if part).strip()
+    final_prompt = "\n\n".join(
+        part
+        for part in (
+            resolve_batch_prompt(target_lang, system_prompt),
+            "Return only the translated text for the current input.",
+        )
+        if part
+    ).strip()
 
     outputs: list[str] = []
     for raw_text in texts:
@@ -330,12 +332,18 @@ def translate_texts_for_region(
         if is_numeric_only(normalized_source) or not _contains_cjk(normalized_source):
             outputs.append(source_text)
             continue
+        protected_source = glossary.apply_glossary_with_protection(
+            source_text,
+            glossary_entries,
+        )
         response = client.responses.create(
             model=model_name,
             instructions=final_prompt,
-            input=source_text,
+            input=protected_source,
         )
-        translated = str(response.output_text or "").strip()
+        translated = glossary.restore_protected_glossary_terms(
+            str(response.output_text or "").strip()
+        )
         outputs.append(normalize_text(translated) or source_text)
     return outputs
 
@@ -457,7 +465,7 @@ def build_batch_items(
                     )
                 tm_dirty = True
                 return
-        clean = glossary.apply_glossary(
+        clean = glossary.apply_glossary_with_protection(
             normalize_for_translation(canonical_source_text),
             glossary_entries,
         )
@@ -589,7 +597,12 @@ def build_translations_from_jsonl_text(
 ) -> dict[str, str]:
     translations: dict[str, str] = {}
     if prefilled:
-        translations.update(prefilled)
+        translations.update(
+            {
+                key: glossary.restore_protected_glossary_terms(value)
+                for key, value in prefilled.items()
+            }
+        )
     for line in raw_text.splitlines():
         if not line.strip():
             continue
@@ -597,7 +610,7 @@ def build_translations_from_jsonl_text(
         custom_id = item.get("custom_id", "")
         translated = extract_batch_translation(item)
         if translated:
-            translations[custom_id] = translated
+            translations[custom_id] = glossary.restore_protected_glossary_terms(translated)
     if alias_map:
         for alias_id, canonical_id in alias_map.items():
             if alias_id in translations:

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from . import state
+
+_PROTECTED_TERM_PREFIX = "[[[GLOSSARY_TERM_"
+_PROTECTED_TERM_PATTERN = re.compile(r"\[\[\[GLOSSARY_TERM_\d+::(.*?)\]\]\]")
 
 
 def global_glossary_path() -> Path:
@@ -110,3 +114,48 @@ def apply_glossary(text: str, entries: list[tuple[str, str]] | None = None) -> s
         more = f" (+{len(hits) - 6})" if len(hits) > 6 else ""
         print(f"[GLOSSARY] hits={len(hits)} {preview}{more}")
     return out
+
+
+def apply_glossary_with_protection(
+    text: str,
+    entries: list[tuple[str, str]] | None = None,
+) -> str:
+    if not text:
+        return text
+    entries = entries or load_glossary_entries()
+    if not entries:
+        return text
+
+    out_parts: list[str] = []
+    hits: list[tuple[str, str]] = []
+    i = 0
+    term_index = 1
+    while i < len(text):
+        matched = False
+        for cn, en in entries:
+            if not cn or not en:
+                continue
+            if text.startswith(cn, i):
+                protected = f"{_PROTECTED_TERM_PREFIX}{term_index:04d}::{en}]]]"
+                out_parts.append(protected)
+                hits.append((cn, en))
+                i += len(cn)
+                term_index += 1
+                matched = True
+                break
+        if matched:
+            continue
+        out_parts.append(text[i])
+        i += 1
+
+    if hits:
+        preview = ", ".join([f"{cn}->{en}" for cn, en in hits[:6]])
+        more = f" (+{len(hits) - 6})" if len(hits) > 6 else ""
+        print(f"[GLOSSARY] protected_hits={len(hits)} {preview}{more}")
+    return "".join(out_parts)
+
+
+def restore_protected_glossary_terms(text: str) -> str:
+    if not text or _PROTECTED_TERM_PREFIX not in text:
+        return text
+    return _PROTECTED_TERM_PATTERN.sub(lambda match: match.group(1), text)
