@@ -870,11 +870,11 @@ def retranslate_region(job_id: str):
 
 
 @api_bp.route(
-    "/job/<job_id>/retranslate-box",
+    "/job/<job_id>/glossary-retranslate",
     methods=["POST"],
-    endpoint="retranslate_box",
+    endpoint="glossary_retranslate",
 )
-def retranslate_box(job_id: str):
+def glossary_retranslate(job_id: str):
     if not jobs.safe_job_id(job_id):
         abort(404)
     job_dir = jobs.job_dir(job_id)
@@ -882,65 +882,65 @@ def retranslate_box(job_id: str):
         abort(404)
 
     payload = request.get_json(force=True) or {}
-    try:
-        page_idx = int(payload.get("page_index_0based"))
-        box_id = int(payload.get("box_id"))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "Invalid page index or box id."}), 400
-
-    source_text = batch.normalize_text(str(payload.get("source_text") or "")).strip()
-    if not source_text:
-        return jsonify({"ok": False, "error": "Missing source text."}), 400
+    source_term = batch.normalize_text(str(payload.get("cn") or "")).strip()
+    if not source_term:
+        return jsonify({"ok": False, "error": "Missing glossary source term."}), 400
 
     config = jobs.load_batch_config(job_dir) or {}
-    meta = jobs.load_job_meta(job_dir) or {}
     target_lang = str(config.get("target_lang") or "en")
     model_name = str(config.get("model") or state.PDF_REALTIME_TRANSLATE_MODEL or state.DOC_TRANSLATE_MODEL)
-    document_mode = batch.resolve_document_mode(
-        config.get("document_mode") or meta.get("document_mode")
-    )
     system_prompt = config.get("system_prompt") or batch.resolve_batch_prompt(target_lang)
 
+    edits_map = jobs.load_edits_map(job_dir)
+    matched_boxes: list[dict] = []
+    source_buckets: dict[str, str] = {}
+    for _, page_boxes in edits_map.items():
+        for box in page_boxes:
+            if not isinstance(box, dict) or box.get("deleted"):
+                continue
+            box_source_text = batch.normalize_text(str(box.get("tm_source_text") or "")).strip()
+            if not box_source_text or source_term not in box_source_text:
+                continue
+            source_key = translation_memory.normalize_source_text(
+                str(box.get("tm_source_normalized") or box_source_text)
+            ) or box_source_text
+            matched_boxes.append(box)
+            source_buckets[source_key] = box_source_text
+
+    if not matched_boxes:
+        return jsonify({"ok": False, "error": "No matching boxes found for glossary term."}), 404
+
+    glossary_entries = glossary.load_combined_glossary()
+    translated_by_source: dict[str, str] = {}
     try:
-        translations = batch.translate_texts_for_region(
-            [source_text],
-            target_lang=target_lang,
-            model_name=model_name,
-            system_prompt=system_prompt,
-            glossary_entries=glossary.load_combined_glossary(),
-        )
+        for source_key, source_text in source_buckets.items():
+            translations = batch.translate_texts_for_region(
+                [source_text],
+                target_lang=target_lang,
+                model_name=model_name,
+                system_prompt=system_prompt,
+                glossary_entries=glossary_entries,
+            )
+            translated_text = batch.normalize_text(translations[0] if translations else "")
+            if not translated_text:
+                raise RuntimeError(f"Empty translation result for glossary term match: {source_text}")
+            translated_by_source[source_key] = translated_text
     except Exception as exc:
-        logger.exception("Box retranslate failed job_id=%s page=%s box=%s error=%s", job_id, page_idx, box_id, exc)
+        logger.exception("Glossary retranslate failed job_id=%s term=%s error=%s", job_id, source_term, exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
-    translated_text = batch.normalize_text(translations[0] if translations else "")
-    if not translated_text:
-        return jsonify({"ok": False, "error": "Empty translation result."}), 500
-
-    edits_map = jobs.load_edits_map(job_dir)
-    page_boxes = list(edits_map.get(page_idx) or [])
-    target_box = None
-    for box in page_boxes:
-        try:
-            current_id = int(box.get("id"))
-        except (TypeError, ValueError):
+    updated_count = 0
+    for box in matched_boxes:
+        box_source_text = batch.normalize_text(str(box.get("tm_source_text") or "")).strip()
+        source_key = translation_memory.normalize_source_text(
+            str(box.get("tm_source_normalized") or box_source_text)
+        ) or box_source_text
+        translated_text = translated_by_source.get(source_key)
+        if not translated_text:
             continue
-        if current_id == box_id:
-            target_box = box
-            break
-    if target_box is None:
-        return jsonify({"ok": False, "error": "Target box not found."}), 404
+        box["text"] = translated_text
+        updated_count += 1
 
-    normalized_source = batch.normalize_for_translation(source_text)
-    target_box["text"] = translated_text
-    target_box["tm_source_text"] = source_text
-    target_box["tm_target_lang"] = target_lang
-    target_box["tm_document_mode"] = document_mode
-    if normalized_source:
-        target_box["tm_source_normalized"] = normalized_source
-    target_box["source"] = "manual_box_retranslate"
-
-    edits_map[page_idx] = page_boxes
     edits_payload = {
         "pages": [
             {"page_index_0based": idx, "boxes": boxes}
@@ -959,7 +959,8 @@ def retranslate_box(job_id: str):
     return jsonify(
         {
             "ok": True,
-            "translated_text": translated_text,
+            "updated_count": updated_count,
+            "matched_source_count": len(source_buckets),
             "edited_pdf_url": url_for(
                 "jobs.job_file", job_id=job_id, filename=edited_pdf.name
             ),

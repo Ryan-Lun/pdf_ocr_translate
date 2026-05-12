@@ -283,7 +283,7 @@
                 class="context-textarea"
                 rows="10"
                 placeholder="請先點選一個翻譯文字框"
-                disabled
+                readonly
               ></textarea>
             </section>
             <section class="context-card">
@@ -295,9 +295,6 @@
                 placeholder="請先點選一個翻譯文字框"
                 disabled
               ></textarea>
-              <div class="button-row">
-                <button id="contextRetranslateBtn" class="primary" type="button" disabled>用修正後原始內容重新翻譯</button>
-              </div>
             </section>
           </div>
         </div>
@@ -346,6 +343,7 @@
             </div>
             <div class="button-row">
               <button id="addGlossaryBtn" class="ghost" type="button">加入詞彙</button>
+              <button id="addGlossaryRetranslateBtn" class="primary" type="button">加入詞彙並重翻命中框</button>
             </div>
             <div id="glossaryList" class="glossary-list"></div>
           </section>

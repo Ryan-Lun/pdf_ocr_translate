@@ -1174,27 +1174,6 @@ body.editor .panel {
   width: 100%;
 }
 
-#contextRetranslateBtn.retranslate-btn--idle {
-  background: #f3f0e8;
-  border: 1px solid rgba(130, 102, 62, 0.18);
-  color: #8a6f4a;
-}
-
-#contextRetranslateBtn.retranslate-btn--ready {
-  background: #2f8f4e;
-  color: #fff;
-}
-
-#contextRetranslateBtn.retranslate-btn--busy {
-  background: #1f6e49;
-  color: #fff;
-}
-
-#contextRetranslateBtn:disabled {
-  cursor: not-allowed;
-  opacity: 1;
-}
-
 .glossary-list {
   display: grid;
   gap: 0.5rem;

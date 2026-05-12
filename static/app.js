@@ -36,7 +36,6 @@ const historyState = {
 
 let controlsBound = false;
 let contextTranslatedEditKey = null;
-let contextSourceEditKey = null;
 
 const statusEl = document.getElementById("status");
 const fontSizeEl = document.getElementById("fontSize");
@@ -96,7 +95,6 @@ const applyParagraphTermBtn = document.getElementById("applyParagraphTermBtn");
 const contextSummaryEl = document.getElementById("contextSummary");
 const contextSourceTextEl = document.getElementById("contextSourceText");
 const contextTranslatedTextEl = document.getElementById("contextTranslatedText");
-const contextRetranslateBtn = document.getElementById("contextRetranslateBtn");
 const viewerEl = document.querySelector(".viewer");
 const editedLink = document.getElementById("editedPdfLink");
 const previewEl = document.getElementById("pdfPreview");
@@ -106,6 +104,7 @@ const debugLinkEl = document.querySelector(".topbar-actions a[href*='overlay_deb
 const glossaryCnEl = document.getElementById("glossaryCn");
 const glossaryEnEl = document.getElementById("glossaryEn");
 const addGlossaryBtn = document.getElementById("addGlossaryBtn");
+const addGlossaryRetranslateBtn = document.getElementById("addGlossaryRetranslateBtn");
 const glossaryListEl = document.getElementById("glossaryList");
 const systemPromptEl = document.getElementById("systemPrompt");
 const savePromptBtn = document.getElementById("savePromptBtn");
@@ -895,13 +894,14 @@ async function loadGlossary() {
 
 async function saveGlossary() {
   try {
-    await fetch(`/api/glossary`, {
+    const res = await fetch(`/api/glossary`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ glossary: glossaryEntries }),
     });
+    return res.ok;
   } catch (error) {
-    // ignore
+    return false;
   }
 }
 
@@ -920,19 +920,67 @@ async function saveSystemPrompt(jobId) {
   }
 }
 
-function addGlossaryEntry() {
+async function addGlossaryEntry(options = {}) {
+  const { retranslate = false } = options;
   const cn = glossaryCnEl?.value?.trim();
   const en = glossaryEnEl?.value?.trim();
   if (!cn || !en) {
     setStatus("請輸入中文與英文詞彙");
-    return;
+    return false;
   }
+  glossaryEntries = glossaryEntries.filter((entry) => String(entry?.cn || "").trim() !== cn);
   glossaryEntries.unshift({ cn, en });
   glossaryCnEl.value = "";
   glossaryEnEl.value = "";
   renderGlossary();
   refreshAllConsistencyPanels();
-  saveGlossary();
+  const savedGlossary = await saveGlossary();
+  if (!savedGlossary) {
+    setStatus("儲存詞彙失敗");
+    return false;
+  }
+  if (!retranslate) {
+    setStatus("已加入詞彙");
+    return true;
+  }
+  if (!currentJobId) {
+    setStatus("找不到目前任務，無法重翻");
+    return false;
+  }
+  const savedEdits = await saveEdits(false, { silent: true });
+  if (!savedEdits) {
+    setStatus("重翻前儲存失敗");
+    return false;
+  }
+  const originalText = addGlossaryRetranslateBtn?.textContent || "加入詞彙並重翻命中框";
+  if (addGlossaryRetranslateBtn) {
+    addGlossaryRetranslateBtn.disabled = true;
+    addGlossaryRetranslateBtn.textContent = "重翻中...";
+  }
+  setStatus(`已加入詞彙，正在重翻包含「${cn}」的命中框...`);
+  try {
+    const res = await fetch(`/api/job/${currentJobId}/glossary-retranslate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cn }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setStatus(body.error ? `重翻失敗：${body.error}` : "重翻失敗");
+      return false;
+    }
+    await loadJobData(currentJobId, { preserveActivePage: true });
+    setStatus(`已重翻 ${Number(body.updated_count || 0)} 個命中框`);
+    return true;
+  } catch (error) {
+    setStatus("重翻失敗");
+    return false;
+  } finally {
+    if (addGlossaryRetranslateBtn) {
+      addGlossaryRetranslateBtn.disabled = false;
+      addGlossaryRetranslateBtn.textContent = originalText;
+    }
+  }
 }
 
 function openGlossaryModal() {
@@ -1079,59 +1127,7 @@ function setContextInspectorEmpty(message = "請先點選一個翻譯文字框")
     contextTranslatedTextEl.placeholder = message;
     contextTranslatedTextEl.disabled = true;
   }
-  if (contextRetranslateBtn) {
-    contextRetranslateBtn.classList.remove("ghost");
-    contextRetranslateBtn.classList.add("primary", "retranslate-btn--idle");
-    contextRetranslateBtn.classList.remove("retranslate-btn--ready", "retranslate-btn--busy");
-    contextRetranslateBtn.textContent = "請先選取單一文字框";
-    contextRetranslateBtn.disabled = true;
-  }
   contextTranslatedEditKey = null;
-  contextSourceEditKey = null;
-}
-
-function isContextSourceDirty(selected = null) {
-  if (!contextSourceTextEl) return false;
-  const current = String(contextSourceTextEl.value || "").trim();
-  if (!current) return false;
-  const boxSelection = selected || getSingleSelectedBox();
-  if (!boxSelection) return false;
-  const original = String(boxSelection.box?.tmSourceText || "").trim();
-  return current !== original;
-}
-
-function syncContextRetranslateButton(selected = null) {
-  if (!contextRetranslateBtn) return;
-  const boxSelection = selected || getSingleSelectedBox();
-  let stateName = "idle";
-  let label = "請先選取單一文字框";
-  const dirty = isContextSourceDirty(selected);
-  if (!boxSelection) {
-    stateName = getSelectedBoxes().length > 1 ? "multi" : "idle";
-    label = stateName === "multi" ? "多選時無法重新翻譯" : "請先選取單一文字框";
-  } else if (!String(contextSourceTextEl?.value || "").trim()) {
-    stateName = "empty";
-    label = "請先輸入修正後原始內容";
-  } else if (!dirty) {
-    stateName = "clean";
-    label = "修改原始內容後可重新翻譯";
-  } else {
-    stateName = "ready";
-    label = "用修正後原始內容重新翻譯";
-  }
-  contextRetranslateBtn.classList.remove(
-    "retranslate-btn--idle",
-    "retranslate-btn--ready",
-    "retranslate-btn--busy",
-    "ghost",
-    "primary"
-  );
-  contextRetranslateBtn.classList.add(stateName === "ready" ? "primary" : "ghost");
-  contextRetranslateBtn.classList.add(
-    stateName === "ready" ? "retranslate-btn--ready" : "retranslate-btn--idle"
-  );
-  contextRetranslateBtn.textContent = label;
-  contextRetranslateBtn.disabled = stateName !== "ready";
 }
 
 function syncContextInspector() {
@@ -1153,11 +1149,7 @@ function syncContextInspector() {
       contextTranslatedTextEl.placeholder = "多選時不可直接編輯譯文，請改為單選";
       contextTranslatedTextEl.disabled = true;
     }
-    if (contextRetranslateBtn) {
-      contextRetranslateBtn.disabled = true;
-    }
     contextTranslatedEditKey = null;
-    contextSourceEditKey = null;
     return;
   }
 
@@ -1166,12 +1158,10 @@ function syncContextInspector() {
   if (contextSummaryEl) contextSummaryEl.textContent = `第 ${Number(page.pageIndex) + 1} 頁選取中`;
   if (contextSourceTextEl) {
     const sourceValue = String(box.tmSourceText || "").trim();
-    if (document.activeElement !== contextSourceTextEl || contextSourceEditKey !== selectedKey) {
-      contextSourceTextEl.value = sourceValue;
-    } else if (contextSourceTextEl.value !== sourceValue) {
+    if (contextSourceTextEl.value !== sourceValue) {
       contextSourceTextEl.value = sourceValue;
     }
-    contextSourceTextEl.placeholder = "可在此修正原始內容";
+    contextSourceTextEl.placeholder = "翻譯前原始內容";
     contextSourceTextEl.disabled = false;
   }
   if (contextTranslatedTextEl) {
@@ -1184,64 +1174,7 @@ function syncContextInspector() {
     contextTranslatedTextEl.placeholder = "可在此直接編輯目前譯文";
     contextTranslatedTextEl.disabled = false;
   }
-  syncContextRetranslateButton(selected[0]);
   contextTranslatedEditKey = selectedKey;
-  contextSourceEditKey = selectedKey;
-}
-
-async function retranslateSelectedBoxFromSource() {
-  const selected = getSingleSelectedBox();
-  const jobId = document.body.dataset.jobId;
-  if (!jobId || !selected || !contextSourceTextEl) return;
-  const sourceText = String(contextSourceTextEl.value || "").trim();
-  if (!sourceText) {
-    setStatus("請先輸入修正後的原始內容");
-    return;
-  }
-  const saved = await saveEdits(false, { silent: true });
-  if (!saved) {
-    setStatus("重翻前儲存失敗");
-    return;
-  }
-  if (contextRetranslateBtn) {
-    contextRetranslateBtn.classList.remove("ghost", "retranslate-btn--idle", "retranslate-btn--ready");
-    contextRetranslateBtn.classList.add("primary", "retranslate-btn--busy");
-    contextRetranslateBtn.disabled = true;
-    contextRetranslateBtn.textContent = "重新翻譯中...";
-  }
-  setStatus(`正在重翻第 ${selected.page.pageIndex + 1} 頁目前文字框...`);
-  try {
-    const res = await fetch(`/api/job/${jobId}/retranslate-box`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        page_index_0based: selected.page.pageIndex,
-        box_id: selected.box.id,
-        source_text: sourceText,
-      }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setStatus(body.error ? `重翻失敗：${body.error}` : "重翻失敗");
-      return;
-    }
-    await loadJobData(jobId, { preserveActivePage: true });
-    const reselectedPageIdx = state.pages.findIndex((page) => page.pageIndex === selected.page.pageIndex);
-    if (reselectedPageIdx >= 0) {
-      const reselectedBoxIdx = state.pages[reselectedPageIdx].boxes.findIndex((box) => box.id === selected.box.id);
-      if (reselectedBoxIdx >= 0) {
-        setSelection(reselectedPageIdx, reselectedBoxIdx, false);
-      }
-    }
-    setStatus("已使用修正後原始內容重新翻譯目前文字框");
-  } catch (error) {
-    setStatus("重翻失敗");
-  } finally {
-    if (contextRetranslateBtn) {
-      contextRetranslateBtn.classList.remove("retranslate-btn--busy");
-      syncContextInspector();
-    }
-  }
 }
 
 function applySelectionClasses() {
@@ -3610,8 +3543,14 @@ function bindControls() {
   }
 
   if (addGlossaryBtn) {
-    addGlossaryBtn.addEventListener("click", () => {
-      addGlossaryEntry();
+    addGlossaryBtn.addEventListener("click", async () => {
+      await addGlossaryEntry();
+    });
+  }
+
+  if (addGlossaryRetranslateBtn) {
+    addGlossaryRetranslateBtn.addEventListener("click", async () => {
+      await addGlossaryEntry({ retranslate: true });
     });
   }
 
@@ -3811,23 +3750,6 @@ function bindControls() {
       }
       commitBoxTextEdit(selected.pageIdx, selected.boxIdx, contextTranslatedTextEl.value);
       syncContextInspector();
-    });
-  }
-
-  if (contextSourceTextEl) {
-    contextSourceTextEl.addEventListener("focus", () => {
-      const selected = getSingleSelectedBox();
-      if (!selected) return;
-      contextSourceEditKey = boxKey(selected.pageIdx, selected.boxIdx);
-    });
-    contextSourceTextEl.addEventListener("input", () => {
-      syncContextRetranslateButton();
-    });
-  }
-
-  if (contextRetranslateBtn) {
-    contextRetranslateBtn.addEventListener("click", () => {
-      retranslateSelectedBoxFromSource();
     });
   }
 

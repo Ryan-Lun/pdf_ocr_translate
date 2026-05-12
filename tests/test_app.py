@@ -592,7 +592,7 @@ def test_region_ocr_preview_returns_image_and_ocr_text(client, tmp_path, monkeyp
     assert payload["ocr_items"][0]["text"] == "第一行"
 
 
-def test_retranslate_box_updates_only_target_box(client, tmp_path, monkeypatch):
+def test_glossary_retranslate_updates_matching_boxes_only_text(client, tmp_path, monkeypatch):
     job_id = "f" * 32
     job_dir = tmp_path / "jobs" / job_id
     job_dir.mkdir(parents=True)
@@ -624,7 +624,23 @@ def test_retranslate_box_updates_only_target_box(client, tmp_path, monkeypatch):
                                 "bbox": {"x": 10, "y": 10, "w": 80, "h": 20},
                                 "text": "Old translation",
                                 "auto_generated": True,
-                                "tm_source_text": "舊原文",
+                                "font_size": 19,
+                                "color": "#112233",
+                                "align": "center",
+                                "tm_source_text": "這段有髖臼杯",
+                                "tm_source_normalized": "這段有髖臼杯",
+                            },
+                            {
+                                "id": 200003,
+                                "deleted": False,
+                                "bbox": {"x": 10, "y": 25, "w": 80, "h": 20},
+                                "text": "Another old translation",
+                                "auto_generated": True,
+                                "font_size": 21,
+                                "color": "#445566",
+                                "align": "right",
+                                "tm_source_text": "另一段也有髖臼杯",
+                                "tm_source_normalized": "另一段也有髖臼杯",
                             },
                             {
                                 "id": 200002,
@@ -632,7 +648,11 @@ def test_retranslate_box_updates_only_target_box(client, tmp_path, monkeypatch):
                                 "bbox": {"x": 10, "y": 40, "w": 80, "h": 20},
                                 "text": "Keep me",
                                 "auto_generated": True,
+                                "font_size": 17,
+                                "color": "#778899",
+                                "align": "left",
                                 "tm_source_text": "另一段",
+                                "tm_source_normalized": "另一段",
                             },
                         ],
                     }
@@ -645,8 +665,12 @@ def test_retranslate_box_updates_only_target_box(client, tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr(
+        "app.blueprints.api.routes.glossary.load_combined_glossary",
+        lambda: [("髖臼杯", "acetabular cup")],
+    )
+    monkeypatch.setattr(
         "app.blueprints.api.routes.batch.translate_texts_for_region",
-        lambda texts, **kwargs: ["Updated translation"],
+        lambda texts, **kwargs: [f"Retranslated::{texts[0]}"],
     )
     monkeypatch.setattr(
         "app.blueprints.api.routes.ocr.apply_edits_to_pdf",
@@ -654,18 +678,24 @@ def test_retranslate_box_updates_only_target_box(client, tmp_path, monkeypatch):
     )
 
     resp = client.post(
-        f"/api/job/{job_id}/retranslate-box",
-        json={
-            "page_index_0based": 0,
-            "box_id": 200001,
-            "source_text": "修正後原文",
-        },
+        f"/api/job/{job_id}/glossary-retranslate",
+        json={"cn": "髖臼杯"},
     )
 
     assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["updated_count"] == 2
     saved = json.loads((job_dir / "edits.json").read_text(encoding="utf-8"))
     boxes = saved["pages"][0]["boxes"]
-    assert boxes[0]["text"] == "Updated translation"
-    assert boxes[0]["tm_source_text"] == "修正後原文"
-    assert boxes[0]["source"] == "manual_box_retranslate"
-    assert boxes[1]["text"] == "Keep me"
+    assert boxes[0]["text"] == "Retranslated::這段有髖臼杯"
+    assert boxes[0]["bbox"] == {"x": 10, "y": 10, "w": 80, "h": 20}
+    assert boxes[0]["font_size"] == 19
+    assert boxes[0]["color"] == "#112233"
+    assert boxes[0]["align"] == "center"
+    assert boxes[0]["tm_source_text"] == "這段有髖臼杯"
+    assert boxes[1]["text"] == "Retranslated::另一段也有髖臼杯"
+    assert boxes[1]["bbox"] == {"x": 10, "y": 25, "w": 80, "h": 20}
+    assert boxes[1]["font_size"] == 21
+    assert boxes[1]["color"] == "#445566"
+    assert boxes[1]["align"] == "right"
+    assert boxes[2]["text"] == "Keep me"
