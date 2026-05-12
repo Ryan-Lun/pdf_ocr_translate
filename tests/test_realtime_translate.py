@@ -164,3 +164,50 @@ def test_extract_merge_notice_candidates_from_missing_delimiter():
             "suggested_translation": "Merged translation spanning both pages",
         }
     ]
+
+
+def test_finalize_translation_job_writes_realtime_restore_snapshot(tmp_path, monkeypatch):
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    monkeypatch.setattr(
+        realtime_translate.batch.ocr,
+        "apply_edits_to_pdf",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        realtime_translate.batch.jobs,
+        "write_batch_status",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        realtime_translate.batch.jobs,
+        "set_job_state",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        realtime_translate.batch.translation_memory,
+        "load_translation_memory",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        realtime_translate.batch.translation_memory,
+        "write_translation_memory",
+        lambda memory: None,
+    )
+
+    realtime_translate.batch.finalize_translation_job(
+        job_id="a" * 32,
+        job_dir=job_dir,
+        ocr_pages=[{"page_index_0based": 0, "rec_texts": [], "rec_polys": []}],
+        pp_pages={},
+        document_mode="general_force",
+        target_lang="en",
+        key_map={},
+        translations={"p0000-b0001": "Header", "p0000-c0000": "Cell"},
+        status_meta={},
+        backend_id="realtime",
+    )
+
+    raw_text = (job_dir / realtime_translate.state.BATCH_OUTPUT_NAME).read_text(encoding="utf-8")
+    assert '"custom_id": "p0000-b0001"' in raw_text
+    assert '"output_text": "Header"' in raw_text

@@ -186,8 +186,9 @@ def batch_restore(job_id: str):
         if output_path.exists():
             raw_text = output_path.read_text(encoding="utf-8")
         else:
-            raw_text = ""
-            if not prefilled:
+            debug_translations = batch.load_realtime_debug_translations(job_dir)
+            raw_text = batch.build_jsonl_text_from_translations(debug_translations)
+            if not raw_text and not prefilled:
                 return jsonify({"ok": False, "error": "Batch output not found."}), 400
         translations = batch.build_translations_from_jsonl_text(
             raw_text, alias_map=alias_map, prefilled=prefilled

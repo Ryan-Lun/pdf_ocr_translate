@@ -626,6 +626,46 @@ def write_jsonl(path: Path, items: list[dict[str, Any]]) -> None:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
+def build_jsonl_text_from_translations(translations: dict[str, str]) -> str:
+    lines: list[str] = []
+    for custom_id in sorted(translations.keys()):
+        translated = str(translations.get(custom_id) or "").strip()
+        if not translated:
+            continue
+        lines.append(
+            json.dumps(
+                {
+                    "custom_id": custom_id,
+                    "response": {"body": {"output_text": translated}},
+                },
+                ensure_ascii=False,
+            )
+        )
+    return "\n".join(lines)
+
+
+def load_realtime_debug_translations(job_dir: Path) -> dict[str, str]:
+    root = job_dir / "realtime_debug" / "chunks"
+    if not root.exists():
+        return {}
+    translations: dict[str, str] = {}
+    for path in sorted(root.rglob("parsed_translations.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for custom_id, translated in payload.items():
+            if not isinstance(custom_id, str):
+                continue
+            text = str(translated or "").strip()
+            if not text:
+                continue
+            translations[custom_id] = text
+    return translations
+
+
 def build_translations_from_jsonl_text(
     raw_text: str,
     alias_map: dict[str, str] | None = None,
@@ -908,6 +948,10 @@ def finalize_translation_job(
     status_meta: dict[str, Any],
     backend_id: str,
 ) -> None:
+    if str(backend_id).startswith("realtime"):
+        raw_text = build_jsonl_text_from_translations(translations)
+        if raw_text:
+            (job_dir / state.BATCH_OUTPUT_NAME).write_text(raw_text, encoding="utf-8")
     if key_map:
         with state.TRANSLATION_MEMORY_LOCK:
             memory = translation_memory.load_translation_memory()

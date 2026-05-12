@@ -280,6 +280,52 @@ def test_update_merge_notice_status(client, tmp_path, monkeypatch):
     assert jobs.load_merge_notices(job_dir)[0]["status"] == "accepted"
 
 
+def test_batch_restore_uses_realtime_debug_translations_when_output_missing(client, tmp_path, monkeypatch):
+    job_id = "e" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    (job_dir / "realtime_debug" / "chunks" / "chunk_0001").mkdir(parents=True)
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+
+    (job_dir / "batch_config.json").write_text(
+        json.dumps({"document_mode": "general_force", "target_lang": "en"}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (job_dir / "realtime_debug" / "chunks" / "chunk_0001" / "parsed_translations.json").write_text(
+        json.dumps({"p0000-b0001": "Recovered header"}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.ocr.load_ocr_pages",
+        lambda current_job_dir: [{"page_index_0based": 0, "rec_texts": [], "rec_polys": []}],
+    )
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.ocr.load_pp_pages",
+        lambda current_job_dir: {},
+    )
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.batch.build_edits_payload_from_translations",
+        lambda ocr_pages, translations, **kwargs: {
+            "pages": [
+                {
+                    "page_index_0based": 0,
+                    "boxes": [{"id": 200001, "text": translations.get("p0000-b0001", "")}],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.ocr.apply_edits_to_pdf",
+        lambda current_job_id, current_job_dir, edits: Path(current_job_dir) / "edited.pdf",
+    )
+
+    resp = client.post(f"/api/job/{job_id}/batch-restore")
+
+    assert resp.status_code == 200
+    saved = json.loads((job_dir / "edits.json").read_text(encoding="utf-8"))
+    assert saved["pages"][0]["boxes"][0]["text"] == "Recovered header"
+
+
 def test_save_job_writes_form_tm_from_editor_edits(client, tmp_path, monkeypatch):
     job_id = "a" * 32
     job_dir = tmp_path / "jobs" / job_id
