@@ -869,6 +869,104 @@ def retranslate_region(job_id: str):
     )
 
 
+@api_bp.route(
+    "/job/<job_id>/retranslate-box",
+    methods=["POST"],
+    endpoint="retranslate_box",
+)
+def retranslate_box(job_id: str):
+    if not jobs.safe_job_id(job_id):
+        abort(404)
+    job_dir = jobs.job_dir(job_id)
+    if not job_dir.exists():
+        abort(404)
+
+    payload = request.get_json(force=True) or {}
+    try:
+        page_idx = int(payload.get("page_index_0based"))
+        box_id = int(payload.get("box_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Invalid page index or box id."}), 400
+
+    source_text = batch.normalize_text(str(payload.get("source_text") or "")).strip()
+    if not source_text:
+        return jsonify({"ok": False, "error": "Missing source text."}), 400
+
+    config = jobs.load_batch_config(job_dir) or {}
+    meta = jobs.load_job_meta(job_dir) or {}
+    target_lang = str(config.get("target_lang") or "en")
+    model_name = str(config.get("model") or state.PDF_REALTIME_TRANSLATE_MODEL or state.DOC_TRANSLATE_MODEL)
+    document_mode = batch.resolve_document_mode(
+        config.get("document_mode") or meta.get("document_mode")
+    )
+    system_prompt = config.get("system_prompt") or batch.resolve_batch_prompt(target_lang)
+
+    try:
+        translations = batch.translate_texts_for_region(
+            [source_text],
+            target_lang=target_lang,
+            model_name=model_name,
+            system_prompt=system_prompt,
+            glossary_entries=glossary.load_combined_glossary(),
+        )
+    except Exception as exc:
+        logger.exception("Box retranslate failed job_id=%s page=%s box=%s error=%s", job_id, page_idx, box_id, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    translated_text = batch.normalize_text(translations[0] if translations else "")
+    if not translated_text:
+        return jsonify({"ok": False, "error": "Empty translation result."}), 500
+
+    edits_map = jobs.load_edits_map(job_dir)
+    page_boxes = list(edits_map.get(page_idx) or [])
+    target_box = None
+    for box in page_boxes:
+        try:
+            current_id = int(box.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if current_id == box_id:
+            target_box = box
+            break
+    if target_box is None:
+        return jsonify({"ok": False, "error": "Target box not found."}), 404
+
+    normalized_source = batch.normalize_for_translation(source_text)
+    target_box["text"] = translated_text
+    target_box["tm_source_text"] = source_text
+    target_box["tm_target_lang"] = target_lang
+    target_box["tm_document_mode"] = document_mode
+    if normalized_source:
+        target_box["tm_source_normalized"] = normalized_source
+    target_box["source"] = "manual_box_retranslate"
+
+    edits_map[page_idx] = page_boxes
+    edits_payload = {
+        "pages": [
+            {"page_index_0based": idx, "boxes": boxes}
+            for idx, boxes in sorted(edits_map.items())
+        ]
+    }
+    edits_path = job_dir / "edits.json"
+    edits_path.write_text(
+        json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    try:
+        edited_pdf = ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    jobs.notify_jobs_update()
+    return jsonify(
+        {
+            "ok": True,
+            "translated_text": translated_text,
+            "edited_pdf_url": url_for(
+                "jobs.job_file", job_id=job_id, filename=edited_pdf.name
+            ),
+        }
+    )
+
+
 @api_bp.route("/upload-cancel", methods=["POST"], endpoint="cancel_upload")
 def cancel_upload():
     active = jobs.get_active_upload()

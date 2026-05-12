@@ -278,7 +278,13 @@
           <div class="context-panel__body">
             <section class="context-card">
               <h3>原始內容</h3>
-              <pre id="contextSourceText" class="context-pre">請先點選一個翻譯文字框</pre>
+              <textarea
+                id="contextSourceText"
+                class="context-textarea"
+                rows="10"
+                placeholder="請先點選一個翻譯文字框"
+                disabled
+              ></textarea>
             </section>
             <section class="context-card">
               <h3>翻譯結果</h3>
@@ -289,6 +295,9 @@
                 placeholder="請先點選一個翻譯文字框"
                 disabled
               ></textarea>
+              <div class="button-row">
+                <button id="contextRetranslateBtn" class="primary" type="button" disabled>用修正後原始內容重新翻譯</button>
+              </div>
             </section>
           </div>
         </div>

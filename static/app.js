@@ -36,6 +36,7 @@ const historyState = {
 
 let controlsBound = false;
 let contextTranslatedEditKey = null;
+let contextSourceEditKey = null;
 
 const statusEl = document.getElementById("status");
 const fontSizeEl = document.getElementById("fontSize");
@@ -95,6 +96,7 @@ const applyParagraphTermBtn = document.getElementById("applyParagraphTermBtn");
 const contextSummaryEl = document.getElementById("contextSummary");
 const contextSourceTextEl = document.getElementById("contextSourceText");
 const contextTranslatedTextEl = document.getElementById("contextTranslatedText");
+const contextRetranslateBtn = document.getElementById("contextRetranslateBtn");
 const viewerEl = document.querySelector(".viewer");
 const editedLink = document.getElementById("editedPdfLink");
 const previewEl = document.getElementById("pdfPreview");
@@ -1067,13 +1069,69 @@ function commitBoxTextEdit(pageIdx, boxIdx, finalText) {
 
 function setContextInspectorEmpty(message = "請先點選一個翻譯文字框") {
   if (contextSummaryEl) contextSummaryEl.textContent = "請選取文字框";
-  if (contextSourceTextEl) contextSourceTextEl.textContent = message;
+  if (contextSourceTextEl) {
+    contextSourceTextEl.value = "";
+    contextSourceTextEl.placeholder = message;
+    contextSourceTextEl.disabled = true;
+  }
   if (contextTranslatedTextEl) {
     contextTranslatedTextEl.value = "";
     contextTranslatedTextEl.placeholder = message;
     contextTranslatedTextEl.disabled = true;
   }
+  if (contextRetranslateBtn) {
+    contextRetranslateBtn.classList.remove("ghost");
+    contextRetranslateBtn.classList.add("primary", "retranslate-btn--idle");
+    contextRetranslateBtn.classList.remove("retranslate-btn--ready", "retranslate-btn--busy");
+    contextRetranslateBtn.textContent = "請先選取單一文字框";
+    contextRetranslateBtn.disabled = true;
+  }
   contextTranslatedEditKey = null;
+  contextSourceEditKey = null;
+}
+
+function isContextSourceDirty(selected = null) {
+  if (!contextSourceTextEl) return false;
+  const current = String(contextSourceTextEl.value || "").trim();
+  if (!current) return false;
+  const boxSelection = selected || getSingleSelectedBox();
+  if (!boxSelection) return false;
+  const original = String(boxSelection.box?.tmSourceText || "").trim();
+  return current !== original;
+}
+
+function syncContextRetranslateButton(selected = null) {
+  if (!contextRetranslateBtn) return;
+  const boxSelection = selected || getSingleSelectedBox();
+  let stateName = "idle";
+  let label = "請先選取單一文字框";
+  const dirty = isContextSourceDirty(selected);
+  if (!boxSelection) {
+    stateName = getSelectedBoxes().length > 1 ? "multi" : "idle";
+    label = stateName === "multi" ? "多選時無法重新翻譯" : "請先選取單一文字框";
+  } else if (!String(contextSourceTextEl?.value || "").trim()) {
+    stateName = "empty";
+    label = "請先輸入修正後原始內容";
+  } else if (!dirty) {
+    stateName = "clean";
+    label = "修改原始內容後可重新翻譯";
+  } else {
+    stateName = "ready";
+    label = "用修正後原始內容重新翻譯";
+  }
+  contextRetranslateBtn.classList.remove(
+    "retranslate-btn--idle",
+    "retranslate-btn--ready",
+    "retranslate-btn--busy",
+    "ghost",
+    "primary"
+  );
+  contextRetranslateBtn.classList.add(stateName === "ready" ? "primary" : "ghost");
+  contextRetranslateBtn.classList.add(
+    stateName === "ready" ? "retranslate-btn--ready" : "retranslate-btn--idle"
+  );
+  contextRetranslateBtn.textContent = label;
+  contextRetranslateBtn.disabled = stateName !== "ready";
 }
 
 function syncContextInspector() {
@@ -1085,24 +1143,40 @@ function syncContextInspector() {
   }
   if (selected.length > 1) {
     if (contextSummaryEl) contextSummaryEl.textContent = `已選取 ${selected.length} 個文字框`;
-    if (contextSourceTextEl) contextSourceTextEl.textContent = "多選時不顯示完整原文，請改為單選查看翻譯前內容";
+    if (contextSourceTextEl) {
+      contextSourceTextEl.value = "";
+      contextSourceTextEl.placeholder = "多選時不可直接修正原始內容，請改為單選";
+      contextSourceTextEl.disabled = true;
+    }
     if (contextTranslatedTextEl) {
       contextTranslatedTextEl.value = "";
       contextTranslatedTextEl.placeholder = "多選時不可直接編輯譯文，請改為單選";
       contextTranslatedTextEl.disabled = true;
     }
+    if (contextRetranslateBtn) {
+      contextRetranslateBtn.disabled = true;
+    }
     contextTranslatedEditKey = null;
+    contextSourceEditKey = null;
     return;
   }
 
   const { page, box, pageIdx, boxIdx } = selected[0];
+  const selectedKey = boxKey(pageIdx, boxIdx);
   if (contextSummaryEl) contextSummaryEl.textContent = `第 ${Number(page.pageIndex) + 1} 頁選取中`;
   if (contextSourceTextEl) {
-    contextSourceTextEl.textContent = String(box.tmSourceText || "").trim() || "沒有可用的翻譯前內容";
+    const sourceValue = String(box.tmSourceText || "").trim();
+    if (document.activeElement !== contextSourceTextEl || contextSourceEditKey !== selectedKey) {
+      contextSourceTextEl.value = sourceValue;
+    } else if (contextSourceTextEl.value !== sourceValue) {
+      contextSourceTextEl.value = sourceValue;
+    }
+    contextSourceTextEl.placeholder = "可在此修正原始內容";
+    contextSourceTextEl.disabled = false;
   }
   if (contextTranslatedTextEl) {
     const value = String(box.text || "").trim();
-    if (document.activeElement !== contextTranslatedTextEl || contextTranslatedEditKey !== boxKey(pageIdx, boxIdx)) {
+    if (document.activeElement !== contextTranslatedTextEl || contextTranslatedEditKey !== selectedKey) {
       contextTranslatedTextEl.value = value;
     } else if (contextTranslatedTextEl.value !== value) {
       contextTranslatedTextEl.value = value;
@@ -1110,7 +1184,64 @@ function syncContextInspector() {
     contextTranslatedTextEl.placeholder = "可在此直接編輯目前譯文";
     contextTranslatedTextEl.disabled = false;
   }
-  contextTranslatedEditKey = boxKey(pageIdx, boxIdx);
+  syncContextRetranslateButton(selected[0]);
+  contextTranslatedEditKey = selectedKey;
+  contextSourceEditKey = selectedKey;
+}
+
+async function retranslateSelectedBoxFromSource() {
+  const selected = getSingleSelectedBox();
+  const jobId = document.body.dataset.jobId;
+  if (!jobId || !selected || !contextSourceTextEl) return;
+  const sourceText = String(contextSourceTextEl.value || "").trim();
+  if (!sourceText) {
+    setStatus("請先輸入修正後的原始內容");
+    return;
+  }
+  const saved = await saveEdits(false, { silent: true });
+  if (!saved) {
+    setStatus("重翻前儲存失敗");
+    return;
+  }
+  if (contextRetranslateBtn) {
+    contextRetranslateBtn.classList.remove("ghost", "retranslate-btn--idle", "retranslate-btn--ready");
+    contextRetranslateBtn.classList.add("primary", "retranslate-btn--busy");
+    contextRetranslateBtn.disabled = true;
+    contextRetranslateBtn.textContent = "重新翻譯中...";
+  }
+  setStatus(`正在重翻第 ${selected.page.pageIndex + 1} 頁目前文字框...`);
+  try {
+    const res = await fetch(`/api/job/${jobId}/retranslate-box`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        page_index_0based: selected.page.pageIndex,
+        box_id: selected.box.id,
+        source_text: sourceText,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setStatus(body.error ? `重翻失敗：${body.error}` : "重翻失敗");
+      return;
+    }
+    await loadJobData(jobId, { preserveActivePage: true });
+    const reselectedPageIdx = state.pages.findIndex((page) => page.pageIndex === selected.page.pageIndex);
+    if (reselectedPageIdx >= 0) {
+      const reselectedBoxIdx = state.pages[reselectedPageIdx].boxes.findIndex((box) => box.id === selected.box.id);
+      if (reselectedBoxIdx >= 0) {
+        setSelection(reselectedPageIdx, reselectedBoxIdx, false);
+      }
+    }
+    setStatus("已使用修正後原始內容重新翻譯目前文字框");
+  } catch (error) {
+    setStatus("重翻失敗");
+  } finally {
+    if (contextRetranslateBtn) {
+      contextRetranslateBtn.classList.remove("retranslate-btn--busy");
+      syncContextInspector();
+    }
+  }
 }
 
 function applySelectionClasses() {
@@ -3680,6 +3811,23 @@ function bindControls() {
       }
       commitBoxTextEdit(selected.pageIdx, selected.boxIdx, contextTranslatedTextEl.value);
       syncContextInspector();
+    });
+  }
+
+  if (contextSourceTextEl) {
+    contextSourceTextEl.addEventListener("focus", () => {
+      const selected = getSingleSelectedBox();
+      if (!selected) return;
+      contextSourceEditKey = boxKey(selected.pageIdx, selected.boxIdx);
+    });
+    contextSourceTextEl.addEventListener("input", () => {
+      syncContextRetranslateButton();
+    });
+  }
+
+  if (contextRetranslateBtn) {
+    contextRetranslateBtn.addEventListener("click", () => {
+      retranslateSelectedBoxFromSource();
     });
   }
 

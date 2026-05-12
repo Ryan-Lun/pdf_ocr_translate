@@ -590,3 +590,82 @@ def test_region_ocr_preview_returns_image_and_ocr_text(client, tmp_path, monkeyp
     assert payload["source_text"] == "第一行\n第二行"
     assert payload["image_data_url"] == "data:image/png;base64,AAA"
     assert payload["ocr_items"][0]["text"] == "第一行"
+
+
+def test_retranslate_box_updates_only_target_box(client, tmp_path, monkeypatch):
+    job_id = "f" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+
+    (job_dir / "batch_config.json").write_text(
+        json.dumps(
+            {
+                "document_mode": "general_force",
+                "target_lang": "en",
+                "model": "fake-model",
+                "system_prompt": "translate",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (job_dir / "edits.json").write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page_index_0based": 0,
+                        "boxes": [
+                            {
+                                "id": 200001,
+                                "deleted": False,
+                                "bbox": {"x": 10, "y": 10, "w": 80, "h": 20},
+                                "text": "Old translation",
+                                "auto_generated": True,
+                                "tm_source_text": "舊原文",
+                            },
+                            {
+                                "id": 200002,
+                                "deleted": False,
+                                "bbox": {"x": 10, "y": 40, "w": 80, "h": 20},
+                                "text": "Keep me",
+                                "auto_generated": True,
+                                "tm_source_text": "另一段",
+                            },
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.batch.translate_texts_for_region",
+        lambda texts, **kwargs: ["Updated translation"],
+    )
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.ocr.apply_edits_to_pdf",
+        lambda current_job_id, current_job_dir, edits: Path(current_job_dir) / "edited.pdf",
+    )
+
+    resp = client.post(
+        f"/api/job/{job_id}/retranslate-box",
+        json={
+            "page_index_0based": 0,
+            "box_id": 200001,
+            "source_text": "修正後原文",
+        },
+    )
+
+    assert resp.status_code == 200
+    saved = json.loads((job_dir / "edits.json").read_text(encoding="utf-8"))
+    boxes = saved["pages"][0]["boxes"]
+    assert boxes[0]["text"] == "Updated translation"
+    assert boxes[0]["tm_source_text"] == "修正後原文"
+    assert boxes[0]["source"] == "manual_box_retranslate"
+    assert boxes[1]["text"] == "Keep me"
