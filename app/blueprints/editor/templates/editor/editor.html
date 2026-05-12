@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -24,14 +24,17 @@
   </head>
   <body class="editor" data-job-id="{{ job_id }}">
     <header class="topbar">
-      <div class="topbar-title">
-        <p class="topbar-filename">
-          <a class="topbar-back" href="{{ url_for('main.overlay_workspace') }}" aria-label="返回 PDF 原版面翻譯">
-            <i class="bi bi-arrow-left"></i>
-          </a>
-          <span>PDF 原版面翻譯 / 翻譯編輯 / {{ job_name or "未命名文件" }}</span>
-        </p>
-        <!-- <p id="status" class="hint topbar-meta"></p> -->
+      <div class="topbar-left">
+        <a class="topbar-back" href="{{ url_for('main.overlay_workspace') }}" aria-label="返回 PDF 原版面翻譯">
+          <i class="bi bi-arrow-left"></i>
+        </a>
+        <div class="topbar-divider"></div>
+        <div class="topbar-title-stack">
+          <span class="topbar-breadcrumb">PDF 原版面翻譯 / 翻譯編輯</span>
+          <span class="topbar-filename-new" title="{{ job_name or '未命名文件' }}">
+            {{ job_name or "未命名文件" }}
+          </span>
+        </div>
       </div>
       <div class="topbar-pager">
         <button id="prevPage" type="button" aria-label="上一頁">
@@ -101,12 +104,11 @@
                 <div class="input-row">
                   <input id="zoomRange" type="range" min="25" max="200" step="5" value="100" />
                   <input id="zoomNumber" type="number" min="25" max="200" step="5" value="100" />
-                  <button id="fitToWidthBtn" class="ghost" type="button" title="符合寬度" style="padding: 0.45rem 0.8rem;">
-                    <i class="bi bi-arrows-angle-expand"></i>
-                  </button>
                 </div>
-
               </label>
+              <div class="button-row">
+                <button id="fitToWidthBtn" class="ghost" type="button">頁面符合寬度</button>
+              </div>
               <div class="button-row">
                 <button id="toggleThumbsBtn" class="ghost" type="button" aria-expanded="true">隱藏頁面縮圖</button>
               </div>
