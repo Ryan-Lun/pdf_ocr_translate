@@ -211,3 +211,56 @@ def test_finalize_translation_job_writes_realtime_restore_snapshot(tmp_path, mon
     raw_text = (job_dir / realtime_translate.state.BATCH_OUTPUT_NAME).read_text(encoding="utf-8")
     assert '"custom_id": "p0000-b0001"' in raw_text
     assert '"output_text": "Header"' in raw_text
+
+
+def test_finalize_translation_job_skips_tm_write_when_overlay_tm_disabled(tmp_path, monkeypatch):
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    monkeypatch.setattr(realtime_translate.state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", False)
+    monkeypatch.setattr(
+        realtime_translate.batch.ocr,
+        "apply_edits_to_pdf",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        realtime_translate.batch.jobs,
+        "write_batch_status",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        realtime_translate.batch.jobs,
+        "set_job_state",
+        lambda *args, **kwargs: None,
+    )
+
+    called = {"load": 0, "write": 0}
+    monkeypatch.setattr(
+        realtime_translate.batch.translation_memory,
+        "load_translation_memory",
+        lambda: called.__setitem__("load", called["load"] + 1) or {},
+    )
+    monkeypatch.setattr(
+        realtime_translate.batch.translation_memory,
+        "write_translation_memory",
+        lambda memory: called.__setitem__("write", called["write"] + 1),
+    )
+
+    realtime_translate.batch.finalize_translation_job(
+        job_id="b" * 32,
+        job_dir=job_dir,
+        ocr_pages=[{"page_index_0based": 0, "rec_texts": [], "rec_polys": []}],
+        pp_pages={},
+        document_mode="general_force",
+        target_lang="en",
+        key_map={
+            "p0000-b0001": {
+                "source_text": "標題",
+                "source_normalized": "標題",
+            }
+        },
+        translations={"p0000-b0001": "Header"},
+        status_meta={},
+        backend_id="realtime",
+    )
+
+    assert called == {"load": 0, "write": 0}

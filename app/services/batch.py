@@ -446,10 +446,12 @@ def build_batch_items(
     translate_merged_cells = use_merged_cells_for_mode(document_mode)
     use_structured_blocks = use_structured_blocks_for_mode(document_mode)
     document_term_map = document_terms.build_document_term_map(pp_pages)
-
-    with state.TRANSLATION_MEMORY_LOCK:
-        translation_memory_data = translation_memory.load_translation_memory()
-        tm_dirty = False
+    translation_memory_enabled = bool(state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY)
+    translation_memory_data: dict[str, dict[str, Any]] = {}
+    tm_dirty = False
+    if translation_memory_enabled:
+        with state.TRANSLATION_MEMORY_LOCK:
+            translation_memory_data = translation_memory.load_translation_memory()
 
     def _add_item(custom_id: str, raw_text: str) -> None:
         nonlocal tm_dirty
@@ -462,37 +464,38 @@ def build_batch_items(
         matched_term = document_terms.lookup_document_term(source_text, document_term_map)
         canonical_source_text = str((matched_term or {}).get("best_source_text") or source_text)
         canonical_source_normalized = str((matched_term or {}).get("canonical_key") or normalized_source)
-        tm_key, tm_entry = _get_tm_entry_with_fallback(
-            translation_memory_data,
-            source_text=source_text,
-            target_lang=target_lang,
-            document_mode=document_mode,
-            normalized_source=normalized_source,
-            canonical_source_text=canonical_source_text,
-            canonical_source_normalized=canonical_source_normalized,
-        )
-        if tm_key and tm_entry:
-            translated_text = translation_memory.extract_target_text(tm_entry)
-            if translated_text:
-                prefilled[custom_id] = translated_text
-                translation_memory.touch_entry(tm_entry)
-                if tm_key != translation_memory.make_tm_key(
-                    canonical_source_text,
-                    target_lang,
-                    document_mode,
-                    source_normalized=canonical_source_normalized,
-                ):
-                    translation_memory.upsert_entry(
-                        translation_memory_data,
+        if translation_memory_enabled:
+            tm_key, tm_entry = _get_tm_entry_with_fallback(
+                translation_memory_data,
+                source_text=source_text,
+                target_lang=target_lang,
+                document_mode=document_mode,
+                normalized_source=normalized_source,
+                canonical_source_text=canonical_source_text,
+                canonical_source_normalized=canonical_source_normalized,
+            )
+            if tm_key and tm_entry:
+                translated_text = translation_memory.extract_target_text(tm_entry)
+                if translated_text:
+                    prefilled[custom_id] = translated_text
+                    translation_memory.touch_entry(tm_entry)
+                    if tm_key != translation_memory.make_tm_key(
                         canonical_source_text,
-                        translated_text,
                         target_lang,
                         document_mode,
                         source_normalized=canonical_source_normalized,
-                        source=str(tm_entry.get("source") or "batch"),
-                    )
-                tm_dirty = True
-                return
+                    ):
+                        translation_memory.upsert_entry(
+                            translation_memory_data,
+                            canonical_source_text,
+                            translated_text,
+                            target_lang,
+                            document_mode,
+                            source_normalized=canonical_source_normalized,
+                            source=str(tm_entry.get("source") or "batch"),
+                        )
+                    tm_dirty = True
+                    return
         clean = glossary.apply_glossary_with_protection(
             normalize_for_translation(canonical_source_text),
             glossary_entries,
@@ -620,7 +623,7 @@ def build_batch_items(
         for _, custom_id, raw_text in page_candidates:
             _add_item(custom_id, raw_text)
 
-    if tm_dirty:
+    if translation_memory_enabled and tm_dirty:
         translation_memory.write_translation_memory(translation_memory_data)
 
     return items, alias_map, key_map, prefilled
@@ -956,7 +959,7 @@ def finalize_translation_job(
         raw_text = build_jsonl_text_from_translations(translations)
         if raw_text:
             (job_dir / state.BATCH_OUTPUT_NAME).write_text(raw_text, encoding="utf-8")
-    if key_map:
+    if state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY and key_map:
         with state.TRANSLATION_MEMORY_LOCK:
             memory = translation_memory.load_translation_memory()
             now_ts = time.time()

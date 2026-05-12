@@ -140,6 +140,17 @@ FONT_CANDIDATES = [
 DEFAULT_TEXT_COLOR = "#0000ff"
 DEFAULT_FONT_SIZE_PX = 25.0
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY = _env_bool(
+    "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY",
+    True,
+)
+
 TRANSLATION_MEMORY_PATH = Path(
     os.getenv("TRANSLATION_MEMORY_PATH", str(OUT_ROOT / "translation_memory.json"))
 )

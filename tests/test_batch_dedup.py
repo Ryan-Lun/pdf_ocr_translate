@@ -845,6 +845,49 @@ def test_form_mode_uses_target_lang_scoped_translation_memory(tmp_path, monkeypa
     assert prefilled == {}
 
 
+def test_overlay_can_disable_translation_memory_prefill(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", False)
+    now_ts = time.time()
+    memory = {
+        translation_memory.make_tm_key("表格內容", "en", "form"): {
+            "source_text": "表格內容",
+            "source_normalized": "表格內容",
+            "target_text": "table content",
+            "target_lang": "en",
+            "document_mode": "form",
+            "created_at": now_ts,
+            "last_used": now_ts,
+            "source": "batch",
+            "count": 1,
+        }
+    }
+    state.TRANSLATION_MEMORY_PATH.write_text(
+        json.dumps(memory, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    ocr_pages = [{"page_index_0based": 0, "rec_texts": ["表格內容"], "rec_polys": []}]
+    items, alias_map, key_map, prefilled = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        target_lang="en",
+        document_mode="form",
+    )
+
+    assert [item["custom_id"] for item in items] == ["p0000-l0000"]
+    assert alias_map == {}
+    assert key_map == {
+        "p0000-l0000": {
+            "source_text": "表格內容",
+            "source_normalized": "表格內容",
+        }
+    }
+    assert prefilled == {}
+
+
 def test_form_mode_edits_payload_includes_tm_metadata():
     ocr_pages = [
         {

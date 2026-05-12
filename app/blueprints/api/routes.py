@@ -428,7 +428,7 @@ def save_job(job_id: str):
     edits_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    if document_mode == "form":
+    if document_mode == "form" and state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY:
         tm_changed = False
         with state.TRANSLATION_MEMORY_LOCK:
             memory = translation_memory.load_translation_memory()
@@ -538,7 +538,7 @@ def apply_consistency(job_id: str):
         json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    if sync_to_tm:
+    if sync_to_tm and state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY:
         document_mode, target_lang = _load_job_translation_context(job_dir, edits_payload)
         with state.TRANSLATION_MEMORY_LOCK:
             memory = translation_memory.load_translation_memory()
@@ -627,7 +627,7 @@ def apply_paragraph_term(job_id: str):
         json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    if sync_to_tm:
+    if sync_to_tm and state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY:
         document_mode, target_lang = _load_job_translation_context(job_dir, edits_payload)
         with state.TRANSLATION_MEMORY_LOCK:
             memory = translation_memory.load_translation_memory()
