@@ -752,7 +752,7 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
             font_size_pt = font_size_px * (page_h / img_h)
             color = hex_to_rgb(box.get("color"))
             rotate = normalize_box_rotation(box.get("rotation"))
-            pdf_rotate = (360 - rotate) % 360
+            pdf_rotate = (rotation + ((360 - rotate) % 360)) % 360
             no_clip = bool(box.get("no_clip"))
             text_align = normalize_text_align(box.get("text_align"))
             # Editor-side rotation already updates the stored bbox geometry.
@@ -777,13 +777,13 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
             if rc < 0 and no_clip:
                 deficit = abs(float(rc))
                 expanded_rect = fitz.Rect(textbox_rect)
-                if rotate == 0:
+                if pdf_rotate == 0:
                     expanded_rect.y1 += deficit
-                elif rotate == 90:
+                elif pdf_rotate == 90:
                     expanded_rect.x1 += deficit
-                elif rotate == 180:
+                elif pdf_rotate == 180:
                     expanded_rect.y0 -= deficit
-                elif rotate == 270:
+                elif pdf_rotate == 270:
                     expanded_rect.x0 -= deficit
                 box_shape = page.new_shape()
                 box_shape.insert_textbox(expanded_rect, text, **insert_kwargs)
