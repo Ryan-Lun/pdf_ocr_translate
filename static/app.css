@@ -1170,8 +1170,33 @@ body.editor .panel {
   margin-top: 0.6rem;
 }
 
+.button-row--tight {
+  gap: 0.5rem;
+}
+
 .button-row button {
   width: 100%;
+}
+
+#contextRetranslateBtn.retranslate-btn--idle {
+  background: #f3f0e8;
+  border: 1px solid rgba(130, 102, 62, 0.18);
+  color: #8a6f4a;
+}
+
+#contextRetranslateBtn.retranslate-btn--ready {
+  background: #2f8f4e;
+  color: #fff;
+}
+
+#contextRetranslateBtn.retranslate-btn--busy {
+  background: #1f6e49;
+  color: #fff;
+}
+
+#contextRetranslateBtn:disabled {
+  cursor: not-allowed;
+  opacity: 1;
 }
 
 .glossary-list {
@@ -1732,7 +1757,7 @@ body.editor .thumbs {
   position: absolute;
   border: 1px solid rgba(21, 36, 43, 0.4);
   background: rgba(255, 255, 255, 0.6);
-  padding: 2px 4px;
+  padding: 0;
   overflow: hidden;
   pointer-events: auto;
   border-radius: 4px;
@@ -1760,6 +1785,9 @@ body.editor .thumbs {
 }
 
 .text-box .text {
+  position: absolute;
+  left: 4px;
+  top: 2px;
   outline: none;
   cursor: text;
   user-select: text;
@@ -1767,9 +1795,11 @@ body.editor .thumbs {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
-  width: 100%;
-  height: 100%;
   display: block;
+}
+
+.text-box .text.is-rotated {
+  transform-origin: top left;
 }
 
 .segmented-control {

@@ -277,6 +277,7 @@ def merge_pp_json_inprocess(
 # Helpers from PPStructure flow
 # -----------------------------
 TEXT_BLOCK_LABELS = {"text", "doc_title", "vision_footnote", "paragraph_title", "figure_title"}
+OVERLAY_TEXT_ROTATE = 0
 def poly_to_bbox(poly: list[list[float]]) -> list[float]:
     xs = [p[0] for p in poly]
     ys = [p[1] for p in poly]
@@ -402,6 +403,49 @@ def px_bbox_to_rect(
     return fitz.Rect(min(xs), min(ys), max(xs), max(ys))
 
 
+def get_rotated_textbox_rect(
+    rect: fitz.Rect,
+    page_rect: fitz.Rect,
+    rotate: int,
+) -> fitz.Rect:
+    rot = rotate % 360
+    if rot not in (90, 270):
+        return fitz.Rect(rect)
+
+    width = max(0.0, float(rect.width))
+    height = max(0.0, float(rect.height))
+    if width == 0.0 or height == 0.0:
+        return fitz.Rect(rect)
+
+    cx = (rect.x0 + rect.x1) * 0.5
+    cy = (rect.y0 + rect.y1) * 0.5
+    rotated = fitz.Rect(
+        cx - height * 0.5,
+        cy - width * 0.5,
+        cx + height * 0.5,
+        cy + width * 0.5,
+    )
+
+    dx = 0.0
+    dy = 0.0
+    if rotated.x0 < page_rect.x0:
+        dx = page_rect.x0 - rotated.x0
+    elif rotated.x1 > page_rect.x1:
+        dx = page_rect.x1 - rotated.x1
+    if rotated.y0 < page_rect.y0:
+        dy = page_rect.y0 - rotated.y0
+    elif rotated.y1 > page_rect.y1:
+        dy = page_rect.y1 - rotated.y1
+    if dx or dy:
+        rotated = fitz.Rect(
+            rotated.x0 + dx,
+            rotated.y0 + dy,
+            rotated.x1 + dx,
+            rotated.y1 + dy,
+        )
+    return rotated
+
+
 # -----------------------------
 # Paragraph: autowrap + shrink-to-fit
 # -----------------------------
@@ -414,30 +458,35 @@ def insert_paragraph_autowrap_shrink(
     min_fs: float,
     align: int = 0,
     clip_ellipsis: bool = False,
+    rotate: int = 0,
 ) -> dict[str, Any]:
     clean = normalize_paragraph_text(text)
     if not clean:
         return {"ok": True, "fontsize": max_fs, "rc": 0.0, "clipped": False}
 
+    textbox_rect = get_rotated_textbox_rect(rect, page.rect, rotate)
+
     def _measure_box(content: str, fontsize: float) -> tuple[float, fitz.Shape]:
         shape = page.new_shape()
         if fontfile:
             rc = shape.insert_textbox(
-                rect,
+                textbox_rect,
                 content,
                 fontfile=fontfile,
                 fontsize=fontsize,
                 color=(0, 0, 1),
                 align=align,
+                rotate=rotate,
             )
         else:
             rc = shape.insert_textbox(
-                rect,
+                textbox_rect,
                 content,
                 fontname="helv",
                 fontsize=fontsize,
                 color=(0, 0, 1),
                 align=align,
+                rotate=rotate,
             )
         return rc, shape
 
@@ -920,7 +969,8 @@ def overlay_one_page(
             dbg_shape.finish(color=(1, 0, 0), width=0.6)
 
         if draw_text:
-            fs_max = min(14.0, max(paragraph_min_fs, rect.height * 0.28))
+            layout_rect = get_rotated_textbox_rect(rect, page.rect, OVERLAY_TEXT_ROTATE)
+            fs_max = min(14.0, max(paragraph_min_fs, layout_rect.height * 0.28))
             info = insert_paragraph_autowrap_shrink(
                 page=page,
                 rect=rect,
@@ -930,6 +980,7 @@ def overlay_one_page(
                 min_fs=paragraph_min_fs,
                 align=0,
                 clip_ellipsis=paragraph_clip_ellipsis,
+                rotate=OVERLAY_TEXT_ROTATE,
             )
             if not info.get("ok", True):
                 print("[WARN] paragraph overflow:", "page=", page.number, "len=", len(content), "bbox_px=", bb_px)
@@ -943,7 +994,8 @@ def overlay_one_page(
                 dbg_shape.draw_rect(rect)
                 dbg_shape.finish(color=(1, 0.55, 0.1), width=0.6)
             if draw_text:
-                fs_max = min(12.0, max(paragraph_min_fs, rect.height * 0.8))
+                layout_rect = get_rotated_textbox_rect(rect, page.rect, OVERLAY_TEXT_ROTATE)
+                fs_max = min(12.0, max(paragraph_min_fs, layout_rect.height * 0.8))
                 insert_paragraph_autowrap_shrink(
                     page=page,
                     rect=rect,
@@ -953,6 +1005,7 @@ def overlay_one_page(
                     min_fs=paragraph_min_fs,
                     align=0,
                     clip_ellipsis=paragraph_clip_ellipsis,
+                    rotate=OVERLAY_TEXT_ROTATE,
                 )
 
     overall = data.get("overall_ocr_res", {}) or data.get("overall_ocr", {})
@@ -996,19 +1049,21 @@ def overlay_one_page(
             dbg_shape.finish(color=(0, 0.6, 0), width=0.6)
 
         if draw_text:
-            x0, y0, x1, y1 = rect.x0, rect.y0, rect.x1, rect.y1
-            fs = max(4.0, min(12.0, (y1 - y0) * 0.9))
-            pt = fitz.Point(x0, y1 - fs * 0.2)
-            page.insert_text(
-                pt,
-                text,
-                fontname="helv",
-                fontsize=fs,
-                color=(0, 0, 1),
-                overlay=True,
-                rotate=int(page.rotation),
+            layout_rect = get_rotated_textbox_rect(rect, page.rect, OVERLAY_TEXT_ROTATE)
+            fs_max = min(12.0, max(4.0, layout_rect.height * 0.9))
+            info = insert_paragraph_autowrap_shrink(
+                page=page,
+                rect=rect,
+                text=text,
+                fontfile=None,
+                max_fs=fs_max,
+                min_fs=4.0,
+                align=0,
+                clip_ellipsis=False,
+                rotate=OVERLAY_TEXT_ROTATE,
             )
-            hit += 1
+            if info.get("ok", True):
+                hit += 1
 
     if dbg_shape is not None:
         dbg_shape.commit()

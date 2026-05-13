@@ -137,6 +137,15 @@
                   <button id="alignRight" class="ghost" type="button" data-align="right"><i class="bi bi-justify-right"></i></button>
                 </div>
               </label>
+              <label>
+                <span>文字旋轉</span>
+                <div class="button-row button-row--tight">
+                  <button id="rotateLeft" class="ghost" type="button"><i class="bi bi-arrow-counterclockwise"></i></button>
+                  <!-- <button id="rotateReset" class="ghost" type="button">歸零</button> -->
+                  <button id="rotateRight" class="ghost" type="button"><i class="bi bi-arrow-clockwise"></i></button>
+                </div>
+                <p id="rotationSummary" class="hint">目前角度：0°</p>
+              </label>
               <div class="button-row">
                 <button id="regionTranslateBtn" class="ghost" type="button">補翻選區</button>
               </div>
@@ -283,7 +292,6 @@
                 class="context-textarea"
                 rows="10"
                 placeholder="請先點選一個翻譯文字框"
-                readonly
               ></textarea>
             </section>
             <section class="context-card">
@@ -295,6 +303,9 @@
                 placeholder="請先點選一個翻譯文字框"
                 disabled
               ></textarea>
+              <div class="button-row">
+                <button id="contextRetranslateBtn" class="primary" type="button" disabled>用修正後原始內容重新翻譯</button>
+              </div>
             </section>
           </div>
         </div>

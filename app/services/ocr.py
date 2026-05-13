@@ -30,6 +30,54 @@ FITZ_TEXT_ALIGN = {
 }
 
 
+def normalize_box_rotation(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    normalized = parsed % 360
+    return normalized if normalized in {0, 90, 180, 270} else 0
+
+
+def get_rotated_textbox_rect(rect: fitz.Rect, page_rect: fitz.Rect, rotate: int) -> fitz.Rect:
+    rot = normalize_box_rotation(rotate)
+    if rot not in (90, 270):
+        return fitz.Rect(rect)
+
+    width = max(0.0, float(rect.width))
+    height = max(0.0, float(rect.height))
+    if width == 0.0 or height == 0.0:
+        return fitz.Rect(rect)
+
+    cx = (rect.x0 + rect.x1) * 0.5
+    cy = (rect.y0 + rect.y1) * 0.5
+    rotated = fitz.Rect(
+        cx - height * 0.5,
+        cy - width * 0.5,
+        cx + height * 0.5,
+        cy + width * 0.5,
+    )
+
+    dx = 0.0
+    dy = 0.0
+    if rotated.x0 < page_rect.x0:
+        dx = page_rect.x0 - rotated.x0
+    elif rotated.x1 > page_rect.x1:
+        dx = page_rect.x1 - rotated.x1
+    if rotated.y0 < page_rect.y0:
+        dy = page_rect.y0 - rotated.y0
+    elif rotated.y1 > page_rect.y1:
+        dy = page_rect.y1 - rotated.y1
+    if dx or dy:
+        rotated = fitz.Rect(
+            rotated.x0 + dx,
+            rotated.y0 + dy,
+            rotated.x1 + dx,
+            rotated.y1 + dy,
+        )
+    return rotated
+
+
 def update_pp_json_should_translate(job_dir: Path) -> None:
     pp_dir = job_dir / "pp_json"
     if not pp_dir.exists():
@@ -90,7 +138,12 @@ def _dedupe_box_signature(box: dict[str, Any]) -> tuple[Any, ...] | None:
             return None
     else:
         return None
-    return coords + (text, deleted, normalize_text_align(box.get("text_align")))
+    return coords + (
+        text,
+        deleted,
+        normalize_text_align(box.get("text_align")),
+        normalize_box_rotation(box.get("rotation")),
+    )
 
 
 def normalize_text_align(value: Any) -> str:
@@ -116,6 +169,7 @@ def load_page_data(
         font_sizes: list[float] = []
         colors: list[str] = []
         alignments: list[str] = []
+        rotations: list[int] = []
         box_ids: list[int] = []
         no_clips: list[bool] = []
         auto_generated_flags: list[bool] = []
@@ -145,6 +199,7 @@ def load_page_data(
             font_sizes.append(float(box.get("font_size") or 0.0))
             colors.append(str(box.get("color") or state.DEFAULT_TEXT_COLOR))
             alignments.append(normalize_text_align(box.get("text_align")))
+            rotations.append(normalize_box_rotation(box.get("rotation")))
             box_ids.append(int(box.get("id") or len(box_ids)))
             no_clips.append(bool(box.get("no_clip")))
             auto_generated_flags.append(bool(box.get("auto_generated", True)))
@@ -161,6 +216,7 @@ def load_page_data(
         font_sizes = []
         colors = []
         alignments = []
+        rotations = []
         box_ids = []
         no_clips = []
         auto_generated_flags = []
@@ -189,6 +245,7 @@ def load_page_data(
         "font_sizes": font_sizes,
         "colors": colors,
         "alignments": alignments,
+        "rotations": rotations,
         "box_ids": box_ids,
         "no_clips": no_clips,
         "auto_generated_flags": auto_generated_flags,
@@ -658,7 +715,6 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
         sx = page_w / img_w
         sy = page_h / img_h
 
-        shape = page.new_shape()
         dbg_shape = page.new_shape() if debug_boxes else None
         for box in page_edits.get("boxes", []):
             if not isinstance(box, dict) or box.get("deleted"):
@@ -695,76 +751,43 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
                 font_size_px = state.DEFAULT_FONT_SIZE_PX
             font_size_pt = font_size_px * (page_h / img_h)
             color = hex_to_rgb(box.get("color"))
-            rotate = rotation if rotation else 0
+            rotate = normalize_box_rotation(box.get("rotation"))
+            pdf_rotate = (360 - rotate) % 360
             no_clip = bool(box.get("no_clip"))
             text_align = normalize_text_align(box.get("text_align"))
+            # Editor-side rotation already updates the stored bbox geometry.
+            # Use the saved rectangle directly so the generated PDF matches
+            # the on-screen editor position and size.
+            textbox_rect = fitz.Rect(rect)
+            insert_kwargs = {
+                "fontsize": font_size_pt,
+                "color": color,
+                "align": FITZ_TEXT_ALIGN[text_align],
+                # CSS rotation in the editor uses screen coordinates; PyMuPDF's
+                # textbox rotation is mirrored for 90/270, so convert here.
+                "rotate": pdf_rotate,
+            }
+            if fontfile:
+                insert_kwargs["fontfile"] = fontfile
+            else:
+                insert_kwargs["fontname"] = "helv"
 
-            sx = page_w / img_w
-            sy = page_h / img_h
-            v_w = w * sx
-            v_h = h * sy
-            v_y = y * sy
-
-            lines = wrap_text_lines(text, v_w, font_obj, font_size_pt)
-            if not lines:
-                lines = [text]
-
-            line_height = max(1.0, font_size_pt * 1.2)
-
-            cursor_v_y = v_y + line_height
-            max_lines_in_box = max(1, int(v_h // line_height))
-            allow_overflow = no_clip or len(lines) > max_lines_in_box
-            max_v_y = v_y + v_h if not allow_overflow else page_h - line_height * 0.2
-
-            for idx, line in enumerate(lines):
-                overflow = cursor_v_y > max_v_y
-                if overflow and idx != 0:
-                    break
-
-                y_cursor_px = cursor_v_y / sy
-                text_width_pt = font_obj.text_length(line, font_size_pt)
-                max_offset_pt = max(0.0, v_w - text_width_pt)
-                if text_align == TEXT_ALIGN_CENTER:
-                    x_offset_pt = max_offset_pt / 2
-                elif text_align == TEXT_ALIGN_RIGHT:
-                    x_offset_pt = max_offset_pt
-                else:
-                    x_offset_pt = 0.0
-                x_cursor_px = x + (x_offset_pt / sx if sx else 0.0)
-                pt_unrot = px_point_to_pdf_pt(
-                    x_cursor_px,
-                    y_cursor_px,
-                    img_w,
-                    img_h,
-                    page_w,
-                    page_h,
-                    rotation,
-                )
-                baseline = fitz.Point(pt_unrot[0], pt_unrot[1])
-
-                if fontfile:
-                    shape.insert_text(
-                        baseline,
-                        line,
-                        fontfile=fontfile,
-                        fontsize=font_size_pt,
-                        color=color,
-                        rotate=rotate,
-                    )
-                else:
-                    shape.insert_text(
-                        baseline,
-                        line,
-                        fontname="helv",
-                        fontsize=font_size_pt,
-                        color=color,
-                        rotate=rotate,
-                    )
-                if overflow:
-                    break
-                cursor_v_y += line_height
-
-        shape.commit()
+            box_shape = page.new_shape()
+            rc = box_shape.insert_textbox(textbox_rect, text, **insert_kwargs)
+            if rc < 0 and no_clip:
+                deficit = abs(float(rc))
+                expanded_rect = fitz.Rect(textbox_rect)
+                if rotate == 0:
+                    expanded_rect.y1 += deficit
+                elif rotate == 90:
+                    expanded_rect.x1 += deficit
+                elif rotate == 180:
+                    expanded_rect.y0 -= deficit
+                elif rotate == 270:
+                    expanded_rect.x0 -= deficit
+                box_shape = page.new_shape()
+                box_shape.insert_textbox(expanded_rect, text, **insert_kwargs)
+            box_shape.commit()
         if dbg_shape is not None:
             dbg_shape.commit()
 

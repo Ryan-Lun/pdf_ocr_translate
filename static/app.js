@@ -36,6 +36,7 @@ const historyState = {
 
 let controlsBound = false;
 let contextTranslatedEditKey = null;
+let contextSourceEditKey = null;
 
 const statusEl = document.getElementById("status");
 const fontSizeEl = document.getElementById("fontSize");
@@ -44,6 +45,9 @@ const fontColorEl = document.getElementById("fontColor");
 const alignLeftBtn = document.getElementById("alignLeft");
 const alignCenterBtn = document.getElementById("alignCenter");
 const alignRightBtn = document.getElementById("alignRight");
+const rotateLeftBtn = document.getElementById("rotateLeft");
+const rotateResetBtn = document.getElementById("rotateReset");
+const rotateRightBtn = document.getElementById("rotateRight");
 const deleteBtn = document.getElementById("deleteBox");
 const addBoxBtn = document.getElementById("addBox");
 const copyBoxBtn = document.getElementById("copyBox");
@@ -95,6 +99,7 @@ const applyParagraphTermBtn = document.getElementById("applyParagraphTermBtn");
 const contextSummaryEl = document.getElementById("contextSummary");
 const contextSourceTextEl = document.getElementById("contextSourceText");
 const contextTranslatedTextEl = document.getElementById("contextTranslatedText");
+const contextRetranslateBtn = document.getElementById("contextRetranslateBtn");
 const viewerEl = document.querySelector(".viewer");
 const editedLink = document.getElementById("editedPdfLink");
 const previewEl = document.getElementById("pdfPreview");
@@ -152,6 +157,13 @@ function normalizeTextAlign(value) {
   return ["left", "center", "right"].includes(value) ? value : "left";
 }
 
+function normalizeBoxRotation(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return 0;
+  const normalized = ((parsed % 360) + 360) % 360;
+  return [0, 90, 180, 270].includes(normalized) ? normalized : 0;
+}
+
 function syncAlignmentButtons(value = "left") {
   const current = normalizeTextAlign(value);
   alignmentButtons.forEach((button) => {
@@ -161,6 +173,12 @@ function syncAlignmentButtons(value = "left") {
     button.classList.toggle("ghost", !active);
     button.setAttribute("aria-pressed", active ? "true" : "false");
   });
+}
+
+function syncRotationSummary(value = 0) {
+  const summaryEl = document.getElementById("rotationSummary");
+  if (!summaryEl) return;
+  summaryEl.textContent = `目前角度：${normalizeBoxRotation(value)}°`;
 }
 
 function setThumbsCollapsed(collapsed) {
@@ -1127,7 +1145,59 @@ function setContextInspectorEmpty(message = "請先點選一個翻譯文字框")
     contextTranslatedTextEl.placeholder = message;
     contextTranslatedTextEl.disabled = true;
   }
+  if (contextRetranslateBtn) {
+    contextRetranslateBtn.classList.remove("ghost");
+    contextRetranslateBtn.classList.add("primary", "retranslate-btn--idle");
+    contextRetranslateBtn.classList.remove("retranslate-btn--ready", "retranslate-btn--busy");
+    contextRetranslateBtn.textContent = "請先選取單一文字框";
+    contextRetranslateBtn.disabled = true;
+  }
   contextTranslatedEditKey = null;
+  contextSourceEditKey = null;
+}
+
+function isContextSourceDirty(selected = null) {
+  if (!contextSourceTextEl) return false;
+  const current = String(contextSourceTextEl.value || "").trim();
+  if (!current) return false;
+  const boxSelection = selected || getSingleSelectedBox();
+  if (!boxSelection) return false;
+  const original = String(boxSelection.box?.tmSourceText || "").trim();
+  return current !== original;
+}
+
+function syncContextRetranslateButton(selected = null) {
+  if (!contextRetranslateBtn) return;
+  const boxSelection = selected || getSingleSelectedBox();
+  let stateName = "idle";
+  let label = "請先選取單一文字框";
+  const dirty = isContextSourceDirty(selected);
+  if (!boxSelection) {
+    stateName = getSelectedBoxes().length > 1 ? "multi" : "idle";
+    label = stateName === "multi" ? "多選時無法重新翻譯" : "請先選取單一文字框";
+  } else if (!String(contextSourceTextEl?.value || "").trim()) {
+    stateName = "empty";
+    label = "請先輸入修正後原始內容";
+  } else if (!dirty) {
+    stateName = "clean";
+    label = "修改原始內容後可重新翻譯";
+  } else {
+    stateName = "ready";
+    label = "用修正後原始內容重新翻譯";
+  }
+  contextRetranslateBtn.classList.remove(
+    "retranslate-btn--idle",
+    "retranslate-btn--ready",
+    "retranslate-btn--busy",
+    "ghost",
+    "primary",
+  );
+  contextRetranslateBtn.classList.add(stateName === "ready" ? "primary" : "ghost");
+  contextRetranslateBtn.classList.add(
+    stateName === "ready" ? "retranslate-btn--ready" : "retranslate-btn--idle",
+  );
+  contextRetranslateBtn.textContent = label;
+  contextRetranslateBtn.disabled = stateName !== "ready";
 }
 
 function syncContextInspector() {
@@ -1149,7 +1219,11 @@ function syncContextInspector() {
       contextTranslatedTextEl.placeholder = "多選時不可直接編輯譯文，請改為單選";
       contextTranslatedTextEl.disabled = true;
     }
+    if (contextRetranslateBtn) {
+      contextRetranslateBtn.disabled = true;
+    }
     contextTranslatedEditKey = null;
+    contextSourceEditKey = null;
     return;
   }
 
@@ -1158,10 +1232,12 @@ function syncContextInspector() {
   if (contextSummaryEl) contextSummaryEl.textContent = `第 ${Number(page.pageIndex) + 1} 頁選取中`;
   if (contextSourceTextEl) {
     const sourceValue = String(box.tmSourceText || "").trim();
-    if (contextSourceTextEl.value !== sourceValue) {
+    if (document.activeElement !== contextSourceTextEl || contextSourceEditKey !== selectedKey) {
+      contextSourceTextEl.value = sourceValue;
+    } else if (contextSourceTextEl.value !== sourceValue) {
       contextSourceTextEl.value = sourceValue;
     }
-    contextSourceTextEl.placeholder = "翻譯前原始內容";
+    contextSourceTextEl.placeholder = "可在此修正原始內容";
     contextSourceTextEl.disabled = false;
   }
   if (contextTranslatedTextEl) {
@@ -1174,7 +1250,64 @@ function syncContextInspector() {
     contextTranslatedTextEl.placeholder = "可在此直接編輯目前譯文";
     contextTranslatedTextEl.disabled = false;
   }
+  syncContextRetranslateButton(selected[0]);
   contextTranslatedEditKey = selectedKey;
+  contextSourceEditKey = selectedKey;
+}
+
+async function retranslateSelectedBoxFromSource() {
+  const selected = getSingleSelectedBox();
+  const jobId = document.body.dataset.jobId;
+  if (!jobId || !selected || !contextSourceTextEl) return;
+  const sourceText = String(contextSourceTextEl.value || "").trim();
+  if (!sourceText) {
+    setStatus("請先輸入修正後的原始內容");
+    return;
+  }
+  const saved = await saveEdits(false, { silent: true });
+  if (!saved) {
+    setStatus("重翻前儲存失敗");
+    return;
+  }
+  if (contextRetranslateBtn) {
+    contextRetranslateBtn.classList.remove("ghost", "retranslate-btn--idle", "retranslate-btn--ready");
+    contextRetranslateBtn.classList.add("primary", "retranslate-btn--busy");
+    contextRetranslateBtn.disabled = true;
+    contextRetranslateBtn.textContent = "重新翻譯中...";
+  }
+  setStatus(`正在重翻第 ${selected.page.pageIndex + 1} 頁目前文字框...`);
+  try {
+    const res = await fetch(`/api/job/${jobId}/retranslate-box`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        page_index_0based: selected.page.pageIndex,
+        box_id: selected.box.id,
+        source_text: sourceText,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setStatus(body.error ? `重翻失敗：${body.error}` : "重翻失敗");
+      return;
+    }
+    await loadJobData(jobId, { preserveActivePage: true });
+    const reselectedPageIdx = state.pages.findIndex((page) => page.pageIndex === selected.page.pageIndex);
+    if (reselectedPageIdx >= 0) {
+      const reselectedBoxIdx = state.pages[reselectedPageIdx].boxes.findIndex((box) => box.id === selected.box.id);
+      if (reselectedBoxIdx >= 0) {
+        setSelection(reselectedPageIdx, reselectedBoxIdx, false);
+      }
+    }
+    setStatus("已使用修正後原始內容重新翻譯目前文字框");
+  } catch (error) {
+    setStatus("重翻失敗");
+  } finally {
+    if (contextRetranslateBtn) {
+      contextRetranslateBtn.classList.remove("retranslate-btn--busy");
+      syncContextInspector();
+    }
+  }
 }
 
 function applySelectionClasses() {
@@ -1193,6 +1326,7 @@ function syncInspectorFromBox(box) {
   if (fontSizeNumberEl) fontSizeNumberEl.value = sizeValue;
   if (fontColorEl) fontColorEl.value = box.color;
   syncAlignmentButtons(box.align);
+  syncRotationSummary(box.rotation);
   syncContextInspector();
 }
 
@@ -1201,6 +1335,7 @@ function clearSelection() {
   state.selectedBoxes.clear();
   applySelectionClasses();
   syncAlignmentButtons("left");
+  syncRotationSummary(0);
   syncContextInspector();
 }
 
@@ -1212,6 +1347,7 @@ function cloneBoxData(box) {
     fontSize: box.fontSize,
     color: box.color,
     align: normalizeTextAlign(box.align),
+    rotation: normalizeBoxRotation(box.rotation),
     noClip: !!box.noClip,
     autoGenerated: !!box.autoGenerated,
     tmSourceText: box.tmSourceText || "",
@@ -1220,6 +1356,41 @@ function cloneBoxData(box) {
     tmDocumentMode: box.tmDocumentMode || "",
     deleted: !!box.deleted,
   };
+}
+
+function rotateBoxGeometry(box, nextRotation, page) {
+  const previous = normalizeBoxRotation(box.rotation);
+  const target = normalizeBoxRotation(nextRotation);
+  if ((previous % 180) === (target % 180)) {
+    box.rotation = target;
+    return;
+  }
+
+  const cx = box.bbox.x + (box.bbox.w / 2);
+  const cy = box.bbox.y + (box.bbox.h / 2);
+  const nextW = box.bbox.h;
+  const nextH = box.bbox.w;
+  let nextX = cx - (nextW / 2);
+  let nextY = cy - (nextH / 2);
+
+  const pageWidth = page?.imageSize?.[0] ?? null;
+  const pageHeight = page?.imageSize?.[1] ?? null;
+  if (Number.isFinite(pageWidth)) {
+    nextX = Math.max(0, Math.min(nextX, Math.max(0, pageWidth - nextW)));
+  } else {
+    nextX = Math.max(0, nextX);
+  }
+  if (Number.isFinite(pageHeight)) {
+    nextY = Math.max(0, Math.min(nextY, Math.max(0, pageHeight - nextH)));
+  } else {
+    nextY = Math.max(0, nextY);
+  }
+
+  box.bbox.x = nextX;
+  box.bbox.y = nextY;
+  box.bbox.w = nextW;
+  box.bbox.h = nextH;
+  box.rotation = target;
 }
 
 function findBox(pageIdx, boxId) {
@@ -1235,6 +1406,7 @@ function applyBoxData(pageIdx, boxId, data) {
   box.fontSize = data.fontSize;
   box.color = data.color;
   box.align = normalizeTextAlign(data.align);
+  box.rotation = normalizeBoxRotation(data.rotation);
   box.noClip = !!data.noClip;
   box.autoGenerated = !!data.autoGenerated;
   box.tmSourceText = data.tmSourceText || "";
@@ -2046,6 +2218,7 @@ function buildState(data, options = {}) {
       const fontSize = Number(page.font_sizes?.[index]);
       const color = page.colors?.[index] ?? "#0000ff";
       const align = normalizeTextAlign(page.alignments?.[index]);
+      const rotation = normalizeBoxRotation(page.rotations?.[index]);
       const id = page.box_ids?.[index] ?? index;
       const noClip = Boolean(page.no_clips?.[index]);
       const autoGenerated = Boolean(page.auto_generated_flags?.[index]);
@@ -2060,6 +2233,7 @@ function buildState(data, options = {}) {
         fontSize: fontSize > 0 ? fontSize : baseSize,
         color,
         align,
+        rotation,
         noClip,
         autoGenerated,
         tmSourceText,
@@ -2115,23 +2289,43 @@ function updateBoxElement(page, box) {
   const top = box.bbox.y * scale;
   const width = box.bbox.w * scale;
   const baseHeight = box.bbox.h * scale;
+  const rotation = normalizeBoxRotation(box.rotation);
   const textEl = box.element.querySelector(".text");
   const expanded = !!box.noClip || !!box._isExpanded;
   let height = baseHeight;
+  const insetX = 4;
+  const insetY = 2;
+  const innerWidth = Math.max(1, width - insetX * 2);
+  const innerHeight = Math.max(1, baseHeight - insetY * 2);
 
   box.element.style.left = `${left}px`;
   box.element.style.top = `${top}px`;
   box.element.style.width = `${width}px`;
   if (textEl) {
+    textEl.style.left = `${insetX}px`;
+    textEl.style.top = `${insetY}px`;
     textEl.style.fontSize = `${box.fontSize * scale}px`;
     textEl.style.textAlign = normalizeTextAlign(box.align);
+    const horizontal = rotation % 180 === 0;
+    const layoutWidth = horizontal ? innerWidth : innerHeight;
+    const layoutHeight = horizontal ? innerHeight : innerWidth;
+    textEl.style.width = `${layoutWidth}px`;
+    textEl.style.height = expanded && horizontal ? "auto" : `${layoutHeight}px`;
+    textEl.classList.toggle("is-rotated", rotation !== 0);
+    if (rotation === 90) {
+      textEl.style.transform = `translateX(${layoutHeight}px) rotate(90deg)`;
+    } else if (rotation === 180) {
+      textEl.style.transform = `translate(${layoutWidth}px, ${layoutHeight}px) rotate(180deg)`;
+    } else if (rotation === 270) {
+      textEl.style.transform = `translateY(${layoutWidth}px) rotate(270deg)`;
+    } else {
+      textEl.style.transform = "none";
+    }
   }
   if (expanded && textEl) {
     const previousHeight = textEl.style.height;
     textEl.style.height = "auto";
-    const boxStyle = window.getComputedStyle(box.element);
-    const paddingY = Number.parseFloat(boxStyle.paddingTop || "0") + Number.parseFloat(boxStyle.paddingBottom || "0");
-    height = Math.max(baseHeight, textEl.scrollHeight + paddingY);
+    height = Math.max(baseHeight, textEl.scrollHeight + insetY * 2);
     textEl.style.height = previousHeight;
   }
   box.element.style.height = `${height}px`;
@@ -2878,6 +3072,11 @@ function createBoxElement(pageIdx, boxIdx) {
     state.lastCtrlKey = false;
     beginBoxTextEdit(box);
   });
+
+  textEl.addEventListener("pointerdown", (event) => {
+    state.lastCtrlKey = event.ctrlKey;
+    selectBox(pageIdx, boxIdx, event.ctrlKey);
+  });
   
   textEl.addEventListener("input", () => {
     setBoxText(page, box, textEl.innerText);
@@ -2941,6 +3140,9 @@ function addNewBox() {
     fontSize: Math.max(10, Math.min(28, defaultH * 0.6)),
     color: "#0000ff",
     align: "left",
+    rotation: state.selected && state.selected.pageIdx === targetPageIdx
+      ? normalizeBoxRotation(page.boxes[state.selected.boxIdx]?.rotation)
+      : 0,
     noClip: false,
     autoGenerated: false,
     deleted: false,
@@ -2969,6 +3171,7 @@ function buildSavePayload() {
         no_clip: !!box.noClip,
         color: box.color,
         text_align: normalizeTextAlign(box.align),
+        rotation: normalizeBoxRotation(box.rotation),
         auto_generated: !!box.autoGenerated,
         tm_source_text: box.tmSourceText || "",
         tm_source_normalized: box.tmSourceNormalized || "",
@@ -3388,6 +3591,42 @@ function bindControls() {
     });
   });
 
+  const applyRotationDelta = (delta = 0, absolute = null) => {
+    const selected = getSelectedBoxes();
+    if (!selected.length) return;
+    const updates = selected.map(({ pageIdx, box }) => ({
+      pageIdx,
+      boxId: box.id,
+      before: cloneBoxData(box),
+    }));
+    selected.forEach(({ page, box }) => {
+      const current = normalizeBoxRotation(box.rotation);
+      const next = absolute == null
+        ? normalizeBoxRotation(current + delta)
+        : normalizeBoxRotation(absolute);
+      rotateBoxGeometry(box, next, page);
+      updateBoxElement(page, box);
+    });
+    const finalized = updates.map((update) => {
+      const current = findBox(update.pageIdx, update.boxId);
+      return current ? { ...update, after: cloneBoxData(current) } : null;
+    }).filter(Boolean).filter((update) => (
+      update.before.rotation !== update.after.rotation
+      || update.before.bbox.x !== update.after.bbox.x
+      || update.before.bbox.y !== update.after.bbox.y
+      || update.before.bbox.w !== update.after.bbox.w
+      || update.before.bbox.h !== update.after.bbox.h
+    ));
+    if (finalized.length) {
+      pushAction({ type: "update_boxes", updates: finalized });
+      syncInspectorFromBox(selected[0].box);
+    }
+  };
+
+  rotateLeftBtn?.addEventListener("click", () => applyRotationDelta(-90));
+  rotateRightBtn?.addEventListener("click", () => applyRotationDelta(90));
+  rotateResetBtn?.addEventListener("click", () => applyRotationDelta(0, 0));
+
   if (pageSelectEl) {
     pageSelectEl.addEventListener("change", () => {
       const idx = Number.parseInt(pageSelectEl.value, 10);
@@ -3750,6 +3989,23 @@ function bindControls() {
       }
       commitBoxTextEdit(selected.pageIdx, selected.boxIdx, contextTranslatedTextEl.value);
       syncContextInspector();
+    });
+  }
+
+  if (contextSourceTextEl) {
+    contextSourceTextEl.addEventListener("focus", () => {
+      const selected = getSingleSelectedBox();
+      if (!selected) return;
+      contextSourceEditKey = boxKey(selected.pageIdx, selected.boxIdx);
+    });
+    contextSourceTextEl.addEventListener("input", () => {
+      syncContextRetranslateButton();
+    });
+  }
+
+  if (contextRetranslateBtn) {
+    contextRetranslateBtn.addEventListener("click", () => {
+      retranslateSelectedBoxFromSource();
     });
   }
 

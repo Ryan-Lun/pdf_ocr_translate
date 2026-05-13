@@ -332,6 +332,7 @@ def test_save_job_writes_form_tm_from_editor_edits(client, tmp_path, monkeypatch
     job_dir.mkdir(parents=True)
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
 
     (job_dir / "batch_config.json").write_text(
         json.dumps({"document_mode": "form", "target_lang": "en"}, ensure_ascii=False, indent=2),
@@ -352,6 +353,7 @@ def test_save_job_writes_form_tm_from_editor_edits(client, tmp_path, monkeypatch
                         "no_clip": False,
                         "color": "#0000ff",
                         "text_align": "right",
+                        "rotation": 90,
                         "auto_generated": True,
                         "tm_source_text": "表格內容",
                         "tm_source_normalized": "表格內容",
@@ -372,6 +374,7 @@ def test_save_job_writes_form_tm_from_editor_edits(client, tmp_path, monkeypatch
     assert resp.status_code == 200
     saved = json.loads((job_dir / "edits.json").read_text(encoding="utf-8"))
     assert saved["pages"][0]["boxes"][0]["text_align"] == "right"
+    assert saved["pages"][0]["boxes"][0]["rotation"] == 90
 
     memory = json.loads(state.TRANSLATION_MEMORY_PATH.read_text(encoding="utf-8"))
     entry = memory["form|en|表格內容"]
@@ -550,6 +553,7 @@ def test_retranslate_region_replaces_overlapping_auto_boxes_only(client, tmp_pat
     assert boxes[2]["auto_generated"] is True
     assert boxes[2]["no_clip"] is True
     assert boxes[2]["text_align"] == "left"
+    assert boxes[2]["rotation"] == 0
     assert boxes[2]["source"] == "manual_region_retranslate"
     assert boxes[2]["tm_source_text"] == "補翻來源第一行\n補翻來源第二行"
 
@@ -586,10 +590,89 @@ def test_region_ocr_preview_returns_image_and_ocr_text(client, tmp_path, monkeyp
     assert resp.status_code == 200
     payload = resp.get_json()
     assert payload["ok"] is True
-    assert payload["ocr_lines"] == ["第一行", "第二行"]
-    assert payload["source_text"] == "第一行\n第二行"
+    assert payload["ocr_lines"] == ["第一行第二行"]
+    assert payload["source_text"] == "第一行第二行"
     assert payload["image_data_url"] == "data:image/png;base64,AAA"
     assert payload["ocr_items"][0]["text"] == "第一行"
+
+
+def test_retranslate_box_updates_only_target_box(client, tmp_path, monkeypatch):
+    job_id = "f" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+
+    (job_dir / "batch_config.json").write_text(
+        json.dumps(
+            {
+                "document_mode": "general_force",
+                "target_lang": "en",
+                "model": "fake-model",
+                "system_prompt": "translate",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (job_dir / "edits.json").write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page_index_0based": 0,
+                        "boxes": [
+                            {
+                                "id": 200001,
+                                "deleted": False,
+                                "bbox": {"x": 10, "y": 10, "w": 80, "h": 20},
+                                "text": "Old translation",
+                                "auto_generated": True,
+                                "tm_source_text": "舊原文",
+                            },
+                            {
+                                "id": 200002,
+                                "deleted": False,
+                                "bbox": {"x": 10, "y": 40, "w": 80, "h": 20},
+                                "text": "Keep me",
+                                "auto_generated": True,
+                                "tm_source_text": "另一段",
+                            },
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.batch.translate_texts_for_region",
+        lambda texts, **kwargs: ["Updated translation"],
+    )
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.ocr.apply_edits_to_pdf",
+        lambda current_job_id, current_job_dir, edits: Path(current_job_dir) / "edited.pdf",
+    )
+
+    resp = client.post(
+        f"/api/job/{job_id}/retranslate-box",
+        json={
+            "page_index_0based": 0,
+            "box_id": 200001,
+            "source_text": "修正後原文",
+        },
+    )
+
+    assert resp.status_code == 200
+    saved = json.loads((job_dir / "edits.json").read_text(encoding="utf-8"))
+    boxes = saved["pages"][0]["boxes"]
+    assert boxes[0]["text"] == "Updated translation"
+    assert boxes[0]["tm_source_text"] == "修正後原文"
+    assert boxes[0]["source"] == "manual_box_retranslate"
+    assert boxes[1]["text"] == "Keep me"
 
 
 def test_glossary_retranslate_updates_matching_boxes_only_text(client, tmp_path, monkeypatch):

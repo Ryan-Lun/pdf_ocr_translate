@@ -775,6 +775,7 @@ def build_edits_payload_from_translations(
                         "text": text,
                         "deleted": False,
                         "auto_generated": True,
+                        "rotation": 0,
                         **build_tm_meta(rec_texts[idx] if idx < len(rec_texts) else ""),
                     }
                 )
@@ -845,6 +846,7 @@ def build_edits_payload_from_translations(
                     "text": text,
                     "deleted": False,
                     "auto_generated": True,
+                    "rotation": 0,
                     **build_tm_meta(rec_texts[idx] if idx < len(rec_texts) else ""),
                 }
             )
@@ -893,6 +895,7 @@ def build_edits_payload_from_translations(
                         "deleted": False,
                         "no_clip": True,
                         "auto_generated": True,
+                        "rotation": 0,
                         **build_tm_meta(block.get("text", "")),
                     }
                 )
@@ -933,6 +936,7 @@ def build_edits_payload_from_translations(
                         "text": cell_text,
                         "deleted": False,
                         "auto_generated": True,
+                        "rotation": 0,
                         **build_tm_meta(cell.get("merged_text", "")),
                     }
                 )
