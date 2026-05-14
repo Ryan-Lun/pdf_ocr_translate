@@ -127,6 +127,7 @@ DOC_STATUS_NAME = "document_status.json"
 ALLOWED_EXTENSIONS = {".pdf"}
 
 FONT_CANDIDATES = [
+    str(BASE_DIR / "assets" / "fonts" / "NotoSansTC-Regular.ttf"),
     r"C:\\Windows\\Fonts\\msjh.ttf",
     r"C:\\Windows\\Fonts\\msjhbd.ttf",
     r"C:\\Windows\\Fonts\\msjhl.ttf",

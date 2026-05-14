@@ -19,7 +19,9 @@ from lang_utils import describe_target_language, traditional_chinese_instruction
 # -----------------------------
 # Font (Windows CJK default)
 # -----------------------------
-DEFAULT_FONTFILE = r"C:\Windows\Fonts\msjh.ttc"
+DEFAULT_FONTFILE = str(
+    (Path(__file__).resolve().parents[1] / "assets" / "fonts" / "NotoSansTC-Regular.ttf")
+)
 
 try:
     from ocr_pipeline.merge_logic import merge_keep_original_json

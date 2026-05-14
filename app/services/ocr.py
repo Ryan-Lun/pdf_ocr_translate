@@ -310,6 +310,7 @@ def insert_textbox_overflow_visible(
     text: str,
     *,
     fontfile: str | None,
+    fontname: str | None,
     fontsize: float,
     color: tuple[float, float, float],
     align: int,
@@ -322,7 +323,9 @@ def insert_textbox_overflow_visible(
         "align": align,
         "rotate": rotate,
     }
-    if fontfile:
+    if fontname:
+        base_kwargs["fontname"] = fontname
+    elif fontfile:
         base_kwargs["fontfile"] = fontfile
     else:
         base_kwargs["fontname"] = "helv"
@@ -748,11 +751,8 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
     }
 
     fontfile = resolve_fontfile()
-    try:
-        font_obj = fitz.Font(fontfile=fontfile) if fontfile else fitz.Font("helv")
-    except RuntimeError:
-        font_obj = fitz.Font("helv")
-        fontfile = None
+    if not fontfile:
+        logger.warning("No CJK font file found for edited PDF output; falling back to helv.")
     debug_boxes = os.getenv("DEBUG_EDIT_BOXES") == "1"
     doc = fitz.open(pdf_path)
     for page_idx in range(doc.page_count):
@@ -772,6 +772,14 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
             continue
         sx = page_w / img_w
         sy = page_h / img_h
+        page_fontname: str | None = None
+        if fontfile:
+            try:
+                page.insert_font(fontname="NotoSansTC", fontfile=fontfile)
+                page_fontname = "NotoSansTC"
+            except RuntimeError as exc:
+                logger.warning("Failed to register PDF edit font %s: %s", fontfile, exc)
+                page_fontname = None
 
         dbg_shape = page.new_shape() if debug_boxes else None
         for box in page_edits.get("boxes", []):
@@ -821,6 +829,7 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
                 textbox_rect,
                 text,
                 fontfile=fontfile,
+                fontname=page_fontname,
                 fontsize=font_size_pt,
                 color=color,
                 align=FITZ_TEXT_ALIGN[text_align],
