@@ -8,6 +8,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from lang_utils import (
+    describe_target_language,
+    normalize_lang_code,
+    traditional_chinese_instruction,
+)
+
 from . import document_terms, glossary, jobs, ocr, openai_config, state, translation_memory
 
 logger = logging.getLogger(__name__)
@@ -92,10 +98,73 @@ def _contains_english(text: str) -> bool:
     return bool(re.search(r"[A-Za-z]", text or ""))
 
 
+def _lang_family(lang: str) -> str:
+    normalized = normalize_lang_code(lang)
+    if normalized == "zh":
+        return "cjk"
+    if normalized == "en":
+        return "latin"
+    return "other"
+
+
+def _text_matches_lang(text: str, lang: str) -> bool:
+    normalized = normalize_lang_code(lang)
+    if normalized == "zh":
+        return _contains_cjk(text)
+    if normalized == "en":
+        return _contains_english(text)
+    return _contains_cjk(text) or _contains_english(text)
+
+
+def _infer_source_lang_for_target(target_lang: str) -> str:
+    family = _lang_family(target_lang)
+    if family == "cjk":
+        return "en"
+    if family == "latin":
+        return "zh"
+    return "auto"
+
+
+def should_translate_text(
+    text: str,
+    *,
+    source_lang: str = "auto",
+    target_lang: str = "en",
+) -> bool:
+    normalized_text = normalize_for_translation(str(text or ""))
+    if not normalized_text or is_numeric_only(normalized_text):
+        return False
+    normalized_source = normalize_lang_code(source_lang)
+    if normalized_source != "auto":
+        return _text_matches_lang(normalized_text, normalized_source)
+    inferred_source = _infer_source_lang_for_target(target_lang)
+    return _text_matches_lang(normalized_text, inferred_source)
+
+
+def is_mixed_source_target_text(
+    text: str,
+    *,
+    source_lang: str = "auto",
+    target_lang: str = "en",
+) -> bool:
+    normalized_text = normalize_for_translation(str(text or ""))
+    if not normalized_text:
+        return False
+    normalized_source = normalize_lang_code(source_lang)
+    if normalized_source == "auto":
+        normalized_source = _infer_source_lang_for_target(target_lang)
+    return _text_matches_lang(normalized_text, normalized_source) and _text_matches_lang(
+        normalized_text,
+        target_lang,
+    )
+
+
 def should_translate_merged_cell(cell: dict[str, Any], document_mode: str) -> bool:
     mode = resolve_document_mode(document_mode)
     text = normalize_for_translation(str(cell.get("merged_text") or ""))
-    if not _contains_cjk(text):
+    target_lang = str(cell.get("_target_lang") or "en")
+    source_lang = str(cell.get("_source_lang") or "auto")
+    if not should_translate_text(text, source_lang=source_lang, target_lang=target_lang):
         return False
     if mode == "general_force":
         return True
@@ -103,7 +172,7 @@ def should_translate_merged_cell(cell: dict[str, Any], document_mode: str) -> bo
         return False
     if mode == "form":
         return True
-    return _contains_cjk(text) and not _contains_english(text)
+    return not is_mixed_source_target_text(text, source_lang=source_lang, target_lang=target_lang)
 
 
 def normalize_text(text: str) -> str:
@@ -279,8 +348,10 @@ def should_translate_structured_block(
         return False
     mode = resolve_document_mode(document_mode)
     text = normalize_for_translation(str(block.get("text") or ""))
+    target_lang = str((block or {}).get("_target_lang") or "en")
+    source_lang = str((block or {}).get("_source_lang") or "auto")
     if mode == "general_force":
-        return _contains_cjk(text)
+        return should_translate_text(text, source_lang=source_lang, target_lang=target_lang)
     if not block.get("should_translate"):
         return False
     if not merged_only:
@@ -333,6 +404,7 @@ def translate_texts_for_region(
     texts: list[str],
     *,
     target_lang: str,
+    source_lang: str = "auto",
     model_name: str,
     system_prompt: str | None = None,
     glossary_entries: list[tuple[str, str]] | None = None,
@@ -357,7 +429,11 @@ def translate_texts_for_region(
         if not normalized_source:
             outputs.append("")
             continue
-        if is_numeric_only(normalized_source) or not _contains_cjk(normalized_source):
+        if not should_translate_text(
+            normalized_source,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        ):
             outputs.append(source_text)
             continue
         protected_source = glossary.apply_glossary_with_protection(
@@ -413,16 +489,22 @@ def resolve_batch_prompt(target_lang: str, override: str | None = None) -> str:
     normalized = (target_lang or "").strip().lower()
     if normalized in {"en", "english", "en-us", "en-gb"}:
         return state.AZURE_BATCH_SYSTEM_PROMPT
+    target_label = describe_target_language(target_lang)
+    extra_rules: list[str] = []
+    zh_rule = traditional_chinese_instruction(target_lang)
+    if zh_rule:
+        extra_rules.append(zh_rule)
     return "\n".join(
         [
             "You are a professional translator.",
-            f"Translate the text to {target_lang} accurately and literally.",
+            f"Translate the text to {target_label} accurately and literally.",
             "Do NOT summarize, paraphrase, explain, or add content.",
             "Preserve all numbers, codes, references, and formatting.",
             "If the input is a standalone year, number, code, table number, figure number, symbol, unit, abbreviation, or non-sentence fragment, do not explain it. Return only the translated or preserved text. Examples: 2017年 -> 2017、2018年 -> 2018、N/A -> N/A",
             "CRITICAL FORMATTING RULE 1: You MUST insert a line break strictly before every numbered item (e.g., '2.', '3.', '4.').",
             "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",
             "Strictly prohibit duplicate words or expressions with identical meanings; if they appear, you must remove the redundancy and keep only one.",
+            *extra_rules,
             "Output only the translated text."
         ]
     ).strip()
@@ -434,6 +516,7 @@ def build_batch_items(
     glossary_entries: list[tuple[str, str]] | None = None,
     pp_pages: dict[int, dict[str, Any]] | None = None,
     target_lang: str = "en",
+    source_lang: str = "auto",
     document_mode: str = "form",
 ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, dict[str, str]], dict[str, str]]:
     items: list[dict[str, Any]] = []
@@ -459,7 +542,11 @@ def build_batch_items(
         normalized_source = normalize_for_translation(source_text)
         if not normalized_source:
             return
-        if not re.search(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]", normalized_source):
+        if not should_translate_text(
+            normalized_source,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        ):
             return
         matched_term = document_terms.lookup_document_term(source_text, document_term_map)
         canonical_source_text = str((matched_term or {}).get("best_source_text") or source_text)
@@ -555,6 +642,7 @@ def build_batch_items(
 
         if use_structured_blocks:
             for block in paragraph_blocks:
+                block = {**block, "_source_lang": source_lang, "_target_lang": target_lang}
                 if not should_translate_structured_block(
                     block,
                     document_mode=document_mode,
@@ -570,6 +658,7 @@ def build_batch_items(
                 )
 
         for cell_idx, cell in enumerate(merged_cells):
+            cell = {**cell, "_source_lang": source_lang, "_target_lang": target_lang}
             if not should_translate_merged_cell(cell, document_mode):
                 continue
             custom_id = f"p{page_idx:04d}-c{cell_idx:04d}"
@@ -724,6 +813,7 @@ def build_edits_payload_from_translations(
     translations: dict[str, str],
     pp_pages: dict[int, dict[str, Any]] | None = None,
     target_lang: str = "en",
+    source_lang: str = "auto",
     document_mode: str = "form",
 ) -> dict[str, Any]:
     pages_payload: list[dict[str, Any]] = []
@@ -854,6 +944,7 @@ def build_edits_payload_from_translations(
         if paragraph_blocks:
             base_id = 200000
             for block in paragraph_blocks:
+                block = {**block, "_source_lang": source_lang, "_target_lang": target_lang}
                 if not should_translate_structured_block(
                     block,
                     document_mode=document_mode,
@@ -903,6 +994,7 @@ def build_edits_payload_from_translations(
         if merged_cells:
             base_id = 100000
             for cell_idx, cell in enumerate(merged_cells):
+                cell = {**cell, "_source_lang": source_lang, "_target_lang": target_lang}
                 if not should_translate_merged_cell(cell, document_mode):
                     continue
                 custom_id = f"p{page_idx:04d}-c{cell_idx:04d}"
@@ -954,6 +1046,7 @@ def finalize_translation_job(
     pp_pages: dict[int, dict[str, Any]] | None,
     document_mode: str,
     target_lang: str,
+    source_lang: str,
     key_map: dict[str, dict[str, str]],
     translations: dict[str, str],
     status_meta: dict[str, Any],
@@ -987,6 +1080,7 @@ def finalize_translation_job(
         translations,
         pp_pages=pp_pages,
         target_lang=target_lang,
+        source_lang=source_lang,
         document_mode=document_mode,
     )
     edits_path = job_dir / "edits.json"
@@ -1019,6 +1113,7 @@ def run_batch_translate_job(
     document_mode = resolve_document_mode(
         config.get("document_mode") or (jobs.load_job_meta(job_dir) or {}).get("document_mode")
     )
+    source_lang = str(config.get("source_lang") or "auto")
     target_lang = str(config.get("target_lang") or "en")
     model_name = str(config.get("model") or state.AZURE_BATCH_MODEL)
     system_prompt = resolve_batch_prompt(target_lang, config.get("system_prompt"))
@@ -1033,6 +1128,7 @@ def run_batch_translate_job(
                 job_id=job_id,
                 job_dir=job_dir,
                 document_mode=document_mode,
+                source_lang=source_lang,
                 target_lang=target_lang,
                 status_meta=status_meta,
                 batch_id=batch_id,
@@ -1078,6 +1174,7 @@ def run_batch_translate_job(
             glossary_entries=glossary_entries,
             pp_pages=pp_pages,
             target_lang=target_lang,
+            source_lang=source_lang,
             document_mode=document_mode,
         )
         jobs.write_batch_alias_map(job_dir, alias_map)
@@ -1100,6 +1197,7 @@ def run_batch_translate_job(
                 pp_pages=pp_pages,
                 document_mode=document_mode,
                 target_lang=target_lang,
+                source_lang=source_lang,
                 key_map=key_map,
                 alias_map=alias_map,
                 prefilled=prefilled,
@@ -1156,6 +1254,7 @@ def _poll_batch_translate_job(
     job_id: str,
     job_dir: Path,
     document_mode: str,
+    source_lang: str,
     target_lang: str,
     status_meta: dict[str, Any],
     batch_id: str,
@@ -1234,6 +1333,7 @@ def _poll_batch_translate_job(
         pp_pages=pp_pages,
         document_mode=document_mode,
         target_lang=target_lang,
+        source_lang=source_lang,
         key_map=key_map,
         alias_map=alias_map,
         prefilled=prefilled,
@@ -1253,6 +1353,7 @@ def _finalize_batch_translate_job(
     pp_pages: dict[int, dict[str, Any]] | None,
     document_mode: str,
     target_lang: str,
+    source_lang: str,
     key_map: dict[str, dict[str, str]],
     alias_map: dict[str, str],
     prefilled: dict[str, str],
@@ -1270,6 +1371,7 @@ def _finalize_batch_translate_job(
         pp_pages=pp_pages,
         document_mode=document_mode,
         target_lang=target_lang,
+        source_lang=source_lang,
         key_map=key_map,
         translations=translations,
         status_meta=status_meta,

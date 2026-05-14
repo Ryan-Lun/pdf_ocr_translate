@@ -51,6 +51,7 @@ def run_doc_workspace_job(
     job_id: str,
     job_dir: Path,
     pdf_path: Path,
+    source_lang: str,
     target_lang: str,
 ) -> None:
     structure_dir = job_dir / "structure"
@@ -86,6 +87,7 @@ def run_doc_workspace_job(
         markdown_translate.translate_html_file(
             structure_html_path,
             translated_html_path,
+            source_lang=source_lang,
             target_lang=target_lang,
         )
 
@@ -145,6 +147,7 @@ def run_doc_workspace_job(
 def enqueue_doc_job_from_upload(
     source_pdf: Path,
     display_name: str,
+    source_lang: str,
     target_lang: str,
 ) -> str:
     job_id = uuid.uuid4().hex
@@ -158,6 +161,7 @@ def enqueue_doc_job_from_upload(
             "job_type": "doc_workspace",
             "processing_started_at": now_ts,
             "doc_stage": "uploaded",
+            "source_lang": source_lang,
             "target_lang": target_lang,
         },
     )
@@ -167,7 +171,7 @@ def enqueue_doc_job_from_upload(
         stage="queued",
         job_name=display_name,
         target_lang=target_lang,
-        payload={"target_lang": target_lang},
+        payload={"source_lang": source_lang, "target_lang": target_lang},
     )
 
     pdf_path = job_dir / "source.pdf"
@@ -176,6 +180,6 @@ def enqueue_doc_job_from_upload(
     else:
         raise FileNotFoundError(f"Missing PDF: {source_pdf}")
 
-    write_doc_status(job_dir, "uploaded", target_lang=target_lang)
+    write_doc_status(job_dir, "uploaded", source_lang=source_lang, target_lang=target_lang)
     jobs.notify_jobs_update()
     return job_id

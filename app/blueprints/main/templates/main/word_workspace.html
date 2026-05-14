@@ -14,7 +14,7 @@
           <h1>Word 原版面翻譯</h1>
           <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
         </div>
-        <p class="eyebrow">DOCX -> Translate -> DOCX</p>
+        <!-- <p class="eyebrow">DOCX -> Translate -> DOCX</p> -->
       </header>
       <section class="upload-card upload-card-doc">
         <form method="post" enctype="multipart/form-data" action="{{ url_for('.upload_word_workspace') }}">
@@ -24,10 +24,18 @@
           </label>
           <div class="form-grid">
             <label>
+              <span>來源語言</span>
+              <select name="source_lang">
+                <option value="auto" selected>自動偵測 (auto)</option>
+                <option value="en">English (en)</option>
+                <option value="zh">繁體中文 (zh)</option>
+              </select>
+            </label>
+            <label>
               <span>翻譯語言</span>
               <select name="target_lang">
                 <option value="en" selected>English (en)</option>
-                <option value="zh">中文 (zh)</option>
+                <option value="zh">繁體中文 (zh)</option>
               </select>
             </label>
           </div>
@@ -211,17 +219,6 @@
         } catch (error) {
           renderWordJobs([]);
         } finally {
-          wordJobsLoading = false;
-        }
-      }
-
-      wordJobsRefresh.addEventListener("click", loadWordJobs);
-      loadWordJobs();
-      setInterval(loadWordJobs, 10000);
-    </script>
-  </body>
-</html>
-  } finally {
           wordJobsLoading = false;
         }
       }

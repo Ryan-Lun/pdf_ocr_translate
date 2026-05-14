@@ -369,6 +369,7 @@ def _prepare_realtime_plan(
     document_mode = batch.resolve_document_mode(
         config.get("document_mode") or (jobs.load_job_meta(job_dir) or {}).get("document_mode")
     )
+    source_lang = str(config.get("source_lang") or "auto")
     target_lang = str(config.get("target_lang") or "en")
     model_name = str(config.get("model") or state.PDF_REALTIME_TRANSLATE_MODEL)
     system_prompt = batch.resolve_batch_prompt(target_lang, config.get("system_prompt"))
@@ -382,6 +383,7 @@ def _prepare_realtime_plan(
         glossary_entries=glossary_entries,
         pp_pages=pp_pages,
         target_lang=target_lang,
+        source_lang=source_lang,
         document_mode=document_mode,
     )
     jobs.write_batch_alias_map(job_dir, alias_map)
@@ -389,6 +391,7 @@ def _prepare_realtime_plan(
     batch._write_batch_key_map(job_dir, key_map)
     return {
         "document_mode": document_mode,
+        "source_lang": source_lang,
         "target_lang": target_lang,
         "model_name": model_name,
         "system_prompt": system_prompt,
@@ -650,6 +653,7 @@ def run_realtime_translate_job(
                 pp_pages=plan["pp_pages"],
                 document_mode=plan["document_mode"],
                 target_lang=plan["target_lang"],
+                source_lang=plan["source_lang"],
                 key_map=plan["key_map"],
                 translations=translations,
                 status_meta=status_meta,
@@ -715,6 +719,7 @@ def run_realtime_translate_job(
             pp_pages=plan["pp_pages"],
             document_mode=plan["document_mode"],
             target_lang=plan["target_lang"],
+            source_lang=plan["source_lang"],
             key_map=plan["key_map"],
             translations=translations,
             status_meta=status_meta,

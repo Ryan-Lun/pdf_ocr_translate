@@ -199,12 +199,14 @@ def batch_restore(job_id: str):
             (jobs.load_batch_config(job_dir) or {}).get("document_mode")
             or (jobs.load_job_meta(job_dir) or {}).get("document_mode")
         )
+        source_lang = str((jobs.load_batch_config(job_dir) or {}).get("source_lang") or "auto")
         target_lang = str((jobs.load_batch_config(job_dir) or {}).get("target_lang") or "en")
         edits_payload = batch.build_edits_payload_from_translations(
             ocr_pages,
             translations,
             pp_pages=pp_pages,
             target_lang=target_lang,
+            source_lang=source_lang,
             document_mode=document_mode,
         )
         edits_path = job_dir / "edits.json"
@@ -741,6 +743,7 @@ def retranslate_box(job_id: str):
 
     config = jobs.load_batch_config(job_dir) or {}
     meta = jobs.load_job_meta(job_dir) or {}
+    source_lang = str(config.get("source_lang") or "auto")
     target_lang = str(config.get("target_lang") or "en")
     model_name = str(config.get("model") or state.PDF_REALTIME_TRANSLATE_MODEL or state.DOC_TRANSLATE_MODEL)
     document_mode = batch.resolve_document_mode(
@@ -752,6 +755,7 @@ def retranslate_box(job_id: str):
         translations = batch.translate_texts_for_region(
             [source_text],
             target_lang=target_lang,
+            source_lang=source_lang,
             model_name=model_name,
             system_prompt=system_prompt,
             glossary_entries=glossary.load_combined_glossary(),
@@ -846,6 +850,7 @@ def retranslate_region(job_id: str):
 
     config = jobs.load_batch_config(job_dir) or {}
     meta = jobs.load_job_meta(job_dir) or {}
+    source_lang = str(config.get("source_lang") or "auto")
     target_lang = str(config.get("target_lang") or "en")
     model_name = str(state.DOC_TRANSLATE_MODEL)
     document_mode = batch.resolve_document_mode(
@@ -872,6 +877,7 @@ def retranslate_region(job_id: str):
         translations = batch.translate_texts_for_region(
             [merged_source_text] if merged_source_text else [],
             target_lang=target_lang,
+            source_lang=source_lang,
             model_name=model_name,
             system_prompt=system_prompt,
             glossary_entries=glossary.load_combined_glossary(),
@@ -994,6 +1000,7 @@ def glossary_retranslate(job_id: str):
         return jsonify({"ok": False, "error": "Missing glossary source term."}), 400
 
     config = jobs.load_batch_config(job_dir) or {}
+    source_lang = str(config.get("source_lang") or "auto")
     target_lang = str(config.get("target_lang") or "en")
     model_name = str(config.get("model") or state.PDF_REALTIME_TRANSLATE_MODEL or state.DOC_TRANSLATE_MODEL)
     system_prompt = config.get("system_prompt") or batch.resolve_batch_prompt(target_lang)
@@ -1024,6 +1031,7 @@ def glossary_retranslate(job_id: str):
             translations = batch.translate_texts_for_region(
                 [source_text],
                 target_lang=target_lang,
+                source_lang=source_lang,
                 model_name=model_name,
                 system_prompt=system_prompt,
                 glossary_entries=glossary_entries,

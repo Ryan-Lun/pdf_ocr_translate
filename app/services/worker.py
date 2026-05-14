@@ -58,6 +58,7 @@ def process_job(job_id: str) -> None:
             dpi=int(payload.get("dpi") or 200),
             start_page=int(payload.get("start_page") or 1),
             end_page=payload.get("end_page"),
+            translate_source_lang=str(payload.get("translate_source_lang") or "auto"),
             translate_target_lang=str(payload.get("translate_target_lang") or "en"),
             translate_model=str(payload.get("translate_model") or state.AZURE_BATCH_MODEL),
             translate_mode=str(payload.get("translate_mode") or "batch"),
@@ -73,6 +74,7 @@ def process_job(job_id: str) -> None:
             job_id=job_id,
             job_dir=job_dir,
             pdf_path=job_dir / "source.pdf",
+            source_lang=str(payload.get("source_lang") or "auto"),
             target_lang=str(payload.get("target_lang") or record.target_lang or "en"),
         )
         return
@@ -92,6 +94,7 @@ def process_job(job_id: str) -> None:
             source_path=source_path,
             processing_source_path=processing_source_path,
             output_path=output_path,
+            source_lang=str(payload.get("source_lang") or "auto"),
             target_lang=str(payload.get("target_lang") or record.target_lang or "en"),
             retain_terms=list(payload.get("retain_terms") or []),
         )

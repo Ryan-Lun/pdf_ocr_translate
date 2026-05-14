@@ -24,6 +24,7 @@ def run_ocr_pipeline_job(
     dpi: int,
     start_page: int,
     end_page: int | None,
+    translate_source_lang: str,
     translate_target_lang: str,
     translate_model: str,
     translate_mode: str,
@@ -93,6 +94,7 @@ def run_ocr_pipeline_job(
         )
     if enable_translate:
         batch_config = {
+            "source_lang": translate_source_lang,
             "target_lang": translate_target_lang,
             "model": translate_model,
             "translate_mode": jobs.normalize_translate_mode(translate_mode),
@@ -133,6 +135,7 @@ def enqueue_job_from_upload(
     dpi: int,
     start_page: int,
     end_page: int | None,
+    translate_source_lang: str,
     translate_target_lang: str,
     translate_model: str,
     translate_mode: str,
@@ -170,6 +173,7 @@ def enqueue_job_from_upload(
             "dpi": dpi,
             "start_page": start_page,
             "end_page": end_page,
+            "translate_source_lang": translate_source_lang,
             "translate_target_lang": translate_target_lang,
             "translate_model": translate_model,
             "translate_mode": jobs.normalize_translate_mode(translate_mode),

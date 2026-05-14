@@ -30,6 +30,7 @@ def test_upload_pdf_overlay_accepts_realtime_mode(client, tmp_path, monkeypatch)
         dpi,
         start_page,
         end_page,
+        translate_source_lang,
         translate_target_lang,
         translate_model,
         translate_mode,
@@ -41,6 +42,7 @@ def test_upload_pdf_overlay_accepts_realtime_mode(client, tmp_path, monkeypatch)
         captured.append(
             {
                 "display_name": display_name,
+                "translate_source_lang": translate_source_lang,
                 "translate_target_lang": translate_target_lang,
                 "translate_model": translate_model,
                 "translate_mode": translate_mode,
@@ -61,6 +63,7 @@ def test_upload_pdf_overlay_accepts_realtime_mode(client, tmp_path, monkeypatch)
         data={
             "translate": "on",
             "translate_mode": "realtime",
+            "source_lang": "auto",
             "target_lang": "en",
             "model": "quick-model",
             "document_mode": "general",
@@ -73,6 +76,7 @@ def test_upload_pdf_overlay_accepts_realtime_mode(client, tmp_path, monkeypatch)
     assert captured == [
         {
             "display_name": "sample",
+            "translate_source_lang": "auto",
             "translate_target_lang": "en",
             "translate_model": "quick-model",
             "translate_mode": "realtime",
@@ -94,6 +98,7 @@ def test_upload_pdf_overlay_accepts_general_force_translate_mode(client, tmp_pat
         dpi,
         start_page,
         end_page,
+        translate_source_lang,
         translate_target_lang,
         translate_model,
         translate_mode,
@@ -105,6 +110,7 @@ def test_upload_pdf_overlay_accepts_general_force_translate_mode(client, tmp_pat
         captured.append(
             {
                 "display_name": display_name,
+                "source_lang": translate_source_lang,
                 "document_mode": document_mode,
             }
         )
@@ -120,6 +126,7 @@ def test_upload_pdf_overlay_accepts_general_force_translate_mode(client, tmp_pat
         data={
             "translate": "on",
             "translate_mode": "batch",
+            "source_lang": "auto",
             "target_lang": "en",
             "model": "batch-model",
             "document_mode": "general_force",
@@ -132,6 +139,7 @@ def test_upload_pdf_overlay_accepts_general_force_translate_mode(client, tmp_pat
     assert captured == [
         {
             "display_name": "sample",
+            "source_lang": "auto",
             "document_mode": "general_force",
         }
     ]
@@ -230,6 +238,7 @@ def test_run_ocr_pipeline_job_skips_paragraph_align_for_general_force(tmp_path, 
         dpi=200,
         start_page=1,
         end_page=None,
+        translate_source_lang="auto",
         translate_target_lang="en",
         translate_model="dummy-model",
         translate_mode="batch",
@@ -390,11 +399,12 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
     captured: list[dict[str, str]] = []
 
-    def fake_enqueue(source_path, display_name, target_lang, retain_terms_raw=None):
+    def fake_enqueue(source_path, display_name, source_lang, target_lang, retain_terms_raw=None):
         captured.append(
             {
                 "source_name": Path(source_path).name,
                 "display_name": display_name,
+                "source_lang": source_lang,
                 "target_lang": target_lang,
             }
         )
@@ -408,6 +418,7 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
     resp = client.post(
         "/upload-word-workspace",
         data={
+            "source_lang": "auto",
             "target_lang": "en",
             "docx": (io.BytesIO(b"legacy doc"), "legacy.doc"),
         },
@@ -418,6 +429,7 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
     assert len(captured) == 1
     assert Path(captured[0]["source_name"]).suffix == ".doc"
     assert captured[0]["display_name"] == "legacy"
+    assert captured[0]["source_lang"] == "auto"
     assert captured[0]["target_lang"] == "en"
 
 
@@ -426,11 +438,12 @@ def test_upload_word_workspace_preserves_chinese_display_name(client, tmp_path, 
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
     captured: list[dict[str, str]] = []
 
-    def fake_enqueue(source_path, display_name, target_lang, retain_terms_raw=None):
+    def fake_enqueue(source_path, display_name, source_lang, target_lang, retain_terms_raw=None):
         captured.append(
             {
                 "source_name": Path(source_path).name,
                 "display_name": display_name,
+                "source_lang": source_lang,
                 "target_lang": target_lang,
             }
         )
@@ -444,6 +457,7 @@ def test_upload_word_workspace_preserves_chinese_display_name(client, tmp_path, 
     resp = client.post(
         "/upload-word-workspace",
         data={
+            "source_lang": "auto",
             "target_lang": "en",
             "docx": (io.BytesIO(b"docx"), "中文檔名.docx"),
         },
@@ -454,7 +468,50 @@ def test_upload_word_workspace_preserves_chinese_display_name(client, tmp_path, 
     assert len(captured) == 1
     assert Path(captured[0]["source_name"]).suffix == ".docx"
     assert captured[0]["display_name"] == "中文檔名"
+    assert captured[0]["source_lang"] == "auto"
     assert captured[0]["target_lang"] == "en"
+
+
+def test_upload_doc_workspace_passes_source_language(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    captured: list[dict[str, str]] = []
+
+    def fake_enqueue(source_path, display_name, source_lang, target_lang):
+        captured.append(
+            {
+                "source_name": Path(source_path).name,
+                "display_name": display_name,
+                "source_lang": source_lang,
+                "target_lang": target_lang,
+            }
+        )
+        return "c" * 32
+
+    monkeypatch.setattr(
+        "app.blueprints.main.routes.doc_workspace.enqueue_doc_job_from_upload",
+        fake_enqueue,
+    )
+
+    resp = client.post(
+        "/upload-doc-workspace",
+        data={
+            "source_lang": "en",
+            "target_lang": "zh",
+            "pdf": (io.BytesIO(b"%PDF-1.4"), "source.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 302
+    assert captured == [
+        {
+            "source_name": captured[0]["source_name"],
+            "display_name": "source",
+            "source_lang": "en",
+            "target_lang": "zh",
+        }
+    ]
 
 
 def test_build_download_name_preserves_chinese_job_name():

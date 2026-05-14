@@ -82,6 +82,7 @@ def upload() -> str:
     end_page_raw = request.form.get("end", "").strip()
     end_page = int(end_page_raw) if end_page_raw else None
     enable_translate = request.form.get("translate") == "on"
+    translate_source_lang = request.form.get("source_lang", "auto").strip() or "auto"
     translate_target_lang = request.form.get("target_lang", "en").strip() or "en"
     translate_mode = jobs.normalize_translate_mode(request.form.get("translate_mode"))
     default_translate_model = (
@@ -112,6 +113,7 @@ def upload() -> str:
             dpi,
             start_page,
             end_page,
+            translate_source_lang,
             translate_target_lang,
             translate_model,
             translate_mode,
@@ -139,6 +141,7 @@ def upload_doc_workspace() -> str:
     state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
     state.UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
+    source_lang = request.form.get("source_lang", "auto").strip() or "auto"
     target_lang = request.form.get("target_lang", "en").strip() or "en"
     _enforce_submit_quota("")
 
@@ -154,6 +157,7 @@ def upload_doc_workspace() -> str:
         doc_workspace.enqueue_doc_job_from_upload(
             tmp_path,
             display_name,
+            source_lang,
             target_lang,
         )
         try:
@@ -174,6 +178,7 @@ def upload_word_workspace() -> str:
     state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
     state.UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
+    source_lang = request.form.get("source_lang", "auto").strip() or "auto"
     target_lang = request.form.get("target_lang", "en").strip() or "en"
     retain_terms = request.form.get("retain_terms", "")
     _enforce_submit_quota("")
@@ -190,6 +195,7 @@ def upload_word_workspace() -> str:
         word_translate.enqueue_word_job_from_upload(
             tmp_path,
             display_name,
+            source_lang,
             target_lang,
             retain_terms_raw=retain_terms,
         )

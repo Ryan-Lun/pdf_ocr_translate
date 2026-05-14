@@ -14,6 +14,7 @@ import base64
 import fitz  # PyMuPDF
 from PIL import Image
 import requests
+from lang_utils import describe_target_language, traditional_chinese_instruction
 
 # -----------------------------
 # Font (Windows CJK default)
@@ -716,9 +717,15 @@ def translate_texts_with_openai(
 
     def translate_one(line: str) -> str:
         if source_lang == "auto":
-            instructions = f"Translate the user's text to {target_lang}. Output only the translation."
+            instructions = (
+                f"Translate the user's text to {describe_target_language(target_lang)}."
+                f" {traditional_chinese_instruction(target_lang)} Output only the translation."
+            )
         else:
-            instructions = f"Translate the user's text from {source_lang} to {target_lang}. Output only the translation."
+            instructions = (
+                f"Translate the user's text from {source_lang} to {describe_target_language(target_lang)}."
+                f" {traditional_chinese_instruction(target_lang)} Output only the translation."
+            )
         resp = client.responses.create(
             model=model,
             instructions=instructions,
@@ -731,12 +738,14 @@ def translate_texts_with_openai(
             return []
         if source_lang == "auto":
             instructions = (
-                f"Translate each line to {target_lang}. "
+                f"Translate each line to {describe_target_language(target_lang)}."
+                f" {traditional_chinese_instruction(target_lang)} "
                 "Return ONLY the translations, one per line, preserving line count."
             )
         else:
             instructions = (
-                f"Translate each line from {source_lang} to {target_lang}. "
+                f"Translate each line from {source_lang} to {describe_target_language(target_lang)}."
+                f" {traditional_chinese_instruction(target_lang)} "
                 "Return ONLY the translations, one per line, preserving line count."
             )
         joined = "\n".join(lines)

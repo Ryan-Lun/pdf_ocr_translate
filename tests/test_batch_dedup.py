@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 
-from app.services.batch import build_batch_items, build_edits_payload_from_translations
+from app.services.batch import build_batch_items, build_edits_payload_from_translations, resolve_batch_prompt
 from app.services import state, translation_memory
 
 
@@ -791,6 +791,7 @@ def test_scanned_document_mode_uses_ocr_lines_for_batch_items():
 
 def test_form_mode_uses_target_lang_scoped_translation_memory(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
     now_ts = time.time()
     memory = {
         translation_memory.make_tm_key("表格內容", "en", "form"): {
@@ -952,6 +953,71 @@ def test_scanned_document_mode_writes_back_to_ocr_boxes():
     assert boxes[0]["text"] == "translated scan"
 
 
+def test_scanned_document_mode_collects_english_ocr_lines_for_chinese_target():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": ["Inspection item", "中文說明"],
+            "rec_polys": [
+                [[0, 0], [10, 0], [10, 10], [0, 10]],
+                [[20, 0], [30, 0], [30, 10], [20, 10]],
+            ],
+        }
+    ]
+
+    items, alias_map, key_map, prefilled = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        target_lang="zh",
+        document_mode="scanned",
+    )
+
+    assert [item["custom_id"] for item in items] == ["p0000-l0000"]
+    assert alias_map == {}
+    assert key_map == {
+        "p0000-l0000": {
+            "source_text": "Inspection item",
+            "source_normalized": "Inspection item",
+        }
+    }
+    assert prefilled == {}
+
+
+def test_scanned_document_mode_writes_back_english_source_for_chinese_target():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": ["Inspection item"],
+            "rec_polys": [
+                [[0, 0], [10, 0], [10, 10], [0, 10]],
+            ],
+        }
+    ]
+
+    payload = build_edits_payload_from_translations(
+        ocr_pages,
+        {"p0000-l0000": "檢查項目"},
+        pp_pages={},
+        target_lang="zh",
+        document_mode="scanned",
+    )
+
+    boxes = payload["pages"][0]["boxes"]
+    assert len(boxes) == 1
+    assert boxes[0]["id"] == 0
+    assert boxes[0]["text"] == "檢查項目"
+    assert boxes[0]["tm_source_text"] == "Inspection item"
+    assert boxes[0]["tm_target_lang"] == "zh"
+
+
+def test_zh_target_prompt_requires_traditional_chinese():
+    prompt = resolve_batch_prompt("zh")
+    assert "Traditional Chinese" in prompt
+    assert "Never use Simplified Chinese characters" in prompt
+
+
 def test_general_mode_chart_blocks_fall_back_to_ocr_lines_for_batch_items():
     ocr_pages = [
         {
@@ -1104,6 +1170,7 @@ def test_document_terms_dedupe_short_labels_with_trailing_colon():
 
 def test_document_terms_prefill_short_label_from_canonical_tm(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
     now_ts = time.time()
     memory = {
         translation_memory.make_tm_key(
