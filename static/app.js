@@ -1551,6 +1551,27 @@ function insertEditorLineBreak(textEl) {
   selection.addRange(range);
 }
 
+function insertEditorPlainText(textEl, text) {
+  if (!textEl) return;
+  const value = String(text ?? "").replace(/\r\n/g, "\n");
+  textEl.focus();
+  if (document.queryCommandSupported?.("insertText")) {
+    if (document.execCommand("insertText", false, value)) {
+      return;
+    }
+  }
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return;
+  const range = selection.getRangeAt(0);
+  range.deleteContents();
+  const textNode = document.createTextNode(value);
+  range.insertNode(textNode);
+  range.setStartAfter(textNode);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 function commitBoxTextEdit(pageIdx, boxIdx, finalText) {
   const page = state.pages[pageIdx];
   const box = page?.boxes[boxIdx];
@@ -3519,6 +3540,14 @@ function createBoxElement(pageIdx, boxIdx) {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
     event.preventDefault();
     insertEditorLineBreak(textEl);
+  });
+
+  textEl.addEventListener("paste", (event) => {
+    event.preventDefault();
+    const pastedText = event.clipboardData?.getData("text/plain")
+      ?? window.clipboardData?.getData("Text")
+      ?? "";
+    insertEditorPlainText(textEl, pastedText);
   });
   
   textEl.addEventListener("input", () => {
