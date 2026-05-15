@@ -3828,6 +3828,9 @@ async function confirmRegionPreview() {
 
 async function loadJobData(jobId, options = {}) {
   const { preserveActivePage = false } = options;
+  const preservedScroll = preserveActivePage && pagesEl
+    ? { left: pagesEl.scrollLeft, top: pagesEl.scrollTop }
+    : null;
   setStatus("Loading OCR data...");
   const res = await fetch(`/api/job/${jobId}`);
   if (!res.ok) {
@@ -3841,7 +3844,9 @@ async function loadJobData(jobId, options = {}) {
   refreshAllConsistencyPanels();
   if (preserveActivePage) {
     setActivePage(targetPageIdx, { scroll: false });
-    state.pages[state.activePageIdx]?.element?.scrollIntoView({ behavior: "auto", block: "start" });
+    if (preservedScroll && state.viewMode === "continuous") {
+      pagesEl.scrollTo({ left: preservedScroll.left, top: preservedScroll.top, behavior: "auto" });
+    }
   }
   updateEditedLink(data.edited_pdf_url);
   if (previewEditedBtn) {
