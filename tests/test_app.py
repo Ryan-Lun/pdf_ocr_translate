@@ -136,6 +136,7 @@ def test_template_editor_page_ok(client, tmp_path, monkeypatch):
     assert "glossaryPromptBtn" not in body
     assert "batchTranslateBtn" not in body
     assert "contextRetranslateBtn" not in body
+    assert "translateSelectedBoxesBtn" in body
 
 
 def test_editor_page_shows_template_entry(client, tmp_path, monkeypatch):
@@ -1111,6 +1112,95 @@ def test_retranslate_box_updates_only_target_box(client, tmp_path, monkeypatch):
     assert boxes[0]["tm_source_text"] == "修正後原文"
     assert boxes[0]["source"] == "manual_box_retranslate"
     assert boxes[1]["text"] == "Keep me"
+
+
+def test_retranslate_boxes_updates_multiple_targets(client, tmp_path, monkeypatch):
+    job_id = "9" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+
+    (job_dir / "batch_config.json").write_text(
+        json.dumps(
+            {
+                "document_mode": "general_force",
+                "target_lang": "en",
+                "model": "fake-model",
+                "system_prompt": "translate",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (job_dir / "edits.json").write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page_index_0based": 0,
+                        "boxes": [
+                            {
+                                "id": 200001,
+                                "deleted": False,
+                                "bbox": {"x": 10, "y": 10, "w": 80, "h": 20},
+                                "text": "Box one",
+                                "auto_generated": False,
+                            },
+                            {
+                                "id": 200002,
+                                "deleted": False,
+                                "bbox": {"x": 10, "y": 40, "w": 80, "h": 20},
+                                "text": "Box two",
+                                "auto_generated": False,
+                            },
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.batch.translate_texts_for_region",
+        lambda texts, **kwargs: [f"Translated::{text}" for text in texts],
+    )
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.ocr.apply_edits_to_pdf",
+        lambda current_job_id, current_job_dir, edits: Path(current_job_dir) / "edited.pdf",
+    )
+
+    resp = client.post(
+        f"/api/job/{job_id}/retranslate-boxes",
+        json={
+            "targets": [
+                {
+                    "page_index_0based": 0,
+                    "box_id": 200001,
+                    "source_text": "第一段",
+                },
+                {
+                    "page_index_0based": 0,
+                    "box_id": 200002,
+                    "source_text": "第二段",
+                },
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["updated_count"] == 2
+    assert len(payload["items"]) == 2
+    saved = json.loads((job_dir / "edits.json").read_text(encoding="utf-8"))
+    boxes = saved["pages"][0]["boxes"]
+    assert boxes[0]["text"] == "Translated::第一段"
+    assert boxes[0]["tm_source_text"] == "第一段"
+    assert boxes[1]["text"] == "Translated::第二段"
+    assert boxes[1]["tm_source_text"] == "第二段"
 
 
 def test_glossary_retranslate_updates_matching_boxes_only_text(client, tmp_path, monkeypatch):

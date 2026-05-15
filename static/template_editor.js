@@ -99,6 +99,7 @@ const paragraphReplaceFromEl = document.getElementById("paragraphReplaceFrom");
 const paragraphReplaceToEl = document.getElementById("paragraphReplaceTo");
 const paragraphSyncTmEl = document.getElementById("paragraphSyncTm");
 const applyParagraphTermBtn = document.getElementById("applyParagraphTermBtn");
+const translateSelectedBoxesBtn = document.getElementById("translateSelectedBoxesBtn");
 const contextSummaryEl = document.getElementById("contextSummary");
 const contextSourceTextEl = document.getElementById("contextSourceText");
 const contextTranslatedTextEl = document.getElementById("contextTranslatedText");
@@ -1783,6 +1784,84 @@ async function retranslateSelectedBoxFromSource() {
     if (contextRetranslateBtn) {
       contextRetranslateBtn.classList.remove("retranslate-btn--busy");
       syncContextInspector();
+    }
+  }
+}
+
+async function translateSelectedBoxes() {
+  const jobId = document.body.dataset.jobId;
+  const selected = getSelectedBoxes().filter(({ box }) => box && !box.deleted);
+  if (!jobId) return;
+  if (!selected.length) {
+    setStatus("請先選取要翻譯的文字框");
+    return;
+  }
+
+  const translationTargets = selected
+    .map(({ page, box }) => ({
+      pageIndex: page.pageIndex,
+      boxId: box.id,
+      sourceText: String(box.text || "").trim(),
+    }))
+    .filter((item) => item.sourceText);
+
+  if (!translationTargets.length) {
+    setStatus("選取的文字框沒有可翻譯的文字");
+    return;
+  }
+
+  const saved = await saveEdits(false, { silent: true });
+  if (!saved) {
+    setStatus("翻譯前儲存失敗");
+    return;
+  }
+
+  const originalText = translateSelectedBoxesBtn?.textContent || "翻譯選取文字框";
+  if (translateSelectedBoxesBtn) {
+    translateSelectedBoxesBtn.disabled = true;
+    translateSelectedBoxesBtn.textContent = "翻譯中...";
+  }
+  setStatus(`正在翻譯 ${translationTargets.length} 個選取文字框...`);
+
+  try {
+    const res = await fetch(`/api/job/${jobId}/retranslate-boxes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targets: translationTargets.map((item) => ({
+          page_index_0based: item.pageIndex,
+          box_id: item.boxId,
+          source_text: item.sourceText,
+        })),
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.error || "翻譯失敗");
+    }
+
+    await loadJobData(jobId, { preserveActivePage: true });
+
+    clearSelection();
+    translationTargets.forEach((item, index) => {
+      const pageIdx = state.pages.findIndex((page) => page.pageIndex === item.pageIndex);
+      if (pageIdx < 0) return;
+      const boxIdx = state.pages[pageIdx].boxes.findIndex((box) => box.id === item.boxId);
+      if (boxIdx < 0) return;
+      state.selectedBoxes.add(boxKey(pageIdx, boxIdx));
+      if (index === 0) {
+        state.selected = { pageIdx, boxIdx };
+        syncInspectorFromBox(state.pages[pageIdx].boxes[boxIdx]);
+      }
+    });
+    applySelectionClasses();
+    setStatus(`已翻譯 ${Number(body.updated_count || translationTargets.length)} 個文字框`);
+  } catch (error) {
+    setStatus(`翻譯失敗：${error instanceof Error ? error.message : "unknown error"}`);
+  } finally {
+    if (translateSelectedBoxesBtn) {
+      translateSelectedBoxesBtn.disabled = false;
+      translateSelectedBoxesBtn.textContent = originalText;
     }
   }
 }
@@ -4668,6 +4747,12 @@ function bindControls() {
       clearSelection();
       setSelectionMode("retranslate");
       setStatus("請在頁面上框選要補翻的區域");
+    });
+  }
+
+  if (translateSelectedBoxesBtn) {
+    translateSelectedBoxesBtn.addEventListener("click", () => {
+      translateSelectedBoxes();
     });
   }
 
