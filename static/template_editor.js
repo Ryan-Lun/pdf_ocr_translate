@@ -40,6 +40,8 @@ let contextSourceEditKey = null;
 let documentTemplates = [];
 let templateApplyJobs = [];
 const templateMode = document.body.dataset.templateMode === "true";
+const BOX_HIT_SLOP_PX = 6;
+const DRAG_START_THRESHOLD_PX = 4;
 
 const statusEl = document.getElementById("status");
 const fontSizeEl = document.getElementById("fontSize");
@@ -3184,6 +3186,11 @@ function onDragMove(event) {
   const scale = page.scale || 1;
   const dx = (event.clientX - startX) / scale;
   const dy = (event.clientY - startY) / scale;
+  const movedDistance = Math.hypot(event.clientX - startX, event.clientY - startY);
+
+    if (movedDistance < DRAG_START_THRESHOLD_PX) {
+      return;
+    }
 
     if (group && group.length) {
       group.forEach((item) => {
@@ -3673,6 +3680,11 @@ function createBoxElement(pageIdx, boxIdx) {
   boxEl.className = "text-box";
   boxEl.style.left = "0px";
   boxEl.style.top = "0px";
+  boxEl.style.setProperty("--box-hit-slop", `${BOX_HIT_SLOP_PX}px`);
+
+  const hitAreaEl = document.createElement("div");
+  hitAreaEl.className = "text-box-hit-area";
+  boxEl.appendChild(hitAreaEl);
 
   const textEl = document.createElement("div");
   textEl.className = "text";

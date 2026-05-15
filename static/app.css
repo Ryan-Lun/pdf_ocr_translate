@@ -1828,10 +1828,18 @@ body.editor .thumbs {
   background: rgba(255, 255, 255, 0.92);
 }
 
+.text-box-hit-area {
+  position: absolute;
+  inset: calc(var(--box-hit-slop, 0px) * -1);
+  background: transparent;
+  z-index: 0;
+}
+
 .text-box .text {
   position: absolute;
   left: 4px;
   top: 2px;
+  z-index: 1;
   outline: none;
   cursor: text;
   user-select: text;
