@@ -1796,6 +1796,28 @@ function clearSelection() {
   syncContextInspector();
 }
 
+function selectAllBoxes() {
+  const targetPageIdx = Number.isFinite(state.activePageIdx)
+    ? state.activePageIdx
+    : state.selected?.pageIdx ?? 0;
+  const page = state.pages[targetPageIdx];
+  if (!page) return false;
+
+  const selectable = page.boxes
+    .map((box, boxIdx) => ({ box, boxIdx }))
+    .filter(({ box }) => box && !box.deleted);
+  if (!selectable.length) return false;
+
+  state.selectedBoxes.clear();
+  selectable.forEach(({ boxIdx }) => {
+    state.selectedBoxes.add(boxKey(targetPageIdx, boxIdx));
+  });
+  state.selected = { pageIdx: targetPageIdx, boxIdx: selectable[0].boxIdx };
+  applySelectionClasses();
+  syncInspectorFromBox(selectable[0].box);
+  return true;
+}
+
 function cloneBoxData(box) {
   return {
     id: box.id,
@@ -4699,6 +4721,13 @@ function bindControls() {
 
     if ((event.ctrlKey || event.metaKey) && !isEditing) {
       const key = event.key.toLowerCase();
+      if (key === "a") {
+        event.preventDefault();
+        if (selectAllBoxes()) {
+          setStatus("已全選目前頁面文字框");
+        }
+        return;
+      }
       if (key === "z") {
         event.preventDefault();
         if (event.shiftKey) {
