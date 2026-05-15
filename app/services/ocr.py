@@ -28,7 +28,7 @@ FITZ_TEXT_ALIGN = {
     TEXT_ALIGN_CENTER: 1,
     TEXT_ALIGN_RIGHT: 2,
 }
-
+PDF_TEXT_LINEHEIGHT = 1.0
 
 def normalize_box_rotation(value: Any) -> int:
     try:
@@ -319,6 +319,7 @@ def insert_textbox_overflow_visible(
     rect = fitz.Rect(rect)
     base_kwargs: dict[str, Any] = {
         "fontsize": float(fontsize),
+        "lineheight": PDF_TEXT_LINEHEIGHT,
         "color": color,
         "align": align,
         "rotate": rotate,

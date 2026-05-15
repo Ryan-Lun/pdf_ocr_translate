@@ -1510,7 +1510,8 @@ function setBoxText(page, box, nextText) {
   box.text = value;
   const textEl = getBoxElementTextNode(box);
   if (textEl) {
-    if (textEl.textContent !== value) {
+    const isActiveEditor = document.activeElement === textEl && textEl.isContentEditable;
+    if (!isActiveEditor && textEl.textContent !== value) {
       textEl.textContent = value;
       textEl.innerText = value;
     }
@@ -1523,6 +1524,31 @@ function setBoxText(page, box, nextText) {
 function beginBoxTextEdit(box) {
   if (!box || box._editBefore) return;
   box._editBefore = cloneBoxData(box);
+}
+
+function insertEditorLineBreak(textEl) {
+  if (!textEl) return;
+  textEl.focus();
+  if (document.queryCommandSupported?.("insertLineBreak")) {
+    if (document.execCommand("insertLineBreak")) {
+      return;
+    }
+  }
+  if (document.queryCommandSupported?.("insertHTML")) {
+    if (document.execCommand("insertHTML", false, "<br>")) {
+      return;
+    }
+  }
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return;
+  const range = selection.getRangeAt(0);
+  range.deleteContents();
+  const br = document.createElement("br");
+  range.insertNode(br);
+  range.setStartAfter(br);
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
 }
 
 function commitBoxTextEdit(pageIdx, boxIdx, finalText) {
@@ -3487,6 +3513,12 @@ function createBoxElement(pageIdx, boxIdx) {
   textEl.addEventListener("pointerdown", (event) => {
     state.lastCtrlKey = event.ctrlKey;
     selectBox(pageIdx, boxIdx, event.ctrlKey);
+  });
+
+  textEl.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    insertEditorLineBreak(textEl);
   });
   
   textEl.addEventListener("input", () => {

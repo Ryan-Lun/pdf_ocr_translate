@@ -137,3 +137,68 @@ def test_apply_edits_to_pdf_keeps_font_size_and_makes_overflow_visible(tmp_path:
     ]
     assert span_sizes
     assert any(abs(size - 24.0) < 0.2 for size in span_sizes)
+
+
+def test_apply_edits_to_pdf_uses_tight_line_height_for_multiline_text(tmp_path: Path):
+    job_id = "job-multiline-spacing"
+    job_dir = tmp_path / job_id
+    ocr_json_dir = job_dir / "ocr_json"
+    ocr_json_dir.mkdir(parents=True)
+
+    doc = fitz.open()
+    doc.new_page(width=200, height=300)
+    doc.save((job_dir / f"{job_id}.pdf").as_posix())
+    doc.close()
+
+    (ocr_json_dir / "0001_res_with_pdf_coords.json").write_text(
+        json.dumps(
+            {
+                "page_index_0based": 0,
+                "coord_transform": {
+                    "image_size_px": [200, 300],
+                    "pdf_page_size_pt": [200, 300],
+                    "page_rotation": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    edited_pdf = ocr.apply_edits_to_pdf(
+        job_id,
+        job_dir,
+        {
+            "pages": [
+                {
+                    "page_index_0based": 0,
+                    "boxes": [
+                        {
+                            "bbox": {"x": 20, "y": 20, "w": 100, "h": 60},
+                            "text": "first line\nsecond line",
+                            "font_size": 24,
+                            "color": "#000000",
+                            "text_align": "left",
+                            "rotation": 0,
+                            "no_clip": False,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    out_doc = fitz.open(edited_pdf.as_posix())
+    page = out_doc[0]
+    text_dict = page.get_text("dict")
+    out_doc.close()
+
+    lines = [
+        line
+        for block in text_dict["blocks"]
+        for line in block.get("lines", [])
+        if "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+    ]
+    assert len(lines) >= 2
+    first_y = lines[0]["bbox"][1]
+    second_y = lines[1]["bbox"][1]
+    assert 20.0 <= (second_y - first_y) <= 23.0
