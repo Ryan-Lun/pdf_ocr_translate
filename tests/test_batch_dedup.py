@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 import time
 
-from app.services.batch import build_batch_items, build_edits_payload_from_translations, resolve_batch_prompt
+from app.services.batch import (
+    build_batch_items,
+    build_edits_payload_from_translations,
+    resolve_batch_prompt,
+    translate_texts_for_region,
+)
 from app.services import state, translation_memory
 
 
@@ -1382,3 +1387,39 @@ def test_build_edits_payload_keeps_source_text_metadata_for_general_force():
     assert box["tm_source_text"] == "原始段落內容"
     assert box["tm_target_lang"] == "en"
     assert box["tm_document_mode"] == "general_force"
+
+
+def test_translate_texts_for_region_adds_glossary_and_protected_token_instructions(monkeypatch):
+    captured: dict[str, str] = {}
+
+    class FakeResponse:
+        output_text = "translated"
+
+    class FakeResponses:
+        @staticmethod
+        def create(*, model, instructions, input):
+            captured["model"] = model
+            captured["instructions"] = instructions
+            captured["input"] = input
+            return FakeResponse()
+
+    class FakeClient:
+        responses = FakeResponses()
+
+    monkeypatch.setattr("app.services.batch.get_azure_client", lambda: FakeClient())
+
+    outputs = translate_texts_for_region(
+        ["品質系統規範"],
+        target_lang="en",
+        source_lang="zh",
+        model_name="fake-model",
+        system_prompt="translate",
+        glossary_entries=[("品質系統規範", "Quality System Regulation")],
+    )
+
+    assert outputs == ["translated"]
+    assert captured["model"] == "fake-model"
+    assert "Use the following terminology when applicable:" in captured["instructions"]
+    assert "品質系統規範 -> Quality System Regulation" in captured["instructions"]
+    assert "[[[GLOSSARY_TERM_0001::TERM]]]" in captured["instructions"]
+    assert "[[[GLOSSARY_TERM_" in captured["input"]

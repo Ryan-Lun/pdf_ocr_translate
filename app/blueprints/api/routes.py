@@ -1051,7 +1051,7 @@ def retranslate_region(job_id: str):
     meta = jobs.load_job_meta(job_dir) or {}
     source_lang = str(config.get("source_lang") or "auto")
     target_lang = str(config.get("target_lang") or "en")
-    model_name = str(state.DOC_TRANSLATE_MODEL)
+    model_name = str(config.get("model") or state.PDF_REALTIME_TRANSLATE_MODEL or state.DOC_TRANSLATE_MODEL)
     document_mode = batch.resolve_document_mode(
         config.get("document_mode") or meta.get("document_mode")
     )

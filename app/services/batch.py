@@ -412,11 +412,22 @@ def translate_texts_for_region(
     if not texts:
         return []
 
+    glossary_prompt = _build_inline_glossary_instructions(glossary_entries)
+    protected_term_prompt = ""
+    if glossary_entries:
+        protected_term_prompt = (
+            "If the input contains tokens in the form "
+            "[[[GLOSSARY_TERM_0001::TERM]]], copy those tokens EXACTLY unchanged "
+            "into the output and keep TERM verbatim."
+        )
+
     client = get_azure_client()
     final_prompt = "\n\n".join(
         part
         for part in (
             resolve_batch_prompt(target_lang, system_prompt),
+            glossary_prompt,
+            protected_term_prompt,
             "Return only the translated text for the current input.",
         )
         if part

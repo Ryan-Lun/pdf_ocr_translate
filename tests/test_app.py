@@ -929,6 +929,73 @@ def test_retranslate_region_replaces_overlapping_auto_boxes_only(client, tmp_pat
     assert boxes[2]["tm_source_text"] == "補翻來源第一行\n補翻來源第二行"
 
 
+def test_retranslate_region_uses_job_model_for_translation(client, tmp_path, monkeypatch):
+    job_id = "e" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "DOC_TRANSLATE_MODEL", "doc-model")
+    monkeypatch.setattr(state, "PDF_REALTIME_TRANSLATE_MODEL", "realtime-model")
+
+    (job_dir / "batch_config.json").write_text(
+        json.dumps(
+            {
+                "document_mode": "general_force",
+                "target_lang": "en",
+                "model": "job-model",
+                "system_prompt": "translate",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (job_dir / "edits.json").write_text(
+        json.dumps({"pages": [{"page_index_0based": 0, "boxes": []}]}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.ocr.run_region_ocr",
+        lambda current_job_dir, page_idx, bbox: {
+            "page_index_0based": page_idx,
+            "region_bbox": bbox,
+            "rec_polys": [[[15, 15], [65, 15], [65, 25], [15, 25]]],
+            "rec_texts": ["補翻來源"],
+            "rec_scores": [0.99],
+        },
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_translate(texts, **kwargs):
+        captured["texts"] = texts
+        captured["model_name"] = kwargs.get("model_name")
+        return ["translated"]
+
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.batch.translate_texts_for_region",
+        fake_translate,
+    )
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.ocr.apply_edits_to_pdf",
+        lambda current_job_id, current_job_dir, edits: Path(current_job_dir) / "edited.pdf",
+    )
+
+    resp = client.post(
+        f"/api/job/{job_id}/retranslate-region",
+        json={
+            "page_index_0based": 0,
+            "bbox": {"x": 0, "y": 0, "w": 120, "h": 60},
+            "replace_existing": False,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert captured["texts"] == ["補翻來源"]
+    assert captured["model_name"] == "job-model"
+
+
 def test_region_ocr_preview_returns_image_and_ocr_text(client, tmp_path, monkeypatch):
     job_id = "c" * 32
     job_dir = tmp_path / "jobs" / job_id
