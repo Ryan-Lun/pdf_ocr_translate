@@ -1591,6 +1591,36 @@ body.editor .panel {
   opacity: 1;
 }
 
+.glossary-quick-form {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.35rem;
+}
+
+.glossary-quick-form label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.glossary-quick-section {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.glossary-quick-section h3,
+.glossary-quick-section p {
+  margin: 0;
+}
+
+.glossary-manage-link {
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+
+.glossary-quick-actions .glossary-manage-link {
+  margin-right: auto;
+}
+
 .glossary-list {
   display: grid;
   gap: 0.5rem;
