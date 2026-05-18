@@ -114,7 +114,8 @@
           <div class="jobs-actions">
             <button id="jobsSelectAll" class="ghost" type="button">全部勾選</button>
             <button id="jobsSelectNone" class="ghost" type="button">取消勾選</button>
-            <button id="jobsDownload" class="ghost" type="button">下載翻譯文件</button>
+            <button id="jobsDeleteSelected" class="danger" type="button">刪除勾選</button>
+            <button id="jobsDownload" class="primary" type="button">下載翻譯文件</button>
             <button id="jobsRefresh" class="ghost" type="button">重新整理</button>
           </div>
         </div>
@@ -129,6 +130,7 @@
       const jobsDownload = document.getElementById("jobsDownload");
       const jobsSelectAll = document.getElementById("jobsSelectAll");
       const jobsSelectNone = document.getElementById("jobsSelectNone");
+      const jobsDeleteSelected = document.getElementById("jobsDeleteSelected");
       const uploadInput = document.getElementById("overlayUploadInput");
       const uploadFilesSummary = document.getElementById("uploadFilesSummary");
       const uploadFilesToggle = document.getElementById("uploadFilesToggle");
@@ -486,6 +488,35 @@
         }
       }
 
+      async function deleteSelectedJobs() {
+        const jobIds = Array.from(selectedJobs);
+        if (jobIds.length === 0) {
+          alert("請先勾選要刪除的任務。");
+          return;
+        }
+        const ok = confirm(`確定要刪除 ${jobIds.length} 個任務嗎？此操作無法復原。`);
+        if (!ok) return;
+        jobsDeleteSelected.disabled = true;
+        let failed = 0;
+        for (const jobId of jobIds) {
+          try {
+            const res = await fetch(`/api/job/${jobId}`, { method: "DELETE" });
+            if (!res.ok) {
+              failed += 1;
+              continue;
+            }
+            selectedJobs.delete(jobId);
+          } catch (error) {
+            failed += 1;
+          }
+        }
+        jobsDeleteSelected.disabled = false;
+        if (failed > 0) {
+          alert(`有 ${failed} 個任務刪除失敗，請稍後再試。`);
+        }
+        loadJobs();
+      }
+
       function setAllSelections(checked) {
         const inputs = jobsList.querySelectorAll("input.job-check");
         inputs.forEach((input) => {
@@ -571,6 +602,7 @@
       jobsDownload.addEventListener("click", downloadTranslatedBatch);
       jobsSelectAll.addEventListener("click", () => setAllSelections(true));
       jobsSelectNone.addEventListener("click", () => setAllSelections(false));
+      jobsDeleteSelected.addEventListener("click", deleteSelectedJobs);
       ensureTranslateModeControl();
       translateModeSelect?.addEventListener("change", syncTranslateModelSelection);
       documentModeSelect?.addEventListener("change", syncSourceLangControl);
