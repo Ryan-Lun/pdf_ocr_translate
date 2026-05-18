@@ -60,9 +60,6 @@
             <a class="dropdown-item" href="{{ debug_pdf_url }}" target="_blank" rel="noopener">
               <i class="bi bi-bug"></i> 預覽除錯 PDF
             </a>
-            <button id="batchTranslateBtn" class="dropdown-item" type="button">
-              <i class="bi bi-translate"></i> 重新翻譯
-            </button>
             <button id="batchRestoreBtn" class="dropdown-item" type="button">
               <i class="bi bi-arrow-counterclockwise"></i> 還原內容和位置
             </button>
@@ -377,8 +374,9 @@
               <span>自訂系統提示詞</span>
               <textarea id="systemPrompt" rows="6" placeholder="輸入自訂提示詞（留空則使用預設值）"></textarea>
             </label>
-            <div class="button-row">
+            <div class="button-row--tight2 glossary-prompt-actions">
               <button id="savePromptBtn" class="ghost" type="button">儲存提示詞</button>
+              <button id="retranslateDocumentBtn" class="primary" type="button">重新翻譯整份文件</button>
             </div>
           </section>
         </div>

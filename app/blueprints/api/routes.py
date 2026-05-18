@@ -157,6 +157,50 @@ def batch_translate(job_id: str):
     return jsonify({"ok": True, "status": {"status": "queued"}})
 
 
+@api_bp.route(
+    "/job/<job_id>/retranslate-document",
+    methods=["POST"],
+    endpoint="retranslate_document",
+)
+def retranslate_document(job_id: str):
+    if not jobs.safe_job_id(job_id):
+        abort(404)
+    job_dir = jobs.job_dir(job_id)
+    if not job_dir.exists():
+        abort(404)
+
+    edits_map = jobs.load_edits_map(job_dir)
+    targets: list[dict[str, object]] = []
+    for page_idx, page_boxes in sorted(edits_map.items()):
+        for box in page_boxes:
+            if not isinstance(box, dict) or box.get("deleted"):
+                continue
+            source_text = batch.normalize_text(str(box.get("tm_source_text") or "")).strip()
+            if not source_text:
+                continue
+            try:
+                box_id = int(box.get("id"))
+            except (TypeError, ValueError):
+                continue
+            targets.append(
+                {
+                    "page_index_0based": int(page_idx),
+                    "box_id": box_id,
+                    "source_text": source_text,
+                }
+            )
+
+    if not targets:
+        return jsonify({"ok": False, "error": "No translatable boxes found in this document."}), 400
+
+    body, status_code = _retranslate_boxes(
+        job_id=job_id,
+        job_dir=job_dir,
+        targets=targets,
+    )
+    return jsonify(body), status_code
+
+
 @api_bp.route("/job/<job_id>/batch-status", methods=["GET"], endpoint="batch_status")
 def batch_status(job_id: str):
     if not jobs.safe_job_id(job_id):

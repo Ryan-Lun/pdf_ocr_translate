@@ -64,7 +64,6 @@ const headerTemplateBtn = document.getElementById("headerTemplateBtn");
 const menuBtn = document.getElementById("menuBtn");
 const menuDropdown = document.getElementById("menuDropdown");
 const regionTranslateBtn = document.getElementById("regionTranslateBtn");
-const batchTranslateBtn = document.getElementById("batchTranslateBtn");
 const batchRestoreBtn = document.getElementById("batchRestoreBtn");
 const prevPageBtn = document.getElementById("prevPage");
 const nextPageBtn = document.getElementById("nextPage");
@@ -119,6 +118,7 @@ const addGlossaryRetranslateBtn = document.getElementById("addGlossaryRetranslat
 const glossaryQuickHintEl = document.getElementById("glossaryQuickHint");
 const systemPromptEl = document.getElementById("systemPrompt");
 const savePromptBtn = document.getElementById("savePromptBtn");
+const retranslateDocumentBtn = document.getElementById("retranslateDocumentBtn");
 const glossaryPromptBtn = document.getElementById("glossaryPromptBtn");
 const glossaryPromptModal = document.getElementById("glossaryPromptModal");
 const closeGlossaryPrompt = document.getElementById("closeGlossaryPrompt");
@@ -961,15 +961,73 @@ async function saveGlossary() {
 async function saveSystemPrompt(jobId) {
   if (!jobId) return;
   const prompt = systemPromptEl?.value ?? "";
+  const idleLabel = savePromptBtn?.textContent || "儲存提示詞";
+  setGlossaryActionButtonState(savePromptBtn, "儲存中...", true);
   try {
-    await fetch(`/api/job/${jobId}/system-prompt`, {
+    const res = await fetch(`/api/job/${jobId}/system-prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ system_prompt: prompt }),
     });
+    if (!res.ok) {
+      throw new Error("save prompt failed");
+    }
+    flashGlossarySaveSuccess(savePromptBtn, idleLabel);
     setStatus("已儲存提示詞");
+    return true;
   } catch (error) {
+    setGlossaryActionButtonState(savePromptBtn, idleLabel, false);
     setStatus("儲存提示詞失敗");
+    return false;
+  }
+}
+
+async function retranslateDocumentImmediately() {
+  const jobId = document.body.dataset.jobId;
+  if (!jobId || !retranslateDocumentBtn) return;
+  retranslateDocumentBtn.disabled = true;
+  const idleLabel = "立即重新翻譯整份文件";
+  retranslateDocumentBtn.textContent = "儲存中...";
+
+  const promptSaved = await saveSystemPrompt(jobId);
+  if (!promptSaved) {
+    retranslateDocumentBtn.disabled = false;
+    retranslateDocumentBtn.textContent = idleLabel;
+    return;
+  }
+
+  const saved = await saveEdits(false, { silent: true });
+  if (!saved) {
+    retranslateDocumentBtn.disabled = false;
+    retranslateDocumentBtn.textContent = idleLabel;
+    setStatus("重新翻譯前儲存失敗");
+    return;
+  }
+
+  retranslateDocumentBtn.textContent = "重新翻譯中...";
+  setStatus("正在重新翻譯整份文件...");
+  try {
+    const res = await fetch(`/api/job/${jobId}/retranslate-document`, {
+      method: "POST",
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setStatus(body.error ? `重新翻譯失敗：${body.error}` : "重新翻譯失敗");
+      retranslateDocumentBtn.disabled = false;
+      retranslateDocumentBtn.textContent = idleLabel;
+      return;
+    }
+    await loadJobData(jobId, { preserveActivePage: true });
+    retranslateDocumentBtn.textContent = "已完成";
+    setStatus(`已即時重新翻譯 ${Number(body.updated_count || 0)} 個文字框`);
+    window.setTimeout(() => {
+      retranslateDocumentBtn.disabled = false;
+      retranslateDocumentBtn.textContent = idleLabel;
+    }, 1200);
+  } catch (error) {
+    retranslateDocumentBtn.disabled = false;
+    retranslateDocumentBtn.textContent = idleLabel;
+    setStatus("重新翻譯失敗");
   }
 }
 
@@ -1476,14 +1534,7 @@ function finishBatchPageModal(result) {
 }
 
 function setBatchButtonState(status) {
-  if (!batchTranslateBtn) return;
-  if (status === "running" || status === "queued") {
-    batchTranslateBtn.disabled = true;
-    batchTranslateBtn.textContent = "Batch 翻譯中...";
-  } else {
-    batchTranslateBtn.disabled = false;
-    batchTranslateBtn.textContent = "Batch 翻譯";
-  }
+  void status;
 }
 
 function renderBatchStatus(status) {
@@ -4373,8 +4424,14 @@ function bindControls() {
   }
 
   if (savePromptBtn) {
-    savePromptBtn.addEventListener("click", () => {
-      saveSystemPrompt(currentJobId);
+    savePromptBtn.addEventListener("click", async () => {
+      await saveSystemPrompt(currentJobId);
+    });
+  }
+
+  if (retranslateDocumentBtn) {
+    retranslateDocumentBtn.addEventListener("click", async () => {
+      await retranslateDocumentImmediately();
     });
   }
 
@@ -4719,28 +4776,6 @@ function bindControls() {
     previewEditedBtn.addEventListener("click", () => {
       if (!previewEditedBtn.disabled && editedLink?.href) {
         setPreviewMode("edited", editedLink.href);
-      }
-    });
-  }
-
-  if (batchTranslateBtn) {
-    batchTranslateBtn.addEventListener("click", async (event) => {
-      event.preventDefault();
-      const jobId = document.body.dataset.jobId;
-      if (!jobId) return;
-      setBatchButtonState("running");
-      setStatus("啟動 Batch 翻譯...");
-      try {
-        const res = await fetch(`/api/job/${jobId}/batch-translate`, { method: "POST" });
-        if (!res.ok) {
-          setStatus("Batch 翻譯啟動失敗");
-          setBatchButtonState("failed");
-          return;
-        }
-        setTimeout(() => pollBatchStatus(jobId), 3000);
-      } catch (error) {
-        setStatus("Batch 翻譯啟動失敗");
-        setBatchButtonState("failed");
       }
     });
   }
