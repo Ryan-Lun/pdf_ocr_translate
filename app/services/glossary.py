@@ -10,6 +10,11 @@ from xml.etree import ElementTree as ET
 
 from . import state
 
+try:
+    import xlsxwriter
+except Exception:  # pragma: no cover - optional dependency in runtime env
+    xlsxwriter = None
+
 _PROTECTED_TERM_PREFIX = "[[[GLOSSARY_TERM_"
 _PROTECTED_TERM_PATTERN = re.compile(r"\[\[\[GLOSSARY_TERM_\d+::(.*?)\]\]\]")
 _SPREADSHEET_NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -411,6 +416,116 @@ def apply_system_glossary_import(items: list[dict[str, str]]) -> list[dict[str, 
     ]
     write_system_glossary(merged_items)
     return merged_items
+
+
+def _escape_xml_text(value: str) -> str:
+    return (
+        str(value or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _build_xlsx_bytes(rows: list[list[str]], sheet_name: str = "Sheet1") -> bytes:
+    shared_strings: list[str] = []
+    shared_index: dict[str, int] = {}
+    sheet_rows: list[str] = []
+    for row_idx, row in enumerate(rows, start=1):
+        cells: list[str] = []
+        for col_idx, value in enumerate(row, start=1):
+            text = str(value or "")
+            if text not in shared_index:
+                shared_index[text] = len(shared_strings)
+                shared_strings.append(text)
+            col_name = ""
+            current = col_idx
+            while current > 0:
+                current, remainder = divmod(current - 1, 26)
+                col_name = chr(65 + remainder) + col_name
+            cell_ref = f"{col_name}{row_idx}"
+            cells.append(f'<c r="{cell_ref}" t="s"><v>{shared_index[text]}</v></c>')
+        sheet_rows.append(f'<row r="{row_idx}">{"".join(cells)}</row>')
+
+    shared_xml = "".join(f"<si><t>{_escape_xml_text(text)}</t></si>" for text in shared_strings)
+    sheet_xml = "".join(sheet_rows)
+    sheet_name_xml = _escape_xml_text(sheet_name)
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w") as zf:
+        zf.writestr(
+            "[Content_Types].xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>""",
+        )
+        zf.writestr(
+            "_rels/.rels",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>""",
+        )
+        zf.writestr(
+            "xl/workbook.xml",
+            f"""<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="{sheet_name_xml}" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>""",
+        )
+        zf.writestr(
+            "xl/_rels/workbook.xml.rels",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>""",
+        )
+        zf.writestr(
+            "xl/sharedStrings.xml",
+            f"""<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{len(shared_strings)}" uniqueCount="{len(shared_strings)}">
+  {shared_xml}
+</sst>""",
+        )
+        zf.writestr(
+            "xl/worksheets/sheet1.xml",
+            f"""<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    {sheet_xml}
+  </sheetData>
+</worksheet>""",
+        )
+    return output.getvalue()
+
+
+def export_system_glossary_excel() -> bytes:
+    items = load_system_glossary()
+    if xlsxwriter is None:
+        rows = [["cn", "en"]]
+        rows.extend([[item["cn"], item["en"]] for item in items])
+        return _build_xlsx_bytes(rows, sheet_name="SystemGlossary")
+
+    output = BytesIO()
+    workbook = xlsxwriter.Workbook(output, {"in_memory": True})
+    worksheet = workbook.add_worksheet("SystemGlossary")
+    header_format = workbook.add_format({"bold": True})
+    worksheet.write(0, 0, "cn", header_format)
+    worksheet.write(0, 1, "en", header_format)
+    for row_index, item in enumerate(items, start=1):
+        worksheet.write(row_index, 0, item["cn"])
+        worksheet.write(row_index, 1, item["en"])
+    worksheet.set_column(0, 0, 36)
+    worksheet.set_column(1, 1, 54)
+    workbook.close()
+    return output.getvalue()
 
 
 def apply_glossary(text: str, entries: list[tuple[str, str]] | None = None) -> str:

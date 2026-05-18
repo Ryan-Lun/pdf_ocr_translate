@@ -20,28 +20,28 @@
     "en": "deformation in M-L direction"
   },
   {
-    "cn": "M/C銑削(模具區輕切削)＊(高雄)\nM/C",
-    "en": "Milling (Light milling in mold area)*(Kaohsiung)"
+    "cn": "M/C銑削(模具區輕切削)＊(高雄)",
+    "en": "M/C Milling (Light milling in mold area)*(Kaohsiung)"
   },
   {
-    "cn": "M/C銑削(模具區重切削)＊(高雄)\nM/C",
-    "en": "Milling (Heavy milling in mold area)*(Kaohsiung)"
+    "cn": "M/C銑削(模具區重切削)＊(高雄)",
+    "en": "M/C Milling (Heavy milling in mold area)*(Kaohsiung)"
   },
   {
-    "cn": "M/C銑削加工(塑膠件)\nM/C",
-    "en": "Milling (Plastic)"
+    "cn": "M/C銑削加工(塑膠件)",
+    "en": "M/C Milling (Plastic)"
   },
   {
-    "cn": "M/C銑削加工(金屬件)\nM/C",
-    "en": "Milling Process (Metal)"
+    "cn": "M/C銑削加工(金屬件)",
+    "en": "M/C Milling (Metal)"
   },
   {
-    "cn": "M/C銑削加工(金屬件中心出水)\nM/C",
-    "en": "Milling Process(Coolant  through Spindle)"
+    "cn": "M/C銑削加工(金屬件中心出水)",
+    "en": "M/C Milling Process(Coolant  through Spindle)"
   },
   {
-    "cn": "M/C銑削加工(金屬件重切削)＊(高雄)\nM/C",
-    "en": "Milling (Heavy)* (Kaohsiung)"
+    "cn": "M/C銑削加工(金屬件重切削)＊(高雄)",
+    "en": "M/C Milling (Heavy)* (Kaohsiung)"
   },
   {
     "cn": "R200",
@@ -84,16 +84,16 @@
     "en": "CNC 5-Axis Milling"
   },
   {
-    "cn": "五軸研磨加工\n5-",
-    "en": "Axis Grinding"
+    "cn": "五軸研磨加工",
+    "en": "5-Axis Grinding"
   },
   {
-    "cn": "五軸立式車銑\n5-",
-    "en": "Axis Vertical Milling-turning"
+    "cn": "五軸立式車銑",
+    "en": "5-Axis Vertical Milling-Turning"
   },
   {
-    "cn": "五軸複合加工\n5-",
-    "en": "Axis Compound Machining"
+    "cn": "五軸複合加工",
+    "en": "5-Axis Compound Machining"
   },
   {
     "cn": "交回原部門",

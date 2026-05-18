@@ -194,15 +194,57 @@ def test_system_glossary_excel_preview_and_apply(client, tmp_path, monkeypatch):
 
     apply_resp = client.post(
         "/api/glossary/system-import-apply",
-        json={"items": preview["items"]},
+        json={
+            "items": preview["items"],
+            "duplicates": preview["duplicates"],
+            "invalid_rows": preview["invalid_rows"],
+        },
+    )
+    assert apply_resp.status_code == 400
+    payload = apply_resp.get_json()
+    assert payload["ok"] is False
+    assert "重複詞彙列" in payload["error"]
+
+
+def test_system_glossary_excel_apply_succeeds_without_blocking_issues(client, tmp_path, monkeypatch):
+    global_path = tmp_path / "global.json"
+    system_path = tmp_path / "system.json"
+    _write_glossary(system_path, [{"cn": "批號", "en": "Lot No."}])
+    _write_glossary(global_path, [])
+    monkeypatch.setattr(state, "GLOBAL_GLOSSARY_PATH", str(global_path))
+    monkeypatch.setattr(state, "SYSTEM_GLOSSARY_PATH", str(system_path))
+    glossary.invalidate_glossary_cache()
+
+    workbook = _build_xlsx(
+        [
+            ["cn", "en"],
+            ["批號", "Batch No."],
+            ["新詞", "New Term"],
+        ]
+    )
+    preview_resp = client.post(
+        "/api/glossary/system-import-preview",
+        data={"file": (BytesIO(workbook), "system.xlsx")},
+        content_type="multipart/form-data",
+    )
+    preview = preview_resp.get_json()
+    assert preview["duplicates"] == []
+    assert preview["invalid_rows"] == []
+
+    apply_resp = client.post(
+        "/api/glossary/system-import-apply",
+        json={
+            "items": preview["items"],
+            "duplicates": preview["duplicates"],
+            "invalid_rows": preview["invalid_rows"],
+        },
     )
     assert apply_resp.status_code == 200
     payload = apply_resp.get_json()
     assert payload["ok"] is True
     assert payload["system_glossary"] == [
         {"cn": "批號", "en": "Batch No."},
-        {"cn": "新詞", "en": "New Term 2"},
-        {"cn": "製造日期", "en": "Manufacturing Date"},
+        {"cn": "新詞", "en": "New Term"},
     ]
 
 
@@ -222,3 +264,20 @@ def test_system_glossary_excel_preview_requires_cn_en_header(client):
     payload = resp.get_json()
     assert payload["ok"] is False
     assert "cn" in payload["error"]
+
+
+def test_system_glossary_export_returns_xlsx(client, tmp_path, monkeypatch):
+    system_path = tmp_path / "system.json"
+    global_path = tmp_path / "global.json"
+    _write_glossary(system_path, [{"cn": "批號", "en": "Lot No."}])
+    _write_glossary(global_path, [])
+    monkeypatch.setattr(state, "SYSTEM_GLOSSARY_PATH", str(system_path))
+    monkeypatch.setattr(state, "GLOBAL_GLOSSARY_PATH", str(global_path))
+    glossary.invalidate_glossary_cache()
+
+    resp = client.get("/api/glossary/system-export")
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "system_glossary.xlsx" in resp.headers.get("Content-Disposition", "")
+    parsed = glossary.parse_system_glossary_excel(resp.data)
+    assert parsed["items"] == [{"cn": "批號", "en": "Lot No."}]

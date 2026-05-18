@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
@@ -258,6 +259,17 @@ def global_glossary():
 @api_bp.route("/glossary/library", methods=["GET"], endpoint="glossary_library")
 def glossary_library():
     return jsonify({"ok": True, **glossary.build_glossary_management_payload()})
+
+
+@api_bp.route("/glossary/system-export", methods=["GET"], endpoint="glossary_system_export")
+def glossary_system_export():
+    workbook = glossary.export_system_glossary_excel()
+    return send_file(
+        io.BytesIO(workbook),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="system_glossary.xlsx",
+    )
 
 
 @api_bp.route("/glossary/system-import-preview", methods=["POST"], endpoint="glossary_system_import_preview")

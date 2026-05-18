@@ -6,6 +6,7 @@ const glossaryStatusEl = document.getElementById("glossaryStatus");
 const glossaryListEl = document.getElementById("glossaryList");
 const glossaryEmptyEl = document.getElementById("glossaryEmpty");
 const systemGlossaryFileEl = document.getElementById("systemGlossaryFile");
+const exportSystemGlossaryBtn = document.getElementById("exportSystemGlossaryBtn");
 const previewSystemGlossaryBtn = document.getElementById("previewSystemGlossaryBtn");
 const applySystemGlossaryBtn = document.getElementById("applySystemGlossaryBtn");
 const systemImportStatusEl = document.getElementById("systemImportStatus");
@@ -611,10 +612,15 @@ async function applySystemGlossaryImport() {
   }
 }
 
+function exportSystemGlossary() {
+  window.location.href = "/api/glossary/system-export";
+}
+
 glossarySearchEl?.addEventListener("input", renderGlossaryList);
 glossaryFilterEl?.addEventListener("change", renderGlossaryList);
 glossaryRefreshBtn?.addEventListener("click", loadGlossaryLibrary);
 glossaryNewBtn?.addEventListener("click", startNewGlossaryEntry);
+exportSystemGlossaryBtn?.addEventListener("click", exportSystemGlossary);
 saveGlossaryBtn?.addEventListener("click", saveCurrentGlossary);
 deleteGlossaryBtn?.addEventListener("click", deleteCurrentGlossary);
 overrideGlossaryBtn?.addEventListener("click", startOverrideEntry);
