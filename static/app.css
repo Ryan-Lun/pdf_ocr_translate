@@ -374,7 +374,11 @@ code {
 .job-meta {
   color: var(--muted);
   font-size: 0.9rem;
-  padding-left: 1.45rem;
+  /* padding-left: 1.45rem; */
+}
+
+.template-card .job-meta {
+  padding-left: 0;
 }
 
 @media (max-width: 720px) {
