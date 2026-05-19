@@ -114,6 +114,13 @@ def run_worker_loop(worker_id: str | None = None, poll_seconds: float | None = N
     }
     logger.info("Worker loop started worker_id=%s poll_seconds=%s", worker_name, delay)
     while True:
+        recovered_job_ids = job_store.recover_orphaned_active_jobs()
+        if recovered_job_ids:
+            logger.warning(
+                "Recovered orphaned active jobs count=%s job_ids=%s",
+                len(recovered_job_ids),
+                ",".join(recovered_job_ids),
+            )
         record = job_store.claim_next_job(worker_name, concurrency_limits=concurrency_limits)
         processed_active_batch = False
         try:

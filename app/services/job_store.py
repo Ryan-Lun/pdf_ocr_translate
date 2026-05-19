@@ -3,6 +3,8 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -10,6 +12,7 @@ from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_e
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 logger = logging.getLogger(__name__)
+_LOCAL_WORKER_ID_RE = re.compile(r"^worker-(\d+)$")
 
 
 class Base(DeclarativeBase):
@@ -350,6 +353,7 @@ def claim_next_job(
                             FROM jobs AS active
                             WHERE active.job_type IN ('ocr_overlay', 'template_source')
                               AND active.status IN ('running', 'cancel_requested')
+                              AND active.worker_id IS NOT NULL
                               AND ISNULL(active.stage, '') <> 'translate'
                         ) < :ocr_limit)
                         OR
@@ -358,6 +362,7 @@ def claim_next_job(
                             FROM jobs AS active
                             WHERE active.job_type IN ('ocr_overlay', 'template_source')
                               AND active.status IN ('running', 'cancel_requested')
+                              AND active.worker_id IS NOT NULL
                               AND ISNULL(active.stage, '') = 'translate'
                         ) < :pdf_translate_limit)
                         OR
@@ -366,6 +371,7 @@ def claim_next_job(
                             FROM jobs AS active
                             WHERE active.job_type = 'doc_workspace'
                               AND active.status IN ('running', 'cancel_requested')
+                              AND active.worker_id IS NOT NULL
                         ) < :doc_limit)
                         OR
                         (job_type = 'word_translate' AND :word_limit > 0 AND (
@@ -373,6 +379,7 @@ def claim_next_job(
                             FROM jobs AS active
                             WHERE active.job_type = 'word_translate'
                               AND active.status IN ('running', 'cancel_requested')
+                              AND active.worker_id IS NOT NULL
                         ) < :word_limit)
                       )
                     ORDER BY created_at ASC
@@ -401,6 +408,57 @@ def claim_next_job(
         if row is None:
             return None
         return session.get(JobRecord, row[0])
+
+
+def _is_local_worker_id_stale(worker_id: str | None) -> bool:
+    if not worker_id:
+        return True
+    match = _LOCAL_WORKER_ID_RE.fullmatch(str(worker_id).strip())
+    if not match:
+        return False
+    pid = int(match.group(1))
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
+
+
+def recover_orphaned_active_jobs() -> list[str]:
+    """Requeue active jobs that have no live worker ownership.
+
+    Legitimate active jobs are claimed through ``claim_next_job``, which assigns
+    ``worker_id`` atomically. If an active row has ``worker_id IS NULL`` or
+    points to a dead local worker process, it is orphaned and should not block
+    queue concurrency forever.
+    """
+
+    with session_scope() as session:
+        candidates = list(
+            session.scalars(
+                select(JobRecord).where(JobRecord.status.in_(("running", "cancel_requested")))
+            ).all()
+        )
+        recovered: list[str] = []
+        for record in candidates:
+            if not _is_local_worker_id_stale(record.worker_id):
+                continue
+            if record.status == "cancel_requested" or record.cancel_requested:
+                record.status = "cancelled"
+                record.stage = "cancelled"
+                record.completed_at = utcnow()
+            else:
+                record.status = "queued"
+                record.stage = "translate" if str(record.stage or "").strip().lower() == "translate" else "queued"
+                record.started_at = None
+                record.completed_at = None
+                record.retry_count = int(record.retry_count or 0) + 1
+            record.worker_id = None
+            record.updated_at = utcnow()
+            recovered.append(record.job_id)
+        return recovered
 
 
 def deserialize_payload(record: JobRecord | None) -> dict[str, Any]:
