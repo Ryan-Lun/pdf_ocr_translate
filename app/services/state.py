@@ -149,6 +149,7 @@ FONT_CANDIDATES = [
 
 DEFAULT_TEXT_COLOR = "#0000ff"
 DEFAULT_FONT_SIZE_PX = 25.0
+OCR_MIN_LINE_SCORE = max(0.0, min(1.0, float(os.getenv("OCR_MIN_LINE_SCORE", "0.8"))))
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)

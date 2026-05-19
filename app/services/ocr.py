@@ -12,6 +12,7 @@ import fitz
 import requests
 
 from . import state
+from ocr_pipeline.pipeline import filter_ppstructure_data_by_score
 
 try:
     import cv2
@@ -154,6 +155,49 @@ def normalize_text_align(value: Any) -> str:
     return TEXT_ALIGN_LEFT
 
 
+def _filter_page_payload_by_score(data: dict[str, Any], min_score: float) -> dict[str, Any]:
+    if min_score <= 0:
+        return dict(data)
+
+    rec_polys = list(data.get("rec_polys", []) or [])
+    rec_texts = list(data.get("rec_texts", []) or [])
+    edit_texts = list(data.get("edit_texts", []) or [])
+    rec_scores = list(data.get("rec_scores", []) or [])
+    count = len(rec_polys)
+    if count == 0:
+        return dict(data)
+
+    if not edit_texts:
+        edit_texts = list(rec_texts)
+
+    keep_indexes: list[int] = []
+    filtered_scores: list[float] = []
+    for idx in range(count):
+        score = float(rec_scores[idx]) if idx < len(rec_scores) else 1.0
+        if score < min_score:
+            continue
+        keep_indexes.append(idx)
+        filtered_scores.append(score)
+
+    if len(keep_indexes) == count:
+        filtered = dict(data)
+        filtered["edit_texts"] = edit_texts
+        filtered["rec_scores"] = filtered_scores
+        return filtered
+
+    def _filter_list(values: Any) -> list[Any]:
+        if not isinstance(values, list):
+            return []
+        return [values[idx] for idx in keep_indexes if idx < len(values)]
+
+    filtered = dict(data)
+    filtered["rec_polys"] = _filter_list(rec_polys)
+    filtered["rec_texts"] = _filter_list(rec_texts)
+    filtered["edit_texts"] = _filter_list(edit_texts)
+    filtered["rec_scores"] = filtered_scores
+    return filtered
+
+
 def load_page_data(
     page_json_path: Path,
     edits_boxes: list[dict[str, Any]] | None = None,
@@ -161,6 +205,8 @@ def load_page_data(
 ) -> dict[str, Any]:
     if data is None:
         data = json.loads(page_json_path.read_text(encoding="utf-8"))
+    if edits_boxes is None:
+        data = _filter_page_payload_by_score(data, state.OCR_MIN_LINE_SCORE)
     if edits_boxes is not None:
         rec_polys: list[list[list[float]]] = []
         rec_texts: list[str] = []
@@ -372,7 +418,11 @@ def load_ocr_pages(job_dir: Path) -> list[dict[str, Any]]:
     page_paths = sorted(json_dir.glob("*_res_with_pdf_coords.json"))
     if not page_paths:
         raise RuntimeError("No OCR JSON pages found.")
-    return [json.loads(path.read_text(encoding="utf-8")) for path in page_paths]
+    pages: list[dict[str, Any]] = []
+    for path in page_paths:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        pages.append(_filter_page_payload_by_score(raw, state.OCR_MIN_LINE_SCORE))
+    return pages
 
 
 def infer_page_index_from_name(name: str) -> int | None:
@@ -395,7 +445,8 @@ def load_pp_pages(job_dir: Path) -> dict[int, dict[str, Any]]:
         if page_idx is None:
             continue
         try:
-            pages[page_idx] = json.loads(path.read_text(encoding="utf-8"))
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            pages[page_idx] = filter_ppstructure_data_by_score(raw, state.OCR_MIN_LINE_SCORE)
         except json.JSONDecodeError:
             continue
     return pages
@@ -671,7 +722,7 @@ def run_region_ocr(
     rec_polys, rec_texts, rec_scores = extract_rec_entries_from_ppstructure(
         pruned,
         skip_text_inside_table=True,
-        min_line_score=0.0,
+        min_line_score=state.OCR_MIN_LINE_SCORE,
         table_fallback_layout=True,
     )
     offset_polys: list[list[list[float]]] = []
