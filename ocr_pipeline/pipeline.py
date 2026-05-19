@@ -52,6 +52,10 @@ DIGIT_RE = re.compile(r"\d")
 REMOVE_LATIN_RE = re.compile(r"[A-Za-z]+")
 REMOVE_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 NUMERIC_ONLY_RE = re.compile(r"^[0-9]+([,./:-][0-9]+)*%?$")
+DEFAULT_OCR_MIN_LINE_SCORE = max(
+    0.0,
+    min(1.0, float(os.getenv("OCR_MIN_LINE_SCORE", "0.8"))),
+)
 
 
 def _filter_text_by_lang(text: str, keep_lang: str) -> str:
@@ -116,6 +120,54 @@ def _is_numeric_only(text: str) -> bool:
     if not clean:
         return False
     return bool(NUMERIC_ONLY_RE.fullmatch(clean))
+
+
+def _resolve_block_score(block: dict[str, Any], data: dict[str, Any]) -> float:
+    explicit = block.get("block_score")
+    if explicit is not None:
+        return _as_float(explicit, 1.0)
+
+    bbox = block.get("block_bbox")
+    if not (isinstance(bbox, list) and len(bbox) == 4):
+        return 1.0
+    try:
+        block_bbox = [float(v) for v in bbox]
+    except Exception:
+        return 1.0
+
+    overall = data.get("overall_ocr_res", {}) or data.get("overall_ocr", {})
+    rec_polys = overall.get("rec_polys", []) or []
+    rec_scores = overall.get("rec_scores", []) or []
+    matched_scores: list[float] = []
+    for idx, poly in enumerate(rec_polys):
+        if not (isinstance(poly, list) and len(poly) >= 4):
+            continue
+        try:
+            poly4 = [[float(p[0]), float(p[1])] for p in poly[:4]]
+        except Exception:
+            continue
+        cx, cy = bbox_center(poly_to_bbox(poly4))
+        if point_in_bbox(cx, cy, block_bbox):
+            matched_scores.append(_as_float(rec_scores[idx], 0.0) if idx < len(rec_scores) else 0.0)
+    if not matched_scores:
+        return 1.0
+    return sum(matched_scores) / len(matched_scores)
+
+
+def filter_ppstructure_data_by_score(data: dict[str, Any], min_line_score: float) -> dict[str, Any]:
+    filtered = dict(data)
+    parsing_blocks = filtered.get("parsing_res_list") or []
+    if isinstance(parsing_blocks, list):
+        next_blocks: list[Any] = []
+        for block in parsing_blocks:
+            if not isinstance(block, dict):
+                next_blocks.append(block)
+                continue
+            scored_block = dict(block)
+            scored_block["block_score"] = _resolve_block_score(scored_block, filtered)
+            next_blocks.append(scored_block)
+        filtered["parsing_res_list"] = next_blocks
+    return filtered
 
 
 # -----------------------------
@@ -570,6 +622,7 @@ def extract_rec_entries_from_ppstructure(
             continue
         if _is_numeric_only(content):
             continue
+        block_score = _as_float(blk.get("block_score"), 1.0)
         paragraph_bboxes.append(bb_px)
 
         if skip_text_inside_table and table_bboxes:
@@ -579,7 +632,7 @@ def extract_rec_entries_from_ppstructure(
 
         rec_polys.append(bbox_to_poly(bb_px))
         rec_texts.append(content)
-        rec_scores.append(_as_float(blk.get("block_score"), 1.0))
+        rec_scores.append(block_score)
 
     # OCR text lines (rec_polys): keep all lines, but skip if inside paragraph blocks
     overall = data.get("overall_ocr_res", {}) or data.get("overall_ocr", {})
@@ -966,6 +1019,7 @@ def overlay_one_page(
         content = normalize_paragraph_text(blk.get("block_content", ""))
         if not content:
             continue
+        block_score = _as_float(blk.get("block_score"), 1.0)
         paragraph_bboxes.append(bb_px)
 
         if skip_for_tables and table_bboxes:
@@ -1155,7 +1209,7 @@ def run_pipeline(
     dpi: int = 300,
     start_page: int = 1,
     end_page: int | None = None,
-    min_score: float = 0.0,
+    min_score: float = DEFAULT_OCR_MIN_LINE_SCORE,
     draw_boxes: bool = True,
     draw_text: bool = True,
     enable_translate: bool = False,
@@ -1173,7 +1227,7 @@ def run_pipeline(
     paragraph_min_fs: float = 4.0,
     paragraph_clip_ellipsis: bool = False,
     skip_text_inside_table: bool = False,
-    min_line_score: float = 0.0,
+    min_line_score: float = DEFAULT_OCR_MIN_LINE_SCORE,
     table_fallback_layout: bool = False,
     document_mode: str = "form",
 ) -> dict[str, Any]:
@@ -1228,6 +1282,8 @@ def run_pipeline(
             raise PipelineCancelled("Cancelled during normalization.")
 
         data = json.loads(js_path.read_text(encoding="utf-8"))
+        data = filter_ppstructure_data_by_score(data, effective_min_line_score)
+        js_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         input_path = data.get("input_path") or ""
         img_path = resolve_image_path(str(input_path), js_path, img_dir) if input_path else img_dir / f"{js_path.stem}.png"
         if not img_path.exists():
@@ -1340,14 +1396,24 @@ def main() -> None:
         default="all",
         help="Keep only target language in OCR results",
     )
-    parser.add_argument("--min-score", type=float, default=0.0, help="Minimum table line score for overlay")
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=DEFAULT_OCR_MIN_LINE_SCORE,
+        help="Minimum OCR score for overlay blocks and lines",
+    )
     parser.add_argument("--no-box", action="store_true", help="Do not draw debug boxes")
     parser.add_argument("--no-text", action="store_true", help="Do not draw debug text")
     parser.add_argument("--fontfile", default=DEFAULT_FONTFILE, help="Font file path for paragraph text")
     parser.add_argument("--paragraph-min-fs", type=float, default=4.0, help="Paragraph min font size")
     parser.add_argument("--paragraph-clip-ellipsis", action="store_true", help="Paragraph ellipsis fallback")
     parser.add_argument("--skip-text-inside-table", action="store_true", help="Skip paragraph text inside tables")
-    parser.add_argument("--min-line-score", type=float, default=0.0, help="Minimum table line score")
+    parser.add_argument(
+        "--min-line-score",
+        type=float,
+        default=DEFAULT_OCR_MIN_LINE_SCORE,
+        help="Minimum OCR score for line-level entries",
+    )
     parser.add_argument("--table-fallback-layout", action="store_true", help="Use layout table boxes if parsing is empty")
     args = parser.parse_args()
 

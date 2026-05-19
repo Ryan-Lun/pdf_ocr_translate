@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import json
 import re
 import time
@@ -8,6 +9,10 @@ from typing import Any
 
 _LAYOUT_BLOCK = None
 _LAYOUT_BLOCK_ERROR: Exception | None = None
+DEFAULT_OCR_MIN_LINE_SCORE = max(
+    0.0,
+    min(1.0, float(os.getenv("OCR_MIN_LINE_SCORE", "0.8"))),
+)
 
 
 def _poly_to_box(poly):
@@ -162,6 +167,7 @@ def merge_keep_original_json(data: dict[str, Any]) -> dict[str, Any]:
 
     rec_boxes = [_poly_to_box(p) for p in ocr_res["rec_polys"]]
     rec_texts = ocr_res["rec_texts"]
+    rec_scores = ocr_res.get("rec_scores") or []
 
     table_boxes = [b["coordinate"] for b in layout_blocks if b["label"] == "table"]
 
@@ -223,7 +229,10 @@ def merge_keep_original_json(data: dict[str, Any]) -> dict[str, Any]:
         boxes = []
         texts = []
 
-        for box, text in zip(rec_boxes, rec_texts):
+        for idx, (box, text) in enumerate(zip(rec_boxes, rec_texts)):
+            score = float(rec_scores[idx]) if idx < len(rec_scores) else 1.0
+            if score < DEFAULT_OCR_MIN_LINE_SCORE:
+                continue
             if _inside_table(box, table_boxes):
                 continue
 
