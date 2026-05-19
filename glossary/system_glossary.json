@@ -1,0 +1,1234 @@
+[
+  {
+    "cn": "4*固定柱角度",
+    "en": "angle of orientation tab"
+  },
+  {
+    "cn": "4*固定柱高度",
+    "en": "height of orientation tab"
+  },
+  {
+    "cn": "521   塑膠雷射刻印(託外加工)",
+    "en": "Plastic Laser Marking (Outsourcing)"
+  },
+  {
+    "cn": "Impactor 功能測試",
+    "en": "function test of Impactor"
+  },
+  {
+    "cn": "M-L方向變形量",
+    "en": "deformation in M-L direction"
+  },
+  {
+    "cn": "M/C銑削(模具區輕切削)＊(高雄)",
+    "en": "M/C Milling (Light milling in mold area)*(Kaohsiung)"
+  },
+  {
+    "cn": "M/C銑削(模具區重切削)＊(高雄)",
+    "en": "M/C Milling (Heavy milling in mold area)*(Kaohsiung)"
+  },
+  {
+    "cn": "M/C銑削加工(塑膠件)",
+    "en": "M/C Milling (Plastic)"
+  },
+  {
+    "cn": "M/C銑削加工(金屬件)",
+    "en": "M/C Milling (Metal)"
+  },
+  {
+    "cn": "M/C銑削加工(金屬件中心出水)",
+    "en": "M/C Milling Process(Coolant  through Spindle)"
+  },
+  {
+    "cn": "M/C銑削加工(金屬件重切削)＊(高雄)",
+    "en": "M/C Milling (Heavy)* (Kaohsiung)"
+  },
+  {
+    "cn": "R200",
+    "en": "R200"
+  },
+  {
+    "cn": "TL20-0426 (壓配尺寸）\nTL2-0426 (59°)\nTL2-0426 (61°)",
+    "en": "TL20-0426 (Press fit dimension）\nTL2-0426 (59°)\nTL2-0426 (61°)"
+  },
+  {
+    "cn": "三次元",
+    "en": "3D measuring"
+  },
+  {
+    "cn": "三點式分厘卡",
+    "en": "Inside micrometer"
+  },
+  {
+    "cn": "中心定位孔螺紋",
+    "en": "thread on center hole"
+  },
+  {
+    "cn": "中心方孔寬度",
+    "en": "Center Box Width"
+  },
+  {
+    "cn": "中心方柱寬度",
+    "en": "Center Spine Width"
+  },
+  {
+    "cn": "中心距",
+    "en": "distance between center of outer diameter and inner diameter"
+  },
+  {
+    "cn": "乾燥",
+    "en": "Drying"
+  },
+  {
+    "cn": "五軸M/C加工",
+    "en": "CNC 5-Axis Milling"
+  },
+  {
+    "cn": "五軸研磨加工",
+    "en": "5-Axis Grinding"
+  },
+  {
+    "cn": "五軸立式車銑",
+    "en": "5-Axis Vertical Milling-Turning"
+  },
+  {
+    "cn": "五軸複合加工",
+    "en": "5-Axis Compound Machining"
+  },
+  {
+    "cn": "交回原部門",
+    "en": "Return to Original Division"
+  },
+  {
+    "cn": "低溫熱處理",
+    "en": "Low Temperature Heat Treatment"
+  },
+  {
+    "cn": "俄羅斯說明書",
+    "en": "Russian Instruction Manual"
+  },
+  {
+    "cn": "倒勾寬度",
+    "en": "Height of Groove"
+  },
+  {
+    "cn": "倒勾平面寬",
+    "en": "Residuary Thickness after Chamfering"
+  },
+  {
+    "cn": "倒勾深度",
+    "en": "Depth of Groove"
+  },
+  {
+    "cn": "倒角",
+    "en": "Chamfer Processing"
+  },
+  {
+    "cn": "備熱處理試片＊(西安)",
+    "en": "Heat Treatment Specimen preperation*(Xian)"
+  },
+  {
+    "cn": "傳統加工",
+    "en": "Manual Machining"
+  },
+  {
+    "cn": "入庫＊(西安)",
+    "en": "Storage*(Xian)"
+  },
+  {
+    "cn": "內側魚眼孔內徑",
+    "en": "inner diameter of inner countersink"
+  },
+  {
+    "cn": "內圓拋光",
+    "en": "Inner Diameter Polishing"
+  },
+  {
+    "cn": "內圓直徑",
+    "en": "ID"
+  },
+  {
+    "cn": "內孔深度",
+    "en": "deep of inner bore"
+  },
+  {
+    "cn": "內徑卡規",
+    "en": "caliper gauge"
+  },
+  {
+    "cn": "內徑圓弧",
+    "en": "circular arc of inner surface"
+  },
+  {
+    "cn": "內徑斷差深度",
+    "en": "depth of gap"
+  },
+  {
+    "cn": "內椎椎度",
+    "en": "inner taper angle"
+  },
+  {
+    "cn": "內椎直徑",
+    "en": "diameter of inner bore"
+  },
+  {
+    "cn": "全長",
+    "en": "length"
+  },
+  {
+    "cn": "全高",
+    "en": "height"
+  },
+  {
+    "cn": "六角",
+    "en": "hexagon"
+  },
+  {
+    "cn": "六角孔深",
+    "en": "depth of hexagon hole"
+  },
+  {
+    "cn": "凸緣深度",
+    "en": "Hood Depth"
+  },
+  {
+    "cn": "凸緣高度",
+    "en": "Hood Height"
+  },
+  {
+    "cn": "切割",
+    "en": "Cutting"
+  },
+  {
+    "cn": "切割材料",
+    "en": "Material Cutting"
+  },
+  {
+    "cn": "切斷",
+    "en": "Cutting"
+  },
+  {
+    "cn": "刻印",
+    "en": "Laser Marking"
+  },
+  {
+    "cn": "刻印、外觀",
+    "en": "Laser Marking and Appearance"
+  },
+  {
+    "cn": "前端角度",
+    "en": "Anterior Angularity"
+  },
+  {
+    "cn": "功能實配檢驗",
+    "en": "Function Quality Check"
+  },
+  {
+    "cn": "功能實配檢驗(3)＊(高雄)",
+    "en": "Function Quality Check(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "包膠帶",
+    "en": "Taping"
+  },
+  {
+    "cn": "包裝",
+    "en": "Packing"
+  },
+  {
+    "cn": "協力廠代加工*(器械)",
+    "en": "Subcontracting Processing*(Instrument)"
+  },
+  {
+    "cn": "協力廠機加工",
+    "en": "Subcontracting Machining"
+  },
+  {
+    "cn": "協力廠複合加工",
+    "en": "Subcontracting Compound Machining"
+  },
+  {
+    "cn": "協力廠複合加工含HA",
+    "en": "Subcontracting Compound Machining & HA"
+  },
+  {
+    "cn": "協力廠複合加工含HA/Ti",
+    "en": "Subcontracting Compound Machining  &  HA/Ti"
+  },
+  {
+    "cn": "協力廠複合加工含鈦粉燒結",
+    "en": "Subcontracting Compound Machining  & Sintering of Ti Powder"
+  },
+  {
+    "cn": "協力廠複合加工含電漿噴塗",
+    "en": "Subcontracting Compound Machining & Ti Plasma Spray"
+  },
+  {
+    "cn": "卡溝寬度",
+    "en": "width of clip"
+  },
+  {
+    "cn": "厚度",
+    "en": "Thickness"
+  },
+  {
+    "cn": "厚薄規",
+    "en": "shim stock"
+  },
+  {
+    "cn": "去除包裝",
+    "en": "Package Removing"
+  },
+  {
+    "cn": "去除包裝(3)*(高雄)",
+    "en": "Package Removing(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "去除毛邊",
+    "en": "Deburring"
+  },
+  {
+    "cn": "去除膠帶",
+    "en": "Tape Removing"
+  },
+  {
+    "cn": "噴砂處理",
+    "en": "Blasting"
+  },
+  {
+    "cn": "固定準外徑",
+    "en": "OD of Boss"
+  },
+  {
+    "cn": "固定準長度",
+    "en": "Length of Boss"
+  },
+  {
+    "cn": "圓孔深度",
+    "en": "deep of hole"
+  },
+  {
+    "cn": "圓孔直徑",
+    "en": "diameter of hole"
+  },
+  {
+    "cn": "圓弧深度",
+    "en": "deep of circular arc"
+  },
+  {
+    "cn": "垂直度",
+    "en": "Perpendicularity"
+  },
+  {
+    "cn": "垂直角度",
+    "en": "Perpendicularity"
+  },
+  {
+    "cn": "垂直面厚度",
+    "en": "Posterior Thickness"
+  },
+  {
+    "cn": "垂直高度",
+    "en": "Perpendicularity"
+  },
+  {
+    "cn": "塑膠刻印",
+    "en": "Plastic Marking"
+  },
+  {
+    "cn": "塑膠射出(託外加工)",
+    "en": "Plastic Injection (Outsourcing)"
+  },
+  {
+    "cn": "塑膠熱處理",
+    "en": "Plastic Heat Treatment"
+  },
+  {
+    "cn": "塑膠直接模壓成型(託外加工)",
+    "en": "Plastic Direct Compression Moulding(Outsourcing)"
+  },
+  {
+    "cn": "塗佈",
+    "en": "Coating"
+  },
+  {
+    "cn": "塗佈整修",
+    "en": "Porous Coating Repair"
+  },
+  {
+    "cn": "塗佈檢驗＊(西安)",
+    "en": "Coating Inspection*(Xian)"
+  },
+  {
+    "cn": "塗膠",
+    "en": "Gluing"
+  },
+  {
+    "cn": "填色(託外加工)",
+    "en": "Colouring (Outsourcing)"
+  },
+  {
+    "cn": "壓花(託外加工)",
+    "en": "Embossing (Outsourcing)"
+  },
+  {
+    "cn": "壓配尺寸",
+    "en": "Fit Size"
+  },
+  {
+    "cn": "外側分厘卡",
+    "en": "micrometer"
+  },
+  {
+    "cn": "外側魚眼孔內徑",
+    "en": "inner diameter of outer countersink"
+  },
+  {
+    "cn": "外圓直徑",
+    "en": "OD"
+  },
+  {
+    "cn": "外圓直徑(一)",
+    "en": "OD (1)"
+  },
+  {
+    "cn": "外圓直徑(三)",
+    "en": "OD (3)"
+  },
+  {
+    "cn": "外圓直徑(二)",
+    "en": "OD (2)"
+  },
+  {
+    "cn": "外圓直徑一",
+    "en": "OD (1)"
+  },
+  {
+    "cn": "外圓直徑二",
+    "en": "OD (2)"
+  },
+  {
+    "cn": "外度弧",
+    "en": "Outside Arc"
+  },
+  {
+    "cn": "外徑",
+    "en": "OD"
+  },
+  {
+    "cn": "外徑圓弧",
+    "en": "circular arc of outer surface"
+  },
+  {
+    "cn": "外觀",
+    "en": "Appearance"
+  },
+  {
+    "cn": "外觀與刻印",
+    "en": "Appearance and Laser Marking"
+  },
+  {
+    "cn": "實配Gage",
+    "en": "gage"
+  },
+  {
+    "cn": "封矽膠環(託外加工)",
+    "en": "Silicon Sealing (Outsourcing)"
+  },
+  {
+    "cn": "工具箱組裝(託外加工)",
+    "en": "Tool Case Assembly (Outsourcing)"
+  },
+  {
+    "cn": "市購品(由採購購買)",
+    "en": "Outsourcing Product (Purchase by Purchasing division)"
+  },
+  {
+    "cn": "帽沿高度",
+    "en": "height of lips"
+  },
+  {
+    "cn": "平面厚度",
+    "en": "Inferior Thickness"
+  },
+  {
+    "cn": "平面度",
+    "en": "Flatness"
+  },
+  {
+    "cn": "平面縫隙",
+    "en": "Gap"
+  },
+  {
+    "cn": "底部厚度",
+    "en": "thickness of bottom"
+  },
+  {
+    "cn": "彎曲加工",
+    "en": "Bending"
+  },
+  {
+    "cn": "後端寬度",
+    "en": "Posterior Width"
+  },
+  {
+    "cn": "微氬弧焊＊(西安)",
+    "en": "Micro Arc Welding*(Xian)"
+  },
+  {
+    "cn": "打磨",
+    "en": "Manual Grinding"
+  },
+  {
+    "cn": "扭曲校正",
+    "en": "Bending Calibration"
+  },
+  {
+    "cn": "投影機",
+    "en": "Optical comparator"
+  },
+  {
+    "cn": "投影機_投影片",
+    "en": "Optical comparator"
+  },
+  {
+    "cn": "投影機投影片",
+    "en": "Optical comparator"
+  },
+  {
+    "cn": "投影片",
+    "en": "Optical comparator"
+  },
+  {
+    "cn": "拆紙盒",
+    "en": "Box Unpacking"
+  },
+  {
+    "cn": "拉床加工(託外加工)",
+    "en": "Broaching (Outsourcing)"
+  },
+  {
+    "cn": "拋光",
+    "en": "Manual Polishing"
+  },
+  {
+    "cn": "振動拋光",
+    "en": "Vibrating Polishing"
+  },
+  {
+    "cn": "振動研磨",
+    "en": "Vibrating Lapping"
+  },
+  {
+    "cn": "插床加工(託外加工)",
+    "en": "Slotting (Outsourcing)"
+  },
+  {
+    "cn": "擦拭",
+    "en": "Wiping"
+  },
+  {
+    "cn": "收縮膜包裝",
+    "en": "Shrink Film Packing"
+  },
+  {
+    "cn": "收縮膜包裝(3)*(高雄)",
+    "en": "Shrink Film Packing(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "放電加工(託外加工)",
+    "en": "EDM(Outsourcing)"
+  },
+  {
+    "cn": "放電加工＊(高雄)",
+    "en": "EDM*(Kaohsiung)"
+  },
+  {
+    "cn": "敲擊孔",
+    "en": "impact hole"
+  },
+  {
+    "cn": "敲擊孔深",
+    "en": "deep of impact hole"
+  },
+  {
+    "cn": "整直加工",
+    "en": "Straightening"
+  },
+  {
+    "cn": "整直處理(託外加工)",
+    "en": "Straightening (Outsourcing)"
+  },
+  {
+    "cn": "新華重工(託外加工)",
+    "en": "Shinva United Reworking (Outsourcing)"
+  },
+  {
+    "cn": "斷差百分表",
+    "en": "Indicator"
+  },
+  {
+    "cn": "斷差高度",
+    "en": "depth of gap"
+  },
+  {
+    "cn": "斷差高度(一)",
+    "en": "depth of gap (1)"
+  },
+  {
+    "cn": "斷差高度(二)",
+    "en": "depth of gap (2)"
+  },
+  {
+    "cn": "斷面高度",
+    "en": "depth of gap"
+  },
+  {
+    "cn": "最終檢驗",
+    "en": "Final Quality Control"
+  },
+  {
+    "cn": "果酸除氧化層*(西安)",
+    "en": "Oxide Layer Removal by Acid * (Xian)"
+  },
+  {
+    "cn": "果酸電解",
+    "en": "Acid Electro-Polishing"
+  },
+  {
+    "cn": "柄身直徑",
+    "en": "diameter of stem"
+  },
+  {
+    "cn": "椎度直徑",
+    "en": "diameter of taper"
+  },
+  {
+    "cn": "標籤列印",
+    "en": "Label Printing"
+  },
+  {
+    "cn": "模具打磨＊(高雄)",
+    "en": "Tooling Grinding*(Kaohsiung)"
+  },
+  {
+    "cn": "模具最終檢驗＊(高雄)",
+    "en": "Mold Final Quality Check*(Kaohsiung)"
+  },
+  {
+    "cn": "模具熱處理(託外加工)＊(高雄)",
+    "en": "Mold Heat Treatment (Outsourcing)*(Kaohsiung)"
+  },
+  {
+    "cn": "模具組裝＊(高雄)",
+    "en": "Mold Assembly*(Kaohsiung)"
+  },
+  {
+    "cn": "模具表面處理(託外加工)＊(高雄)",
+    "en": "Mold Surface Treatment (Outsourcing)*(Kaohsiung)"
+  },
+  {
+    "cn": "機器手臂拋光",
+    "en": "Robotic Polishing"
+  },
+  {
+    "cn": "機器手臂研磨",
+    "en": "Robotic Grinding"
+  },
+  {
+    "cn": "機器拋光",
+    "en": "Plane Polishing"
+  },
+  {
+    "cn": "機器研磨",
+    "en": "Plane Lapping"
+  },
+  {
+    "cn": "檢具",
+    "en": "Gage"
+  },
+  {
+    "cn": "檢驗儀器",
+    "en": "Inspection Instruments"
+  },
+  {
+    "cn": "檢驗項目",
+    "en": "Inspection Item"
+  },
+  {
+    "cn": "毛邊磨除(金屬)",
+    "en": "Deburring (Metal)"
+  },
+  {
+    "cn": "氬 焊",
+    "en": "Arc Welding"
+  },
+  {
+    "cn": "氬焊(託外加工)",
+    "en": "Arc Welding (Outsourcing)"
+  },
+  {
+    "cn": "沖壓成型(託外加工)",
+    "en": "Stamping Forming (Outsouring)"
+  },
+  {
+    "cn": "沖床加工",
+    "en": "Punch Processing"
+  },
+  {
+    "cn": "清洗(塑膠件)",
+    "en": "Cleaning (Plastic)"
+  },
+  {
+    "cn": "清洗(金屬件)",
+    "en": "Cleaning (Metal)"
+  },
+  {
+    "cn": "游標尺",
+    "en": "vernier caliper"
+  },
+  {
+    "cn": "溝槽分厘卡",
+    "en": "slot micrometer"
+  },
+  {
+    "cn": "溝槽外緣直徑",
+    "en": "diameter of edge of groove"
+  },
+  {
+    "cn": "溝槽寬度",
+    "en": "Groove Width"
+  },
+  {
+    "cn": "溝槽百分表",
+    "en": "Indicator"
+  },
+  {
+    "cn": "滅菌(託外加工)",
+    "en": "Sterilization (Outsourcing)"
+  },
+  {
+    "cn": "滾筒研磨",
+    "en": "Tumbling"
+  },
+  {
+    "cn": "滾齒加工(託外加工)",
+    "en": "Hobbing (Outsourcing)"
+  },
+  {
+    "cn": "潔淨室包裝",
+    "en": "Packing in Clean Room"
+  },
+  {
+    "cn": "潔淨室包裝(3)*(高雄)",
+    "en": "Packing In Clean Room(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "潔淨室最終檢驗",
+    "en": "Final Quality Control in Clean Room"
+  },
+  {
+    "cn": "濕式噴砂處理",
+    "en": "Wet Bead Blasting"
+  },
+  {
+    "cn": "焊接",
+    "en": "Welding"
+  },
+  {
+    "cn": "無塵室自動清洗(塑膠件)*(高雄)",
+    "en": "Clean Room Automatic Cleaning(Plastic)*(Kaohsiung)"
+  },
+  {
+    "cn": "無心研磨(託外加工)",
+    "en": "Centerless Grinding (Outsourcing)"
+  },
+  {
+    "cn": "無心研磨＊(西安)",
+    "en": "Centerless Grinding*(Xian)"
+  },
+  {
+    "cn": "熱均壓處理(託外加工)",
+    "en": "Hot Isostatic Pressing (Outsourcing)"
+  },
+  {
+    "cn": "熱處理 (H900硬化處理)",
+    "en": "Heat Treatment (H900 Hardening Treatment)"
+  },
+  {
+    "cn": "熱處理(420SS回火)",
+    "en": "Heat Treatment (420SS Tempering)"
+  },
+  {
+    "cn": "熱處理(420SS淬火)",
+    "en": "Heat Treatment (420SS Hardening)"
+  },
+  {
+    "cn": "熱處理(H1000硬化處理)",
+    "en": "Heat Treatment (H1000 Hardening Treatment)"
+  },
+  {
+    "cn": "熱處理(H1025硬化處理)",
+    "en": "Heat Treatment (H1025 Hardening Treatment)"
+  },
+  {
+    "cn": "熱處理(H1050硬化處理)",
+    "en": "Heat Treatment (H1050 Hardening Treatment)"
+  },
+  {
+    "cn": "熱處理(H1100硬化處理)",
+    "en": "Heat Treatment (H1100 Hardening Treatment)"
+  },
+  {
+    "cn": "熱處理(H950硬化處理)",
+    "en": "Heat Treatment (H950 Hardening Treatment)"
+  },
+  {
+    "cn": "熱處理(固溶處理)",
+    "en": "Heat Treatment (Solution Treatment)"
+  },
+  {
+    "cn": "熱處理(託外加工)",
+    "en": "Heat Treatment (Outsourcing)"
+  },
+  {
+    "cn": "熱處理試片製程",
+    "en": "Heat Treatment Specimen Pocess"
+  },
+  {
+    "cn": "燒結",
+    "en": "Sintering"
+  },
+  {
+    "cn": "燒結(託外加工)",
+    "en": "Sintering (Outsourcing)"
+  },
+  {
+    "cn": "燒結後打磨＊(高雄)",
+    "en": "Manual Grinding(After  Sintering)*(Kaohsiung)"
+  },
+  {
+    "cn": "燒結整修",
+    "en": "Sintering Repair"
+  },
+  {
+    "cn": "燒結檢驗",
+    "en": "Sintering Inspection"
+  },
+  {
+    "cn": "珠子高度",
+    "en": "Thickness of Coating Layer"
+  },
+  {
+    "cn": "珠擊處理",
+    "en": "Bead Blasting"
+  },
+  {
+    "cn": "球面拋光",
+    "en": "Spherical polishing"
+  },
+  {
+    "cn": "球面拋光度",
+    "en": "spherical polish"
+  },
+  {
+    "cn": "球面研磨",
+    "en": "Spherical Grinding"
+  },
+  {
+    "cn": "百分表",
+    "en": "Indicator"
+  },
+  {
+    "cn": "目視",
+    "en": "visual inspection"
+  },
+  {
+    "cn": "目視+立體顯微鏡",
+    "en": "visual inspection+stereo-microscope"
+  },
+  {
+    "cn": "目視及手觸",
+    "en": "visual and touch inspection"
+  },
+  {
+    "cn": "真圓度",
+    "en": "roundness"
+  },
+  {
+    "cn": "真圓度(赤道、45°×2)",
+    "en": "roundness (equator, 45°×2)"
+  },
+  {
+    "cn": "真圓度機",
+    "en": "Roundness tester"
+  },
+  {
+    "cn": "研磨",
+    "en": "Lapping"
+  },
+  {
+    "cn": "研磨加工(託外加工)",
+    "en": "Grinding (Outsourcing)"
+  },
+  {
+    "cn": "研磨外徑",
+    "en": "OD Grinding"
+  },
+  {
+    "cn": "磨床加工",
+    "en": "Grinding"
+  },
+  {
+    "cn": "紙盒包裝",
+    "en": "Box Packing"
+  },
+  {
+    "cn": "紙盒包裝(3)*(高雄)",
+    "en": "Box Packing(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "細孔放電加工",
+    "en": "Drilling EDM"
+  },
+  {
+    "cn": "組裝",
+    "en": "Assembly"
+  },
+  {
+    "cn": "組裝領料(批號:     )＊(西安)",
+    "en": "Assembly picking (Lot:)* (Xian)"
+  },
+  {
+    "cn": "網印(託外加工)",
+    "en": "Screen Printing (Outsourcing)"
+  },
+  {
+    "cn": "線切割 (快走絲託外)＊(西安)",
+    "en": "Wire Cutting (HS-WEDM Outsourcing)*(Xian)"
+  },
+  {
+    "cn": "線切割 (慢走絲託外)＊(西安)",
+    "en": "Wire Cutting (LS-WEDM Outsourcing)*(Xian)"
+  },
+  {
+    "cn": "線切割(中/快走絲)＊(西安)",
+    "en": "Wire Cutting (MS/ HS-WEDM)*(Xian)"
+  },
+  {
+    "cn": "線切割(快走絲)＊(西安)",
+    "en": "Wire Cutting (HS-WEDM)*(Xian)"
+  },
+  {
+    "cn": "線切割(慢走絲)＊(西安)",
+    "en": "Wire Cutting (LS-WEDM)*(Xian)"
+  },
+  {
+    "cn": "線切割(託外加工)",
+    "en": "Wire Cutting (Outsourcing)"
+  },
+  {
+    "cn": "線切割加工",
+    "en": "Wire cutting"
+  },
+  {
+    "cn": "線圈直徑",
+    "en": "diameter of coil"
+  },
+  {
+    "cn": "線圈製作",
+    "en": "Coil Production"
+  },
+  {
+    "cn": "聯合骨科器材股份有限公司",
+    "en": "United Orthopedic Corporation"
+  },
+  {
+    "cn": "肉厚",
+    "en": "Thickness"
+  },
+  {
+    "cn": "自動噴砂處理(冠亞)＊(高雄)",
+    "en": "Automatically Blasting (A-Spine) *(Kaohsiung)"
+  },
+  {
+    "cn": "自動清洗(塑膠件)*(高雄)",
+    "en": "Automatic Cleaning(Plastic)*(Kaohsiung)"
+  },
+  {
+    "cn": "自動清洗(金屬件)*(高雄)",
+    "en": "Automatic Cleaning(Metal)*(Kaohsiung)"
+  },
+  {
+    "cn": "花瓣寬度",
+    "en": "width of locking crown"
+  },
+  {
+    "cn": "花瓣深度",
+    "en": "deep of locking crown"
+  },
+  {
+    "cn": "花瓣角度",
+    "en": "angle of locking crown"
+  },
+  {
+    "cn": "螢光滲透檢驗(託外加工)",
+    "en": "Fluorescent-Penetrant Inspection (Outsourcing)"
+  },
+  {
+    "cn": "螺牙尺寸",
+    "en": "size of screw"
+  },
+  {
+    "cn": "螺紋栓規",
+    "en": "Thread plug gauge"
+  },
+  {
+    "cn": "衝壓成型＊(西安)",
+    "en": "Stamping Forming*(Xian)"
+  },
+  {
+    "cn": "表面狀況",
+    "en": "Surface Finish"
+  },
+  {
+    "cn": "製程中清洗＊(高雄)",
+    "en": "In-process Cleaning*(Kaohsiung)"
+  },
+  {
+    "cn": "製程檢驗",
+    "en": "In-process Quality Control"
+  },
+  {
+    "cn": "走心式車削(託外加工)",
+    "en": "Swiss Type CNC Machining (Outsourcing)"
+  },
+  {
+    "cn": "走心式車削加工",
+    "en": "Swiss Type CNC Turning"
+  },
+  {
+    "cn": "車削加工",
+    "en": "Turning"
+  },
+  {
+    "cn": "軸頭椎度",
+    "en": "trunnion"
+  },
+  {
+    "cn": "軸頭長度",
+    "en": "length of trunnion"
+  },
+  {
+    "cn": "進料檢驗＊(西安)",
+    "en": "Incoming Quality Control*(Xian)"
+  },
+  {
+    "cn": "酸洗",
+    "en": "Pickling"
+  },
+  {
+    "cn": "鈦粉燒結(託外加工)＊(高雄)",
+    "en": "Sintering of Ti Powder(Outsourcing)*(Kaohsiung)"
+  },
+  {
+    "cn": "鈷鉻鉬塗佈＊(高雄)",
+    "en": "CCM Coating*(Kaohsiung)"
+  },
+  {
+    "cn": "鉗工",
+    "en": "Bench Work"
+  },
+  {
+    "cn": "銑削加工",
+    "en": "Milling"
+  },
+  {
+    "cn": "銑床加工(託外加工)",
+    "en": "Milling (Outsourcing)"
+  },
+  {
+    "cn": "鋸切加工(託外加工)",
+    "en": "Sawing (Outsourcing)"
+  },
+  {
+    "cn": "鋸床加工",
+    "en": "Sawing"
+  },
+  {
+    "cn": "鍍硬鉻處理(託外加工)",
+    "en": "Hard Chrome Plating (Outsourcing)"
+  },
+  {
+    "cn": "鍍膜處理(託外加工)",
+    "en": "Coating Treatment (Outsourcing)"
+  },
+  {
+    "cn": "鍍膜退鍍 (託外加工)",
+    "en": "Stripping (Outsourcing)"
+  },
+  {
+    "cn": "鍍膜退鍍再重鍍 (託外加工)",
+    "en": "Stripping and Replating (Outsourcing)"
+  },
+  {
+    "cn": "鍍鈦處理 (託外加工) ＊(西安)",
+    "en": "Titanium Plating (Outsourcing)*(Xian)"
+  },
+  {
+    "cn": "鎖合尺寸(Nogo)",
+    "en": "Fit Size (NoGo)"
+  },
+  {
+    "cn": "鎖合尺寸(go)",
+    "en": "Fit Size (Go)"
+  },
+  {
+    "cn": "鎖合機構位置深度",
+    "en": "Position of Lacking"
+  },
+  {
+    "cn": "鎗鑽加工(託外加工)",
+    "en": "Drilling (Outsourcing)"
+  },
+  {
+    "cn": "鐳射焊接＊(西安)",
+    "en": "Laser Welding*(Xian)"
+  },
+  {
+    "cn": "鑽孔",
+    "en": "Drilling"
+  },
+  {
+    "cn": "鑿鑽",
+    "en": "Drilling"
+  },
+  {
+    "cn": "除(去)油",
+    "en": "Degreasing"
+  },
+  {
+    "cn": "陽極處理(託外加工)",
+    "en": "Anodizing (Outsourcing)"
+  },
+  {
+    "cn": "陽極退鍍 (託外加工)",
+    "en": "Anodizing Stripping (Outsourcing)"
+  },
+  {
+    "cn": "隔離組裝",
+    "en": "Clean Room Assembly"
+  },
+  {
+    "cn": "隔離組裝(3)*(高雄)",
+    "en": "Clean Room Assembly(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "雷射刻印",
+    "en": "Laser Marking"
+  },
+  {
+    "cn": "雷射刻印(託外加工)",
+    "en": "Laser Marking (Outsourcing)"
+  },
+  {
+    "cn": "雷射焊接(託外加工)",
+    "en": "Laser Welding (Outsourcing)"
+  },
+  {
+    "cn": "電漿塗佈 (託外加工)",
+    "en": "Plasma Coating (Outsourcing)"
+  },
+  {
+    "cn": "電解拋光(託外加工)",
+    "en": "Electro-polishing (Outsourcing)"
+  },
+  {
+    "cn": "電解拋光、刻印、鈍化(託外加工)",
+    "en": "EP/ Marking/ Passivation (Outsourcing)"
+  },
+  {
+    "cn": "電解拋光＊(西安)",
+    "en": "Electro-polishing*(Xian)"
+  },
+  {
+    "cn": "預燒結",
+    "en": "Pre-sintering"
+  },
+  {
+    "cn": "頸部長度",
+    "en": "length of neck"
+  },
+  {
+    "cn": "骨柄全長",
+    "en": "length of stem"
+  },
+  {
+    "cn": "骨柄垂直度",
+    "en": "Perpendicularity of Stem"
+  },
+  {
+    "cn": "髕骨厚度",
+    "en": "Patellar Component Thickness"
+  },
+  {
+    "cn": "髕骨外徑",
+    "en": "OD of Patellar Component"
+  },
+  {
+    "cn": "髕骨軌跡半徑",
+    "en": "Patellar Tracking Radius"
+  },
+  {
+    "cn": "高壓消(託外加工)",
+    "en": "High Pressure Sterilization (Outsourcing)"
+  },
+  {
+    "cn": "高規度",
+    "en": "height gauge"
+  },
+  {
+    "cn": "高雄廠HA",
+    "en": "Kaohsiung Facility HA"
+  },
+  {
+    "cn": "高雄廠HA/Ti",
+    "en": "Kaohsiung Facility HA/Ti"
+  },
+  {
+    "cn": "高雄廠機加工",
+    "en": "Kaohsiung Facility Machining"
+  },
+  {
+    "cn": "高雄廠燒結",
+    "en": "Kaohsiung Facility Sintering"
+  },
+  {
+    "cn": "高雄廠燒結(鈷鉻鉬)",
+    "en": "Kaohsiung Facility Sintering (CoCrMo)"
+  },
+  {
+    "cn": "高雄廠複合加工",
+    "en": "Kaohsiung Facility Compound Machining"
+  },
+  {
+    "cn": "高雄廠鋸料",
+    "en": "Kaohsiung Facility Material Sawing"
+  },
+  {
+    "cn": "高雄廠電漿噴塗",
+    "en": "Kaohsiung Facility Ti Plasma Spray"
+  },
+  {
+    "cn": "鳩尾槽位置",
+    "en": "Position of Groove"
+  },
+  {
+    "cn": "鳩尾槽高度",
+    "en": "Height of Groove"
+  },
+  {
+    "cn": "鳩尾面至平面尺寸\n鳩尾槽尺寸",
+    "en": "Dimension Between Groove and surface"
+  }
+]

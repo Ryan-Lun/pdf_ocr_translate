@@ -28,10 +28,14 @@ dependencies = [
   "requests>=2.32.5",
   "sentence-transformers>=5.2.2",
   "sqlalchemy>=2.0.44",
-  "torch<2.7.0",
-  "torchvision<0.22.0",
+  "torch==2.6.0",
+  "torchvision==0.21.0",
+  "torchaudio==2.6.0",
   "uvicorn>=0.40.0",
   "spacy>=3.8.14",
+  "sympy==1.13.1",
+  "pytest>=9.0.3",
+  "opencv-contrib-python==4.10.0.84",
 ]
 
 [[tool.uv.index]]

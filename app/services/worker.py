@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 
-from . import batch, doc_workspace, job_store, jobs, pipeline, state, word_translate
+from . import batch, doc_workspace, job_store, jobs, pipeline, realtime_translate, state, word_translate
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +35,18 @@ def process_job(job_id: str) -> None:
         jobs.set_job_state(job_dir, status="cancelled", stage="cancelled", completed_at=time.time())
         return
 
-    if record.job_type == "ocr_overlay":
-        if bool(payload.get("resume_translate_only")):
+    if record.job_type in {"ocr_overlay", "template_source"}:
+        if bool(payload.get("resume_translate_only")) or str(record.stage or "").lower() == "translate":
             config = jobs.load_batch_config(job_dir) or {}
-            batch.run_batch_translate_job(job_id, job_dir, config)
+            translate_mode = jobs.normalize_translate_mode(
+                config.get("translate_mode")
+                or payload.get("translate_mode")
+                or (jobs.load_job_meta(job_dir) or {}).get("translate_mode")
+            )
+            if translate_mode == "realtime":
+                realtime_translate.run_realtime_translate_job(job_id, job_dir, config)
+            else:
+                batch.run_batch_translate_job(job_id, job_dir, config)
             return
         pdf_path = job_dir / f"{job_id}.pdf"
         cancel_event = threading.Event()
@@ -50,13 +58,14 @@ def process_job(job_id: str) -> None:
             dpi=int(payload.get("dpi") or 200),
             start_page=int(payload.get("start_page") or 1),
             end_page=payload.get("end_page"),
+            translate_source_lang=str(payload.get("translate_source_lang") or "auto"),
             translate_target_lang=str(payload.get("translate_target_lang") or "en"),
             translate_model=str(payload.get("translate_model") or state.AZURE_BATCH_MODEL),
+            translate_mode=str(payload.get("translate_mode") or "batch"),
             keep_lang=str(payload.get("keep_lang") or "all"),
             enable_translate=bool(payload.get("enable_translate")),
             document_mode=str(payload.get("document_mode") or "form"),
             cancel_event=cancel_event,
-            spawn_translate_thread=False,
         )
         return
 
@@ -65,6 +74,7 @@ def process_job(job_id: str) -> None:
             job_id=job_id,
             job_dir=job_dir,
             pdf_path=job_dir / "source.pdf",
+            source_lang=str(payload.get("source_lang") or "auto"),
             target_lang=str(payload.get("target_lang") or record.target_lang or "en"),
         )
         return
@@ -84,6 +94,7 @@ def process_job(job_id: str) -> None:
             source_path=source_path,
             processing_source_path=processing_source_path,
             output_path=output_path,
+            source_lang=str(payload.get("source_lang") or "auto"),
             target_lang=str(payload.get("target_lang") or record.target_lang or "en"),
             retain_terms=list(payload.get("retain_terms") or []),
         )
@@ -97,11 +108,19 @@ def run_worker_loop(worker_id: str | None = None, poll_seconds: float | None = N
     delay = poll_seconds if poll_seconds is not None else state.WORKER_POLL_SECONDS
     concurrency_limits = {
         "ocr_overlay": state.WORKER_OCR_MAX_RUNNING,
+        "pdf_translate": state.WORKER_PDF_TRANSLATE_MAX_RUNNING,
         "doc_workspace": state.WORKER_DOC_MAX_RUNNING,
         "word_translate": state.WORKER_WORD_MAX_RUNNING,
     }
     logger.info("Worker loop started worker_id=%s poll_seconds=%s", worker_name, delay)
     while True:
+        recovered_job_ids = job_store.recover_orphaned_active_jobs()
+        if recovered_job_ids:
+            logger.warning(
+                "Recovered orphaned active jobs count=%s job_ids=%s",
+                len(recovered_job_ids),
+                ",".join(recovered_job_ids),
+            )
         record = job_store.claim_next_job(worker_name, concurrency_limits=concurrency_limits)
         processed_active_batch = False
         try:

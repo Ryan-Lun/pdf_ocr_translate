@@ -18,6 +18,7 @@ from docx.document import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
+from lang_utils import describe_target_language, traditional_chinese_instruction
 from werkzeug.utils import secure_filename
 
 from . import jobs, openai_config, state, translation_memory
@@ -32,7 +33,7 @@ class WordTranslationCancelled(Exception):
     pass
 
 SYSTEM_PROMPT_BASE = """
-You are a professional business translator. Your task is to translate the source text into clear, accurate, and natural {target_lang} suitable for corporate documents, business reports, internal memos, executive summaries, meeting notes, Project Plan, Project progress, proposals, and client-facing materials.
+You are a professional business translator. Your task is to translate the source text into clear, accurate, and natural {target_lang_label} suitable for corporate documents, business reports, internal memos, executive summaries, meeting notes, Project Plan, Project progress, proposals, and client-facing materials.
 
 ## Core Persona: Corporate Document Translator
 Translate with the mindset of an experienced business language specialist. Your output must sound professional, precise, concise, and appropriate for workplace and executive communication.
@@ -69,8 +70,10 @@ You MUST follow these rules without exception:
 
 11. **No Content Generation Beyond Translation**: If the source is a heading, label, requirement, checklist line, question, instruction, caption, or sentence fragment, translate only that exact text. Do not add examples, bullets, procedures, recommendations, explanations, or completion text.
 
+12. **Target Script Requirement**: {target_script_instruction}
+
 ## Output Goal:
-The final translation should read like a professionally written business document in {target_lang}, with high precision, strong readability, and no loss of meaning.
+The final translation should read like a professionally written business document in {target_lang_label}, with high precision, strong readability, and no loss of meaning.
 """
 
 USER_TERMS_INSTRUCTION = """
@@ -96,7 +99,7 @@ The previous translation had quality issues. Improve it by focusing on:
 """
 
 QUALITY_ASSESSMENT_PROMPT = """
-You are a translation quality assessor for business documents. Rate how well this source text was translated into {target_lang} (0-40 total).
+You are a translation quality assessor for business documents. Rate how well this source text was translated into {target_lang_label} (0-40 total).
 
 Source: {original}
 Translation: {translated}
@@ -104,11 +107,42 @@ Translation: {translated}
 Rate on:
 1. Accuracy (0-10): Does it preserve the original meaning exactly, including all figures, dates, business intent, and instruction wording?
 2. Professional Tone (0-10): Does it sound appropriate for corporate documents and reports?
-3. Naturalness (0-10): Does it read naturally and fluently in {target_lang}?
+3. Naturalness (0-10): Does it read naturally and fluently in {target_lang_label}?
 4. Terminology & Consistency (0-10): Are business terms, protected terms, and repeated concepts handled consistently and correctly, without adding new content?
 
 Provide only the total score (0-40).
 """
+
+
+def build_word_system_prompt(target_lang: str) -> str:
+    return build_word_system_prompt_with_source("auto", target_lang)
+
+
+def build_word_system_prompt_with_source(source_lang: str, target_lang: str) -> str:
+    target_lang_label = describe_target_language(target_lang)
+    target_script_instruction = traditional_chinese_instruction(target_lang) or (
+        "Follow the standard writing system and orthography of the requested target language."
+    )
+    prompt = SYSTEM_PROMPT_BASE.format(
+        target_lang=target_lang,
+        target_lang_label=target_lang_label,
+        target_script_instruction=target_script_instruction,
+    )
+    if str(source_lang or "").strip().lower() not in {"", "auto"}:
+        prompt = (
+            f"Source language: {describe_target_language(source_lang)}.\n\n"
+            f"{prompt}"
+        )
+    return prompt
+
+
+def build_word_quality_prompt(original: str, translated: str, target_lang: str) -> str:
+    return QUALITY_ASSESSMENT_PROMPT.format(
+        target_lang=target_lang,
+        target_lang_label=describe_target_language(target_lang),
+        original=original,
+        translated=translated,
+    )
 
 def _parse_retain_terms(raw: str | None) -> list[str]:
     if not raw:
@@ -438,6 +472,7 @@ class EnhancedWordTranslator:
     async def translate_text_with_quality(
         self,
         text: str,
+        source_lang: str,
         target_lang: str,
         user_terms: list[str],
         cancel_event: threading.Event | None = None,
@@ -448,7 +483,7 @@ class EnhancedWordTranslator:
                 raise WordTranslationCancelled("Word translation cancelled.")
             try:
                 masked_text, token_map = self._mask_text(text, user_terms)
-                system_prompt = SYSTEM_PROMPT_BASE.format(target_lang=target_lang)
+                system_prompt = build_word_system_prompt_with_source(source_lang, target_lang)
                 if user_terms:
                     terms_list_str = ", ".join(f'"{term}"' for term in user_terms)
                     system_prompt += USER_TERMS_INSTRUCTION.format(terms_list_str=terms_list_str)
@@ -505,11 +540,7 @@ class EnhancedWordTranslator:
 
     async def validate_translation_quality(self, original: str, translated: str, target_lang: str) -> int:
         try:
-            prompt = QUALITY_ASSESSMENT_PROMPT.format(
-                target_lang=target_lang,
-                original=original,
-                translated=translated,
-            )
+            prompt = build_word_quality_prompt(original, translated, target_lang)
             response = await self.client.chat.completions.create(
                 model=self.quality_model,
                 messages=[{"role": "user", "content": prompt}],
@@ -528,6 +559,7 @@ class EnhancedWordTranslator:
         self,
         source_path: Path,
         output_path: Path,
+        source_language: str,
         target_language: str,
         user_terms: list[str],
         cancel_event: threading.Event | None = None,
@@ -567,6 +599,7 @@ class EnhancedWordTranslator:
                     return text, cached_translation, 40
                 translated_text, quality_score = await self.translate_text_with_quality(
                     text,
+                    source_language,
                     target_language,
                     user_terms,
                     cancel_event=cancel_event,
@@ -622,6 +655,7 @@ def _run_word_job(
     source_path: Path,
     processing_source_path: Path,
     output_path: Path,
+    source_lang: str,
     target_lang: str,
     retain_terms: list[str],
 ) -> None:
@@ -650,6 +684,7 @@ def _run_word_job(
                 source_path=processing_source_path,
                 output_path=output_path,
                 target_language=target_lang,
+                source_language=source_lang,
                 user_terms=retain_terms,
                 cancel_event=cancel_event,
             ):
@@ -726,6 +761,7 @@ def cancel_word_job(job_id: str) -> bool:
 def enqueue_word_job_from_upload(
     source_docx: Path,
     display_name: str,
+    source_lang: str,
     target_lang: str,
     retain_terms_raw: str | None = None,
 ) -> str:
@@ -752,6 +788,7 @@ def enqueue_word_job_from_upload(
             "job_type": "word_translate",
             "processing_started_at": now_ts,
             "word_stage": "uploaded",
+            "source_lang": source_lang,
             "target_lang": target_lang,
             "retain_terms": retain_terms,
             "source_filename": safe_name,
@@ -766,6 +803,7 @@ def enqueue_word_job_from_upload(
         job_name=display_name,
         target_lang=target_lang,
         payload={
+            "source_lang": source_lang,
             "target_lang": target_lang,
             "retain_terms": retain_terms,
         },

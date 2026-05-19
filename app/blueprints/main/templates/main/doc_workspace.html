@@ -13,7 +13,7 @@
           <h1>PDF 翻譯重建</h1>
           <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
         </div>
-        <p class="eyebrow">PDF -> PP-StructureV3 -> Markdown -> HTML -> Translate -> Word</p>
+        <!-- <p class="eyebrow">PDF -> PP-StructureV3 -> Markdown -> HTML -> Translate -> Word</p> -->
       </header>
       <section class="upload-card upload-card-doc">
         <form method="post" enctype="multipart/form-data" action="{{ url_for('.upload_doc_workspace') }}">
@@ -23,15 +23,25 @@
           </label>
           <div class="form-grid">
             <label>
+              <span>來源語言</span>
+              <select name="source_lang">
+                <option value="auto" selected>自動偵測 (auto)</option>
+                <option value="en">English (en)</option>
+                <option value="zh">繁體中文 (zh)</option>
+              </select>
+            </label>
+            <label>
               <span>翻譯語言</span>
               <select name="target_lang">
                 <option value="en" selected>English (en)</option>
-                <option value="zh">中文 (zh)</option>
+                <option value="zh">繁體中文 (zh)</option>
               </select>
             </label>
           </div>
           <div class="form-note">
-             <span>注意事項:<br>Word 文件排版格式不會與原始 PDF 文件完全相同，較複雜的表格可能會重建失敗，翻譯完成後請檢查輸出結果</span>
+            <h4><i class="bi bi-info-circle"></i> 注意事項</h4>
+            <p>Word 文件排版格式不會與原始 PDF 文件完全相同。</p>
+            <p>較複雜的表格可能會重建失敗，翻譯完成後請檢查輸出結果。</p>
           </div>
           <button class="primary" type="submit">開始文件轉檔</button>
         </form>

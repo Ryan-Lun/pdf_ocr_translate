@@ -1,9 +1,9 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OCR Overlay Studio - Editor</title>
+    <title>{% if template_mode %}OCR Overlay Studio - Template Editor{% else %}OCR Overlay Studio - Editor{% endif %}</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
     <style>
@@ -22,16 +22,21 @@
     <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js" referrerpolicy="no-referrer"></script> -->
     <script src="/static/pdfjs/pdf.min.js" referrerpolicy="no-referrer"></script>
   </head>
-  <body class="editor" data-job-id="{{ job_id }}">
+  <body class="editor" data-job-id="{{ job_id }}" data-template-mode="{{ 'true' if template_mode else 'false' }}">
     <header class="topbar">
-      <div class="topbar-title">
-        <p class="topbar-filename">
-          <a class="topbar-back" href="{{ url_for('main.overlay_workspace') }}" aria-label="返回 PDF 原版面翻譯">
-            <i class="bi bi-arrow-left"></i>
-          </a>
-          <span>PDF 原版面翻譯 / 翻譯編輯 / {{ job_name or "未命名文件" }}</span>
-        </p>
-        <!-- <p id="status" class="hint topbar-meta"></p> -->
+      <div class="topbar-left">
+        <a class="topbar-back" href="{{ url_for('main.overlay_workspace') }}" aria-label="返回 PDF 原版面翻譯">
+          <i class="bi bi-arrow-left"></i>
+        </a>
+        <div class="topbar-divider"></div>
+        <div class="topbar-title-stack">
+          <span class="topbar-breadcrumb">
+            {% if template_mode %}PDF 原版面翻譯 / 版型模板{% else %}PDF 原版面翻譯 / 翻譯編輯{% endif %}
+          </span>
+          <span class="topbar-filename-new" title="{{ job_name or '未命名文件' }}">
+            {{ job_name or "未命名文件" }}
+          </span>
+        </div>
       </div>
       <div class="topbar-pager">
         <button id="prevPage" type="button" aria-label="上一頁">
@@ -45,7 +50,7 @@
       <div class="topbar-actions">
         <div class="dropdown">
           <button id="saveBtn" class="primary">儲存編輯</button>
-          <button id="menuBtn" class="ghost icon-pill" type="button" aria-label="更多操作">
+          <button id="menuBtn" class="ghost" type="button" aria-label="更多操作">
             <i class="bi bi-three-dots"></i>
           </button>
           <div id="menuDropdown" class="dropdown-menu" hidden>
@@ -55,14 +60,14 @@
             <a class="dropdown-item" href="{{ debug_pdf_url }}" target="_blank" rel="noopener">
               <i class="bi bi-bug"></i> 預覽除錯 PDF
             </a>
-            <button id="batchTranslateBtn" class="dropdown-item" type="button">
-              <i class="bi bi-translate"></i> 重新翻譯
-            </button>
             <button id="batchRestoreBtn" class="dropdown-item" type="button">
               <i class="bi bi-arrow-counterclockwise"></i> 還原內容和位置
             </button>
             <button id="glossaryPromptBtn" class="dropdown-item" type="button">
               <i class="bi bi-chat-left-text"></i> 詞彙 / 提示詞
+            </button>
+            <button id="templateManagerBtn" class="dropdown-item" type="button">
+              <i class="bi bi-grid-3x3-gap"></i> {% if template_mode %}版型模板{% else %}套用欄位翻譯模板{% endif %}
             </button>
             <hr />
             <button id="downloadBtn" class="dropdown-item" type="button">
@@ -83,6 +88,10 @@
             <i class="bi bi-sliders2"></i>
             <span>工具</span>
           </button>
+          <button class="sidebar-rail__item" type="button" data-sidebar-target="sidebarConsistencySection">
+            <i class="bi bi-arrow-left-right"></i>
+            <span>一致性</span>
+          </button>
           <button class="sidebar-rail__item" type="button" data-sidebar-target="sidebarShortcutsSection">
             <i class="bi bi-keyboard"></i>
             <span>快捷鍵</span>
@@ -95,10 +104,13 @@
               <label>
                 <span>縮放 (%)</span>
                 <div class="input-row">
-                  <input id="zoomRange" type="range" min="25" max="200" value="50" />
-                  <input id="zoomNumber" type="number" min="25" max="200" value="50" />
+                  <input id="zoomRange" type="range" min="25" max="200" step="5" value="100" />
+                  <input id="zoomNumber" type="number" min="25" max="200" step="5" value="100" />
                 </div>
               </label>
+              <div class="button-row">
+                <button id="fitToWidthBtn" class="ghost" type="button">頁面符合寬度</button>
+              </div>
               <div class="button-row">
                 <button id="toggleThumbsBtn" class="ghost" type="button" aria-expanded="true">隱藏頁面縮圖</button>
               </div>
@@ -119,6 +131,23 @@
                 <span>字體顏色</span>
                 <input id="fontColor" type="color" value="#0000ff" />
               </label>
+              <label>
+                <span>文字對齊</span>
+                <div class="segmented-control" role="group" aria-label="文字對齊">
+                  <button id="alignLeft" class="ghost is-active" type="button" data-align="left"><i class="bi bi-justify-left"></i></button>
+                  <button id="alignCenter" class="ghost" type="button" data-align="center"><i class="bi bi-justify"></i></button>
+                  <button id="alignRight" class="ghost" type="button" data-align="right"><i class="bi bi-justify-right"></i></button>
+                </div>
+              </label>
+              <label>
+                <span>文字旋轉</span>
+                <div class="button-row button-row--tight">
+                  <button id="rotateLeft" class="ghost" type="button"><i class="bi bi-arrow-counterclockwise"></i></button>
+                  <!-- <button id="rotateReset" class="ghost" type="button">歸零</button> -->
+                  <button id="rotateRight" class="ghost" type="button"><i class="bi bi-arrow-clockwise"></i></button>
+                </div>
+                <!-- <p id="rotationSummary" class="hint">目前角度：0°</p> -->
+              </label>
               <div class="button-row">
                 <button id="regionTranslateBtn" class="ghost" type="button">補翻選區</button>
               </div>
@@ -136,6 +165,67 @@
               </div>
               <div class="button-row">
                 <button id="deleteBox" class="danger">刪除文字框</button>
+              </div>
+            </section>
+            <section id="sidebarConsistencySection" class="sidebar-section" hidden>
+              <h2>一致性</h2>
+              <div id="mergeNoticeSection" class="merge-notice-panel" hidden>
+                <h3>合併提醒</h3>
+                <p id="mergeNoticeSummary" class="hint"></p>
+                <div id="mergeNoticeList" class="merge-notice-list"></div>
+                <hr />
+              </div>
+              <p class="hint">找出同一份文件中相同來源詞被翻成不同譯文的地方，集中調整</p>
+              <div class="button-row">
+                <button id="refreshConsistencyBtn" class="ghost" type="button">重新掃描不一致詞彙</button>
+              </div>
+              <div id="consistencySummary" class="hint"></div>
+              <div id="consistencyList" class="consistency-list"></div>
+              <div id="consistencyDetail" class="consistency-detail" hidden>
+                <div class="consistency-detail__header">
+                  <h3 id="consistencySourceTitle">來源詞</h3>
+                  <p id="consistencySourceMeta" class="hint"></p>
+                </div>
+                <div id="consistencyVariantList" class="consistency-variants"></div>
+                <label>
+                  <span>統一譯文</span>
+                  <textarea id="consistencyTargetText" rows="4" placeholder="輸入要統一套用的譯文"></textarea>
+                </label>
+                <label class="check-row">
+                  <input id="consistencySyncTm" type="checkbox" />
+                  <span>同步到翻譯記憶</span>
+                </label>
+                <div class="button-row">
+                  <button id="applyConsistencyBtn" class="primary" type="button">套用到本文件全部匹配文字框</button>
+                </div>
+              </div>
+              <hr />
+              <h3>段落術語</h3>
+              <p class="hint">針對長段落中的重複術語做人工統一，不會整段覆蓋</p>
+              <div id="paragraphTermSummary" class="hint"></div>
+              <div id="paragraphTermList" class="consistency-list"></div>
+              <div id="paragraphTermDetail" class="consistency-detail" hidden>
+                <div class="consistency-detail__header">
+                  <h3 id="paragraphTermTitle">來源術語</h3>
+                  <p id="paragraphTermMeta" class="hint"></p>
+                </div>
+                <div id="paragraphTermVariantList" class="consistency-variants"></div>
+                <div id="paragraphTermPreviewList" class="paragraph-term-previews"></div>
+                <label>
+                  <span>替換前</span>
+                  <input id="paragraphReplaceFrom" type="text" placeholder="目前段落中使用的譯法" />
+                </label>
+                <label>
+                  <span>替換後</span>
+                  <input id="paragraphReplaceTo" type="text" placeholder="要統一成的譯法" />
+                </label>
+                <label class="check-row">
+                  <input id="paragraphSyncTm" type="checkbox" />
+                  <span>同步到翻譯記憶</span>
+                </label>
+                <div class="button-row">
+                  <button id="applyParagraphTermBtn" class="primary" type="button">套用到包含此術語的段落</button>
+                </div>
               </div>
             </section>
             <section id="sidebarShortcutsSection" class="sidebar-section" hidden>
@@ -190,6 +280,38 @@
           <div id="pages" class="pages"></div>
         </div>
       </section>
+      <aside class="editor-context-sidebar">
+        <div class="context-panel">
+          <div class="context-panel__header">
+            <h2>來源內容</h2>
+            <p id="contextSummary" class="hint">請選取文字框</p>
+          </div>
+          <div class="context-panel__body">
+            <section class="context-card">
+              <h3>原始內容</h3>
+              <textarea
+                id="contextSourceText"
+                class="context-textarea"
+                rows="10"
+                placeholder="請先點選一個翻譯文字框"
+              ></textarea>
+            </section>
+            <section class="context-card">
+              <h3>翻譯結果</h3>
+              <textarea
+                id="contextTranslatedText"
+                class="context-textarea"
+                rows="10"
+                placeholder="請先點選一個翻譯文字框"
+                disabled
+              ></textarea>
+              <div class="button-row">
+                <button id="contextRetranslateBtn" class="primary" type="button" disabled>用修正後原始內容重新翻譯</button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </aside>
     </main>
     <div id="batchPageModal" class="modal" hidden>
       <div class="modal-card modal-card--compact" role="dialog" aria-modal="true" aria-labelledby="batchPageTitle">
@@ -211,7 +333,7 @@
             <span>指定頁碼</span>
             <input id="batchPageInput" type="text" placeholder="例如 1,3,5 或 2-6" />
           </label>
-          <p class="hint">勾選 `全部其他頁` 或 `來源頁之後` 時，會忽略頁碼輸入。</p>
+          <p class="hint">勾選 `全部其他頁` 或 `來源頁之後` 時，會忽略頁碼輸入</p>
           <div class="modal-actions">
             <button id="confirmBatchPageModal" class="primary" type="button">確認</button>
             <button id="cancelBatchPageModal" class="ghost" type="button">取消</button>
@@ -222,30 +344,112 @@
     <div id="glossaryPromptModal" class="modal" hidden>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="glossaryPromptTitle">
         <div class="modal-header">
-          <h2 id="glossaryPromptTitle">中英詞彙 / 提示詞</h2>
+          <h2 id="glossaryPromptTitle">快速詞彙修正 / 提示詞</h2>
           <button id="closeGlossaryPrompt" class="ghost" type="button">關閉</button>
         </div>
         <div class="modal-body">
-          <section>
-            <h3>詞彙對照</h3>
-            <div class="input-row">
-              <input id="glossaryCn" type="text" placeholder="中文" />
-              <input id="glossaryEn" type="text" placeholder="英文" />
+          <section class="glossary-quick-section">
+            <h3>快速詞彙修正</h3>
+            <p class="hint">此視窗只供翻譯校稿時的自訂詞彙與重翻；完整搜尋、匯入匯出請前往詞彙庫管理。</p>
+            <div id="glossaryQuickHint" class="hint">輸入中文詞彙後，可建立新的自訂詞彙或覆蓋同名自訂詞彙。</div>
+            <div class="glossary-quick-form">
+              <label>
+                <span>中文詞彙</span>
+                <input id="glossaryCn" type="text" placeholder="中文詞彙" />
+              </label>
+              <label>
+                <span>英文詞彙</span>
+                <input id="glossaryEn" type="text" placeholder="英文詞彙" />
+              </label>
             </div>
-            <div class="button-row">
-              <button id="addGlossaryBtn" class="ghost" type="button">加入詞彙</button>
+            <div class="button-row--tight2 glossary-quick-actions">
+              <a class="ghost glossary-manage-link" href="{{ url_for('main.glossary_page') }}">前往詞彙庫管理</a>
+              <button id="addGlossaryBtn" class="ghost" type="button">儲存自訂詞彙</button>
+              <button id="addGlossaryRetranslateBtn" class="primary" type="button">儲存並重新翻譯</button>
             </div>
-            <div id="glossaryList" class="glossary-list"></div>
           </section>
-          <section>
+          <section class="glossary-quick-section">
             <h3>翻譯提示詞</h3>
             <label>
               <span>自訂系統提示詞</span>
               <textarea id="systemPrompt" rows="6" placeholder="輸入自訂提示詞（留空則使用預設值）"></textarea>
             </label>
-            <div class="button-row">
+            <div class="button-row--tight2 glossary-prompt-actions">
               <button id="savePromptBtn" class="ghost" type="button">儲存提示詞</button>
+              <button id="retranslateDocumentBtn" class="primary" type="button">重新翻譯整份文件</button>
             </div>
+          </section>
+        </div>
+      </div>
+    </div>
+    <div id="templateManagerModal" class="modal" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="templateManagerTitle">
+        <div class="modal-header">
+          <h2 id="templateManagerTitle">套用欄位翻譯模板</h2>
+        </div>
+        <div class="modal-body">
+          {% if template_mode %}
+          <section>
+            <h3>另存目前模板</h3>
+            <label>
+              <span>模板名稱</span>
+              <input id="templateName" type="text" placeholder="例如：表單 A" />
+            </label>
+            <div class="button-row">
+              <button id="saveTemplateBtn" class="primary" type="button">儲存為模板</button>
+            </div>
+            <p class="hint">會保存目前文件中未刪除的自動產生翻譯文字框，並以相對座標記錄位置。</p>
+          </section>
+          <hr />
+          {% endif %}
+          <section>
+            <!-- <h3>{% if template_mode %}套用既有模板{% else %}套用模板到本文件{% endif %}</h3> -->
+            <label>
+              <span>選擇模板</span>
+              <select id="templateSelect">
+                <option value="">請選擇模板</option>
+              </select>
+            </label>
+            <p id="templateSummary" class="hint">尚未載入模板</p>
+            <label>
+              <div class="stacked-options">
+                <label class="check-row">
+                  <input id="templateApplyAll" type="checkbox" />
+                  <span>全部頁面</span>
+                </label>
+                <label class="check-row">
+                  <input id="templateApplyAfter" type="checkbox" />
+                  <span>模板來源頁之後</span>
+                </label>
+                <label class="check-row">
+                  <input id="templateApplyManual" type="checkbox" />
+                  <span>指定頁碼</span>
+                </label>
+              </div>
+            </label>
+            <label>
+              <input id="templateApplyInput" type="text" placeholder="例如：2,4-6" disabled />
+            </label>
+            <div class="button-row--tight2">
+              <button id="closeTemplateManager" class="ghost" type="button">關閉</button>
+              <button id="applyTemplateBtn" class="primary" type="button">套用</button>
+              {% if template_mode %}
+              <button id="deleteTemplateBtn" class="danger" type="button">刪除模板</button>
+              {% endif %}
+            </div>
+            {% if template_mode %}
+            <hr />
+            <h3>套用到翻譯任務</h3>
+            <label>
+              <span>目標任務</span>
+              <select id="templateTargetJobSelect">
+                <option value="">請選擇翻譯任務</option>
+              </select>
+            </label>
+            <div class="button-row">
+              <button id="applyTemplateToJobBtn" class="primary" type="button">套用到目標任務</button>
+            </div>
+            {% endif %}
           </section>
         </div>
       </div>

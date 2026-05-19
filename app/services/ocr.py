@@ -20,6 +20,63 @@ except Exception:  # pragma: no cover - optional runtime dependency in tests
 
 logger = logging.getLogger(__name__)
 
+TEXT_ALIGN_LEFT = "left"
+TEXT_ALIGN_CENTER = "center"
+TEXT_ALIGN_RIGHT = "right"
+FITZ_TEXT_ALIGN = {
+    TEXT_ALIGN_LEFT: 0,
+    TEXT_ALIGN_CENTER: 1,
+    TEXT_ALIGN_RIGHT: 2,
+}
+PDF_TEXT_LINEHEIGHT = 1.0
+
+def normalize_box_rotation(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    normalized = parsed % 360
+    return normalized if normalized in {0, 90, 180, 270} else 0
+
+
+def get_rotated_textbox_rect(rect: fitz.Rect, page_rect: fitz.Rect, rotate: int) -> fitz.Rect:
+    rot = normalize_box_rotation(rotate)
+    if rot not in (90, 270):
+        return fitz.Rect(rect)
+
+    width = max(0.0, float(rect.width))
+    height = max(0.0, float(rect.height))
+    if width == 0.0 or height == 0.0:
+        return fitz.Rect(rect)
+
+    cx = (rect.x0 + rect.x1) * 0.5
+    cy = (rect.y0 + rect.y1) * 0.5
+    rotated = fitz.Rect(
+        cx - height * 0.5,
+        cy - width * 0.5,
+        cx + height * 0.5,
+        cy + width * 0.5,
+    )
+
+    dx = 0.0
+    dy = 0.0
+    if rotated.x0 < page_rect.x0:
+        dx = page_rect.x0 - rotated.x0
+    elif rotated.x1 > page_rect.x1:
+        dx = page_rect.x1 - rotated.x1
+    if rotated.y0 < page_rect.y0:
+        dy = page_rect.y0 - rotated.y0
+    elif rotated.y1 > page_rect.y1:
+        dy = page_rect.y1 - rotated.y1
+    if dx or dy:
+        rotated = fitz.Rect(
+            rotated.x0 + dx,
+            rotated.y0 + dy,
+            rotated.x1 + dx,
+            rotated.y1 + dy,
+        )
+    return rotated
+
 
 def update_pp_json_should_translate(job_dir: Path) -> None:
     pp_dir = job_dir / "pp_json"
@@ -81,7 +138,20 @@ def _dedupe_box_signature(box: dict[str, Any]) -> tuple[Any, ...] | None:
             return None
     else:
         return None
-    return coords + (text, deleted)
+    return coords + (
+        text,
+        deleted,
+        normalize_text_align(box.get("text_align")),
+        normalize_box_rotation(box.get("rotation")),
+    )
+
+
+def normalize_text_align(value: Any) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in FITZ_TEXT_ALIGN:
+            return normalized
+    return TEXT_ALIGN_LEFT
 
 
 def load_page_data(
@@ -98,6 +168,8 @@ def load_page_data(
         rec_scores: list[float] = []
         font_sizes: list[float] = []
         colors: list[str] = []
+        alignments: list[str] = []
+        rotations: list[int] = []
         box_ids: list[int] = []
         no_clips: list[bool] = []
         auto_generated_flags: list[bool] = []
@@ -126,6 +198,8 @@ def load_page_data(
             rec_scores.append(1.0)
             font_sizes.append(float(box.get("font_size") or 0.0))
             colors.append(str(box.get("color") or state.DEFAULT_TEXT_COLOR))
+            alignments.append(normalize_text_align(box.get("text_align")))
+            rotations.append(normalize_box_rotation(box.get("rotation")))
             box_ids.append(int(box.get("id") or len(box_ids)))
             no_clips.append(bool(box.get("no_clip")))
             auto_generated_flags.append(bool(box.get("auto_generated", True)))
@@ -141,6 +215,8 @@ def load_page_data(
         rec_scores = data.get("rec_scores", []) or []
         font_sizes = []
         colors = []
+        alignments = []
+        rotations = []
         box_ids = []
         no_clips = []
         auto_generated_flags = []
@@ -168,6 +244,8 @@ def load_page_data(
         "rec_scores": rec_scores,
         "font_sizes": font_sizes,
         "colors": colors,
+        "alignments": alignments,
+        "rotations": rotations,
         "box_ids": box_ids,
         "no_clips": no_clips,
         "auto_generated_flags": auto_generated_flags,
@@ -224,6 +302,68 @@ def wrap_text_lines(text: str, max_width: float, font: fitz.Font, font_size: flo
             lines.append(current.rstrip())
             
     return lines
+
+
+def insert_textbox_overflow_visible(
+    page: fitz.Page,
+    rect: fitz.Rect,
+    text: str,
+    *,
+    fontfile: str | None,
+    fontname: str | None,
+    fontsize: float,
+    color: tuple[float, float, float],
+    align: int,
+    rotate: int,
+) -> dict[str, Any]:
+    rect = fitz.Rect(rect)
+    base_kwargs: dict[str, Any] = {
+        "fontsize": float(fontsize),
+        "lineheight": PDF_TEXT_LINEHEIGHT,
+        "color": color,
+        "align": align,
+        "rotate": rotate,
+    }
+    if fontname:
+        base_kwargs["fontname"] = fontname
+    elif fontfile:
+        base_kwargs["fontfile"] = fontfile
+    else:
+        base_kwargs["fontname"] = "helv"
+
+    shape = page.new_shape()
+    rc = shape.insert_textbox(rect, text, **base_kwargs)
+    if rc >= 0:
+        shape.commit()
+        return {
+            "ok": True,
+            "fontsize": float(fontsize),
+            "rect": rect,
+            "rc": rc,
+            "expanded": False,
+        }
+
+    target_rect = fitz.Rect(rect)
+    deficit = abs(float(rc))
+    if rotate == 0:
+        target_rect.y1 += deficit
+    elif rotate == 90:
+        target_rect.x1 += deficit
+    elif rotate == 180:
+        target_rect.y0 -= deficit
+    elif rotate == 270:
+        target_rect.x0 -= deficit
+
+    shape = page.new_shape()
+    rc = shape.insert_textbox(target_rect, text, **base_kwargs)
+    shape.commit()
+    return {
+        "ok": rc >= 0,
+        "fontsize": float(fontsize),
+        "rect": target_rect,
+        "rc": rc,
+        "expanded": target_rect != rect,
+    }
 
 def load_ocr_pages(job_dir: Path) -> list[dict[str, Any]]:
     json_dir = job_dir / "ocr_json"
@@ -612,11 +752,8 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
     }
 
     fontfile = resolve_fontfile()
-    try:
-        font_obj = fitz.Font(fontfile=fontfile) if fontfile else fitz.Font("helv")
-    except RuntimeError:
-        font_obj = fitz.Font("helv")
-        fontfile = None
+    if not fontfile:
+        logger.warning("No CJK font file found for edited PDF output; falling back to helv.")
     debug_boxes = os.getenv("DEBUG_EDIT_BOXES") == "1"
     doc = fitz.open(pdf_path)
     for page_idx in range(doc.page_count):
@@ -636,8 +773,15 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
             continue
         sx = page_w / img_w
         sy = page_h / img_h
+        page_fontname: str | None = None
+        if fontfile:
+            try:
+                page.insert_font(fontname="NotoSansTC", fontfile=fontfile)
+                page_fontname = "NotoSansTC"
+            except RuntimeError as exc:
+                logger.warning("Failed to register PDF edit font %s: %s", fontfile, exc)
+                page_fontname = None
 
-        shape = page.new_shape()
         dbg_shape = page.new_shape() if debug_boxes else None
         for box in page_edits.get("boxes", []):
             if not isinstance(box, dict) or box.get("deleted"):
@@ -674,58 +818,24 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
                 font_size_px = state.DEFAULT_FONT_SIZE_PX
             font_size_pt = font_size_px * (page_h / img_h)
             color = hex_to_rgb(box.get("color"))
-            rotate = rotation if rotation else 0
-            no_clip = bool(box.get("no_clip"))
-
-            sx = page_w / img_w
-            sy = page_h / img_h
-            v_w = w * sx 
-            v_h = h * sy 
-            v_y = y * sy 
-
-            lines = wrap_text_lines(text, v_w, font_obj, font_size_pt)
-            if not lines:
-                lines = [text]
-                
-            line_height = max(1.0, font_size_pt * 1.2)
-
-            cursor_v_y = v_y + line_height
-            max_lines_in_box = max(1, int(v_h // line_height))
-            allow_overflow = no_clip or len(lines) > max_lines_in_box
-            max_v_y = v_y + v_h if not allow_overflow else page_h - line_height * 0.2
-            
-            for idx, line in enumerate(lines):
-                overflow = cursor_v_y > max_v_y
-                if overflow and idx != 0:
-                    break
-
-                y_cursor_px = cursor_v_y / sy
-                pt_unrot = px_point_to_pdf_pt(x, y_cursor_px, img_w, img_h, page_w, page_h, rotation)
-                baseline = fitz.Point(pt_unrot[0], pt_unrot[1])
-                
-                if fontfile:
-                    shape.insert_text(
-                        baseline,
-                        line,
-                        fontfile=fontfile,
-                        fontsize=font_size_pt,
-                        color=color,
-                        rotate=rotate,
-                    )
-                else:
-                    shape.insert_text(
-                        baseline,
-                        line,
-                        fontname="helv",
-                        fontsize=font_size_pt,
-                        color=color,
-                        rotate=rotate,
-                    )
-                if overflow:
-                    break
-                cursor_v_y += line_height
-
-        shape.commit()
+            rotate = normalize_box_rotation(box.get("rotation"))
+            pdf_rotate = (rotation + ((360 - rotate) % 360)) % 360
+            text_align = normalize_text_align(box.get("text_align"))
+            # Editor-side rotation already updates the stored bbox geometry.
+            # Use the saved rectangle directly so the generated PDF matches
+            # the on-screen editor position and size.
+            textbox_rect = fitz.Rect(rect)
+            insert_textbox_overflow_visible(
+                page,
+                textbox_rect,
+                text,
+                fontfile=fontfile,
+                fontname=page_fontname,
+                fontsize=font_size_pt,
+                color=color,
+                align=FITZ_TEXT_ALIGN[text_align],
+                rotate=pdf_rotate,
+            )
         if dbg_shape is not None:
             dbg_shape.commit()
 

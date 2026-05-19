@@ -9,6 +9,11 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from lang_utils import (
+    describe_target_language,
+    traditional_chinese_instruction,
+)
+
 from . import glossary, openai_config, state
 
 logger = logging.getLogger(__name__)
@@ -106,11 +111,25 @@ def _get_translation_client():
     return openai_config.create_sync_client(), state.DOC_TRANSLATE_MODEL
 
 
-def _build_system_prompt(target_lang: str, glossary_entries: list[tuple[str, str]]) -> str:
+def _build_system_prompt(
+    target_lang: str,
+    glossary_entries: list[tuple[str, str]],
+    *,
+    source_lang: str = "auto",
+) -> str:
     prompt = [
         state.DOC_TRANSLATE_SYSTEM_PROMPT,
-        f"Target language: {target_lang}.",
     ]
+    if str(source_lang or "").strip().lower() not in {"", "auto"}:
+        prompt.append(f"Source language: {describe_target_language(source_lang)}.")
+    prompt.extend(
+        [
+        f"Target language: {describe_target_language(target_lang)}.",
+        ]
+    )
+    zh_rule = traditional_chinese_instruction(target_lang)
+    if zh_rule:
+        prompt.append(zh_rule)
     if glossary_entries:
         glossary_lines = "\n".join(
             f"- {src} => {dst}" for src, dst in glossary_entries[:50]
@@ -177,6 +196,7 @@ def _translate_text(
 def _translate_pandoc_doc(
     doc: dict[str, Any],
     *,
+    source_lang: str = "auto",
     target_lang: str,
     snippet_to_text,
     text_to_blocks,
@@ -187,7 +207,7 @@ def _translate_pandoc_doc(
 
     client, model = _get_translation_client()
     glossary_entries = glossary.load_combined_glossary()
-    system_prompt = _build_system_prompt(target_lang, glossary_entries)
+    system_prompt = _build_system_prompt(target_lang, glossary_entries, source_lang=source_lang)
 
     translated_blocks: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
@@ -228,12 +248,14 @@ def _translate_pandoc_doc(
 def translate_markdown_file(
     source_path: Path,
     out_path: Path,
+    source_lang: str = "auto",
     target_lang: str = "en",
 ) -> Path:
     markdown_text = source_path.read_text(encoding="utf-8")
     doc = markdown_to_doc(markdown_text)
     translated_doc = _translate_pandoc_doc(
         doc,
+        source_lang=source_lang,
         target_lang=target_lang,
         snippet_to_text=blocks_to_markdown,
         text_to_blocks=markdown_to_blocks,
@@ -273,12 +295,13 @@ def _split_leading_trailing_ws(text: str) -> tuple[str, str, str]:
 def _translate_html_text_nodes(
     html_text: str,
     *,
+    source_lang: str = "auto",
     target_lang: str,
 ) -> str:
     parts = re.split(r"(<[^>]+>)", html_text)
     client, model = _get_translation_client()
     glossary_entries = glossary.load_combined_glossary()
-    system_prompt = _build_system_prompt(target_lang, glossary_entries)
+    system_prompt = _build_system_prompt(target_lang, glossary_entries, source_lang=source_lang)
     translated_cache: dict[str, str] = {}
     translated_parts: list[str] = []
 
@@ -308,10 +331,15 @@ def _translate_html_text_nodes(
 def translate_html_file(
     source_path: Path,
     out_path: Path,
+    source_lang: str = "auto",
     target_lang: str = "en",
 ) -> Path:
     html_text = source_path.read_text(encoding="utf-8")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    translated_html = _translate_html_text_nodes(html_text, target_lang=target_lang)
+    translated_html = _translate_html_text_nodes(
+        html_text,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
     out_path.write_text(_unwrap_html_code_fences(translated_html), encoding="utf-8")
     return out_path

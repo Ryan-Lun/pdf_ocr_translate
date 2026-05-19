@@ -93,16 +93,29 @@ def get_job_type(job_dir_path: Path) -> str:
         return "doc_workspace"
     if job_type == "word_translate":
         return "word_translate"
+    if job_type == "template_source":
+        return "template_source"
     return "ocr_overlay"
 
 
 def normalize_document_mode(value: Any) -> str:
     mode = str(value or "").strip().lower()
+    if mode in {"other", "other_document", "other_documents"}:
+        return "other"
+    if mode in {"general_force_translate", "general_force"}:
+        return "general_force"
     if mode == "general":
         return "general"
     if mode == "scanned":
         return "scanned"
     return "form"
+
+
+def normalize_translate_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    if mode == "realtime":
+        return "realtime"
+    return "batch"
 
 
 def build_download_base(job_id: str, job_name: str | None) -> str:
@@ -142,8 +155,16 @@ def build_docx_name(job_id: str, job_name: str | None) -> str:
     return build_download_name(job_id, job_name, ext="docx", suffix="translated")
 
 
-def job_dir(job_id: str) -> Path:
-    return state.JOB_ROOT / job_id
+def job_dir(job_id: str, *, job_root: Path | None = None) -> Path:
+    if job_root is not None:
+        return job_root / job_id
+    primary = state.JOB_ROOT / job_id
+    if primary.exists():
+        return primary
+    template = state.TEMPLATE_JOB_ROOT / job_id
+    if template.exists():
+        return template
+    return primary
 
 
 def job_timestamp(path: Path) -> float:
@@ -281,8 +302,11 @@ def infer_job_store_status(job_dir_path: Path, meta: dict[str, Any]) -> tuple[st
     return _job_store_status_for_ocr(job_dir_path, meta)
 
 
-def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
+def build_jobs_list(
+    job_type: str | None = None,
+) -> list[dict[str, Any]]:
     state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    state.TEMPLATE_JOB_ROOT.mkdir(parents=True, exist_ok=True)
     jobs = []
     records = job_store.list_jobs(job_type)
 
@@ -291,6 +315,7 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
         current_job_type = record.job_type
         job_id = record.job_id
         job_meta = load_job_meta(job_dir_path) or {}
+        is_template_source = current_job_type == "template_source"
 
         pdf_path = job_dir_path / f"{job_id}.pdf"
         debug_pdf_path = job_dir_path / "overlay_debug.pdf"
@@ -468,9 +493,14 @@ def build_jobs_list(job_type: str | None = None) -> list[dict[str, Any]]:
                 "status_label": status_label,
                 "status": status_label,
                 "job_name": job_name,
+                "template_source": is_template_source,
                 "creator_name": str(job_meta.get("creator_name") or "").strip() or None,
                 "document_mode": normalize_document_mode(
                     record.document_mode or job_meta.get("document_mode")
+                ),
+                "translate_mode": normalize_translate_mode(
+                    (load_batch_config(job_dir_path) or {}).get("translate_mode")
+                    or job_meta.get("translate_mode")
                 ),
                 "download_name": download_name,
                 "editor_url": url_for("editor.editor", job_id=job_id),
@@ -504,6 +534,10 @@ def batch_alias_path(job_dir_path: Path) -> Path:
 
 def batch_prefill_path(job_dir_path: Path) -> Path:
     return job_dir_path / state.BATCH_PREFILL_NAME
+
+
+def merge_notices_path(job_dir_path: Path) -> Path:
+    return job_dir_path / "merge_notices.json"
 
 
 def job_meta_path(job_dir_path: Path) -> Path:
@@ -648,6 +682,80 @@ def load_batch_prefill_map(job_dir_path: Path) -> dict[str, str]:
     return cleaned
 
 
+def write_merge_notices(job_dir_path: Path, notices: list[dict[str, Any]]) -> None:
+    merge_notices_path(job_dir_path).write_text(
+        json.dumps(notices, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def load_merge_notices(job_dir_path: Path) -> list[dict[str, Any]]:
+    path = merge_notices_path(job_dir_path)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        notice_id = str(item.get("notice_id") or "").strip()
+        if not notice_id:
+            continue
+        item = dict(item)
+        item["notice_id"] = notice_id
+        item["status"] = str(item.get("status") or "pending").strip().lower() or "pending"
+        cleaned.append(item)
+    return cleaned
+
+
+def upsert_merge_notice(job_dir_path: Path, notice: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(notice, dict):
+        return None
+    notice_id = str(notice.get("notice_id") or "").strip()
+    if not notice_id:
+        return None
+    notices = load_merge_notices(job_dir_path)
+    payload = dict(notice)
+    payload["notice_id"] = notice_id
+    payload["status"] = str(payload.get("status") or "pending").strip().lower() or "pending"
+    payload["updated_at"] = time.time()
+    for idx, existing in enumerate(notices):
+        if str(existing.get("notice_id") or "") != notice_id:
+            continue
+        preserved_status = str(existing.get("status") or "pending").strip().lower() or "pending"
+        payload["status"] = preserved_status if preserved_status != "pending" else payload["status"]
+        payload["created_at"] = existing.get("created_at") or payload.get("created_at") or payload["updated_at"]
+        notices[idx] = payload
+        write_merge_notices(job_dir_path, notices)
+        return payload
+    payload["created_at"] = payload.get("created_at") or payload["updated_at"]
+    notices.append(payload)
+    write_merge_notices(job_dir_path, notices)
+    return payload
+
+
+def update_merge_notice_status(job_dir_path: Path, notice_id: str, status: str) -> dict[str, Any] | None:
+    normalized_notice_id = str(notice_id or "").strip()
+    normalized_status = str(status or "").strip().lower()
+    if not normalized_notice_id or normalized_status not in {"pending", "accepted", "rejected"}:
+        return None
+    notices = load_merge_notices(job_dir_path)
+    for idx, notice in enumerate(notices):
+        if str(notice.get("notice_id") or "") != normalized_notice_id:
+            continue
+        updated = dict(notice)
+        updated["status"] = normalized_status
+        updated["updated_at"] = time.time()
+        notices[idx] = updated
+        write_merge_notices(job_dir_path, notices)
+        return updated
+    return None
+
+
 def load_edits_map(job_dir_path: Path) -> dict[int, list[dict[str, Any]]]:
     edits_path = job_dir_path / "edits.json"
     if not edits_path.exists():
@@ -728,12 +836,18 @@ def build_translated_zip(job_ids: set[str] | None) -> tuple[io.BytesIO, int]:
 
 
 def delete_job_dir(job_id: str) -> tuple[bool, str | None]:
-    job_dir_path = job_dir(job_id)
-    if job_dir_path.exists():
+    removed = False
+    errors: list[str] = []
+    for job_dir_path in (state.JOB_ROOT / job_id, state.TEMPLATE_JOB_ROOT / job_id):
+        if not job_dir_path.exists():
+            continue
         try:
             shutil.rmtree(job_dir_path)
+            removed = True
         except Exception as exc:
-            return False, str(exc)
+            errors.append(str(exc))
+    if errors:
+        return False, "; ".join(errors)
     job_store.delete_job(job_id)
     notify_jobs_update()
     return True, None
@@ -752,7 +866,7 @@ def retry_job(job_id: str) -> tuple[bool, str | None]:
 
     payload = job_store.deserialize_payload(record)
     stage = "queued"
-    if record.job_type == "ocr_overlay":
+    if record.job_type in {"ocr_overlay", "template_source"}:
         has_ocr_output = (job_dir_path / "ocr_json").exists()
         has_batch_config = load_batch_config(job_dir_path) is not None
         if has_ocr_output and has_batch_config:
@@ -765,6 +879,7 @@ def retry_job(job_id: str) -> tuple[bool, str | None]:
                 job_id=job_id,
                 model=config.get("model"),
                 target_lang=config.get("target_lang"),
+                translate_mode=normalize_translate_mode(config.get("translate_mode")),
             )
         else:
             payload.pop("resume_translate_only", None)

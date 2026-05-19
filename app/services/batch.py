@@ -8,7 +8,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import glossary, jobs, ocr, openai_config, state, translation_memory
+from lang_utils import (
+    describe_target_language,
+    normalize_lang_code,
+    traditional_chinese_instruction,
+)
+
+from . import document_terms, glossary, jobs, ocr, openai_config, state, translation_memory
 
 logger = logging.getLogger(__name__)
 TERMINAL_BATCH_STATUSES = {"completed", "failed", "canceled", "cancelled"}
@@ -73,11 +79,11 @@ def resolve_document_mode(value: Any) -> str:
 
 
 def use_merged_cells_for_mode(document_mode: str) -> bool:
-    return resolve_document_mode(document_mode) in {"form", "general"}
+    return resolve_document_mode(document_mode) in {"form", "general", "general_force", "other"}
 
 
 def use_structured_blocks_for_mode(document_mode: str) -> bool:
-    return resolve_document_mode(document_mode) in {"form", "general"}
+    return resolve_document_mode(document_mode) in {"form", "general", "general_force", "other"}
 
 
 def prefer_merged_cells_only(document_mode: str, merged_cells: list[dict[str, Any]]) -> bool:
@@ -92,13 +98,97 @@ def _contains_english(text: str) -> bool:
     return bool(re.search(r"[A-Za-z]", text or ""))
 
 
+def _lang_family(lang: str) -> str:
+    normalized = normalize_lang_code(lang)
+    if normalized == "zh":
+        return "cjk"
+    if normalized == "en":
+        return "latin"
+    return "other"
+
+
+def _text_matches_lang(text: str, lang: str) -> bool:
+    normalized = normalize_lang_code(lang)
+    if normalized == "zh":
+        return _contains_cjk(text)
+    if normalized == "en":
+        return _contains_english(text)
+    return _contains_cjk(text) or _contains_english(text)
+
+
+def _infer_source_lang_for_target(target_lang: str) -> str:
+    family = _lang_family(target_lang)
+    if family == "cjk":
+        return "en"
+    if family == "latin":
+        return "zh"
+    return "auto"
+
+
+def _uses_explicit_source_lang(document_mode: str) -> bool:
+    return resolve_document_mode(document_mode) == "other"
+
+
+def _legacy_should_translate_cjk_text(text: str) -> bool:
+    normalized_text = normalize_for_translation(str(text or ""))
+    if not normalized_text or is_numeric_only(normalized_text):
+        return False
+    return _contains_cjk(normalized_text)
+
+
+def should_translate_text(
+    text: str,
+    *,
+    source_lang: str = "auto",
+    target_lang: str = "en",
+) -> bool:
+    normalized_text = normalize_for_translation(str(text or ""))
+    if not normalized_text or is_numeric_only(normalized_text):
+        return False
+    normalized_source = normalize_lang_code(source_lang)
+    if normalized_source != "auto":
+        return _text_matches_lang(normalized_text, normalized_source)
+    inferred_source = _infer_source_lang_for_target(target_lang)
+    return _text_matches_lang(normalized_text, inferred_source)
+
+
+def is_mixed_source_target_text(
+    text: str,
+    *,
+    source_lang: str = "auto",
+    target_lang: str = "en",
+) -> bool:
+    normalized_text = normalize_for_translation(str(text or ""))
+    if not normalized_text:
+        return False
+    normalized_source = normalize_lang_code(source_lang)
+    if normalized_source == "auto":
+        normalized_source = _infer_source_lang_for_target(target_lang)
+    return _text_matches_lang(normalized_text, normalized_source) and _text_matches_lang(
+        normalized_text,
+        target_lang,
+    )
+
+
 def should_translate_merged_cell(cell: dict[str, Any], document_mode: str) -> bool:
+    mode = resolve_document_mode(document_mode)
+    text = normalize_for_translation(str(cell.get("merged_text") or ""))
+    target_lang = str(cell.get("_target_lang") or "en")
+    source_lang = str(cell.get("_source_lang") or "auto")
+    if mode != "other" and not _legacy_should_translate_cjk_text(text):
+        return False
+    if mode == "other" and not should_translate_text(text, source_lang=source_lang, target_lang=target_lang):
+        return False
+    if mode == "general_force":
+        return True
     if not cell.get("should_translate"):
         return False
-    mode = resolve_document_mode(document_mode)
     if mode == "form":
         return True
-    text = normalize_for_translation(str(cell.get("merged_text") or ""))
+    if mode == "general":
+        return _contains_cjk(text) and not _contains_english(text)
+    if mode == "other":
+        return not is_mixed_source_target_text(text, source_lang=source_lang, target_lang=target_lang)
     return _contains_cjk(text) and not _contains_english(text)
 
 
@@ -113,6 +203,15 @@ def normalize_text(text: str) -> str:
 
 def normalize_for_translation(text: str) -> str:
     return translation_memory.normalize_source_text(text)
+
+
+def _page_item_sort_key(bbox: list[float] | None, kind_order: int = 0) -> tuple[float, float, int]:
+    if not (isinstance(bbox, list) and len(bbox) == 4):
+        return (float("inf"), float("inf"), kind_order)
+    try:
+        return (round(float(bbox[1]), 1), round(float(bbox[0]), 1), kind_order)
+    except (TypeError, ValueError):
+        return (float("inf"), float("inf"), kind_order)
 
 
 def is_numeric_only(text: str) -> bool:
@@ -190,6 +289,8 @@ def bbox_list_overlaps_tables(
 def is_chart_block(block: dict[str, Any] | None) -> bool:
     return str((block or {}).get("label") or "").strip().lower() == "chart"
 
+def is_image_block(block: dict[str, Any] | None) -> bool:
+    return str((block or {}).get("label") or "").strip().lower() == "image"
 
 def _bbox_contains(
     outer: list[float] | None,
@@ -256,13 +357,29 @@ def should_translate_structured_block(
     document_mode: str,
     merged_only: bool,
 ) -> bool:
-    if not block or not block.get("should_translate"):
+    if not block:
         return False
     if is_chart_block(block):
         return False
+    if is_image_block(block):
+        return False
+    mode = resolve_document_mode(document_mode)
+    text = normalize_for_translation(str(block.get("text") or ""))
+    target_lang = str((block or {}).get("_target_lang") or "en")
+    source_lang = str((block or {}).get("_source_lang") or "auto")
+    if mode == "general_force":
+        return _legacy_should_translate_cjk_text(text)
+    if not block.get("should_translate"):
+        return False
+    if mode in {"general", "other"} and is_mixed_source_target_text(
+        text,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    ):
+        return False
     if not merged_only:
         return True
-    if resolve_document_mode(document_mode) != "form":
+    if mode != "form":
         return False
     label = str(block.get("label") or "").strip().lower()
     return label in {"figure_title", "header"}
@@ -275,9 +392,9 @@ def should_skip_ocr_line_for_structured_blocks(
     if not bbox or len(bbox) != 4:
         return False
     for block in paragraph_blocks:
-        if not block.get("should_translate"):
-            continue
         if is_chart_block(block):
+            continue
+        if is_image_block(block):
             continue
         if bbox_list_overlaps_tables(bbox, [block.get("bbox")], min_overlap_ratio=0.15):
             return True
@@ -305,6 +422,7 @@ def translate_texts_for_region(
     texts: list[str],
     *,
     target_lang: str,
+    source_lang: str = "auto",
     model_name: str,
     system_prompt: str | None = None,
     glossary_entries: list[tuple[str, str]] | None = None,
@@ -312,13 +430,26 @@ def translate_texts_for_region(
     if not texts:
         return []
 
-    client = get_azure_client()
-    prompt_parts = [resolve_batch_prompt(target_lang, system_prompt)]
     glossary_prompt = _build_inline_glossary_instructions(glossary_entries)
-    if glossary_prompt:
-        prompt_parts.append(glossary_prompt)
-    prompt_parts.append("Return only the translated text for the current input.")
-    final_prompt = "\n\n".join(part for part in prompt_parts if part).strip()
+    protected_term_prompt = ""
+    if glossary_entries:
+        protected_term_prompt = (
+            "If the input contains tokens in the form "
+            "[[[GLOSSARY_TERM_0001::TERM]]], copy those tokens EXACTLY unchanged "
+            "into the output and keep TERM verbatim."
+        )
+
+    client = get_azure_client()
+    final_prompt = "\n\n".join(
+        part
+        for part in (
+            resolve_batch_prompt(target_lang, system_prompt),
+            glossary_prompt,
+            protected_term_prompt,
+            "Return only the translated text for the current input.",
+        )
+        if part
+    ).strip()
 
     outputs: list[str] = []
     for raw_text in texts:
@@ -327,17 +458,61 @@ def translate_texts_for_region(
         if not normalized_source:
             outputs.append("")
             continue
-        if is_numeric_only(normalized_source) or not _contains_cjk(normalized_source):
+        if source_lang == "auto":
+            should_translate = _legacy_should_translate_cjk_text(normalized_source)
+        else:
+            should_translate = should_translate_text(
+                normalized_source,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+        if not should_translate:
             outputs.append(source_text)
             continue
+        protected_source = glossary.apply_glossary_with_protection(
+            source_text,
+            glossary_entries,
+        )
         response = client.responses.create(
             model=model_name,
             instructions=final_prompt,
-            input=source_text,
+            input=protected_source,
         )
-        translated = str(response.output_text or "").strip()
+        translated = glossary.restore_protected_glossary_terms(
+            str(response.output_text or "").strip()
+        )
         outputs.append(normalize_text(translated) or source_text)
     return outputs
+
+
+def _get_tm_entry_with_fallback(
+    memory: dict[str, dict[str, Any]],
+    *,
+    source_text: str,
+    target_lang: str,
+    document_mode: str,
+    normalized_source: str,
+    canonical_source_text: str | None = None,
+    canonical_source_normalized: str | None = None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    tm_key, tm_entry = translation_memory.get_tm_entry(
+        memory,
+        source_text,
+        target_lang,
+        document_mode,
+        source_normalized=normalized_source,
+    )
+    if tm_key and tm_entry:
+        return tm_key, tm_entry
+    if canonical_source_normalized and canonical_source_normalized != normalized_source:
+        return translation_memory.get_tm_entry(
+            memory,
+            canonical_source_text or source_text,
+            target_lang,
+            document_mode,
+            source_normalized=canonical_source_normalized,
+        )
+    return None, None
 
 
 
@@ -347,16 +522,22 @@ def resolve_batch_prompt(target_lang: str, override: str | None = None) -> str:
     normalized = (target_lang or "").strip().lower()
     if normalized in {"en", "english", "en-us", "en-gb"}:
         return state.AZURE_BATCH_SYSTEM_PROMPT
+    target_label = describe_target_language(target_lang)
+    extra_rules: list[str] = []
+    zh_rule = traditional_chinese_instruction(target_lang)
+    if zh_rule:
+        extra_rules.append(zh_rule)
     return "\n".join(
         [
             "You are a professional translator.",
-            f"Translate the text to {target_lang} accurately and literally.",
+            f"Translate the text to {target_label} accurately and literally.",
             "Do NOT summarize, paraphrase, explain, or add content.",
             "Preserve all numbers, codes, references, and formatting.",
             "If the input is a standalone year, number, code, table number, figure number, symbol, unit, abbreviation, or non-sentence fragment, do not explain it. Return only the translated or preserved text. Examples: 2017年 -> 2017、2018年 -> 2018、N/A -> N/A",
             "CRITICAL FORMATTING RULE 1: You MUST insert a line break strictly before every numbered item (e.g., '2.', '3.', '4.').",
             "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",
             "Strictly prohibit duplicate words or expressions with identical meanings; if they appear, you must remove the redundancy and keep only one.",
+            *extra_rules,
             "Output only the translated text."
         ]
     ).strip()
@@ -368,6 +549,7 @@ def build_batch_items(
     glossary_entries: list[tuple[str, str]] | None = None,
     pp_pages: dict[int, dict[str, Any]] | None = None,
     target_lang: str = "en",
+    source_lang: str = "auto",
     document_mode: str = "form",
 ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, dict[str, str]], dict[str, str]]:
     items: list[dict[str, Any]] = []
@@ -377,12 +559,16 @@ def build_batch_items(
     seen: dict[str, str] = {}
     pp_pages = pp_pages or {}
     mode = resolve_document_mode(document_mode)
+    use_explicit_source_lang = _uses_explicit_source_lang(mode)
     translate_merged_cells = use_merged_cells_for_mode(document_mode)
     use_structured_blocks = use_structured_blocks_for_mode(document_mode)
-
-    with state.TRANSLATION_MEMORY_LOCK:
-        translation_memory_data = translation_memory.load_translation_memory()
-        tm_dirty = False
+    document_term_map = document_terms.build_document_term_map(pp_pages)
+    translation_memory_enabled = bool(state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY)
+    translation_memory_data: dict[str, dict[str, Any]] = {}
+    tm_dirty = False
+    if translation_memory_enabled:
+        with state.TRANSLATION_MEMORY_LOCK:
+            translation_memory_data = translation_memory.load_translation_memory()
 
     def _add_item(custom_id: str, raw_text: str) -> None:
         nonlocal tm_dirty
@@ -390,48 +576,65 @@ def build_batch_items(
         normalized_source = normalize_for_translation(source_text)
         if not normalized_source:
             return
-        if not re.search(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]", normalized_source):
+        if use_explicit_source_lang:
+            should_translate = should_translate_text(
+                normalized_source,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+        else:
+            should_translate = _legacy_should_translate_cjk_text(normalized_source)
+        if not should_translate:
             return
-        tm_key, tm_entry = translation_memory.get_tm_entry(
-            translation_memory_data,
-            source_text,
-            target_lang,
-            document_mode,
-            source_normalized=normalized_source,
-        )
-        if tm_key and tm_entry:
-            translated_text = translation_memory.extract_target_text(tm_entry)
-            if translated_text:
-                prefilled[custom_id] = translated_text
-                translation_memory.touch_entry(tm_entry)
-                if tm_key != translation_memory.make_tm_key(
-                    source_text,
-                    target_lang,
-                    document_mode,
-                    source_normalized=normalized_source,
-                ):
-                    translation_memory.upsert_entry(
-                        translation_memory_data,
-                        source_text,
-                        translated_text,
+        matched_term = document_terms.lookup_document_term(source_text, document_term_map)
+        canonical_source_text = str((matched_term or {}).get("best_source_text") or source_text)
+        canonical_source_normalized = str((matched_term or {}).get("canonical_key") or normalized_source)
+        if translation_memory_enabled:
+            tm_key, tm_entry = _get_tm_entry_with_fallback(
+                translation_memory_data,
+                source_text=source_text,
+                target_lang=target_lang,
+                document_mode=document_mode,
+                normalized_source=normalized_source,
+                canonical_source_text=canonical_source_text,
+                canonical_source_normalized=canonical_source_normalized,
+            )
+            if tm_key and tm_entry:
+                translated_text = translation_memory.extract_target_text(tm_entry)
+                if translated_text:
+                    prefilled[custom_id] = translated_text
+                    translation_memory.touch_entry(tm_entry)
+                    if tm_key != translation_memory.make_tm_key(
+                        canonical_source_text,
                         target_lang,
                         document_mode,
-                        source_normalized=normalized_source,
-                        source=str(tm_entry.get("source") or "batch"),
-                    )
-                tm_dirty = True
-                return
-        clean = glossary.apply_glossary(normalized_source, glossary_entries)
+                        source_normalized=canonical_source_normalized,
+                    ):
+                        translation_memory.upsert_entry(
+                            translation_memory_data,
+                            canonical_source_text,
+                            translated_text,
+                            target_lang,
+                            document_mode,
+                            source_normalized=canonical_source_normalized,
+                            source=str(tm_entry.get("source") or "batch"),
+                        )
+                    tm_dirty = True
+                    return
+        clean = glossary.apply_glossary_with_protection(
+            normalize_for_translation(canonical_source_text),
+            glossary_entries,
+        )
         if not clean:
             return
-        dedupe_key = normalized_source
+        dedupe_key = canonical_source_normalized
         if dedupe_key in seen:
             alias_map[custom_id] = seen[dedupe_key]
             return
         seen[dedupe_key] = custom_id
         key_map[custom_id] = {
-            "source_text": source_text,
-            "source_normalized": normalized_source,
+            "source_text": canonical_source_text,
+            "source_normalized": canonical_source_normalized,
         }
         items.append(
             {
@@ -470,68 +673,89 @@ def build_batch_items(
             paragraph_blocks,
             document_mode=document_mode,
         )
+        translatable_paragraph_blocks: list[dict[str, Any]] = []
+        blocking_paragraph_blocks: list[dict[str, Any]] = []
         if use_structured_blocks:
             for block in paragraph_blocks:
-                if not should_translate_structured_block(
-                    block,
+                block_with_lang = {**block, "_source_lang": source_lang, "_target_lang": target_lang}
+                if should_translate_structured_block(
+                    block_with_lang,
                     document_mode=document_mode,
                     merged_only=merged_only,
                 ):
-                    continue
+                    translatable_paragraph_blocks.append(block_with_lang)
+                    blocking_paragraph_blocks.append(block_with_lang)
+                elif not block.get("should_translate"):
+                    blocking_paragraph_blocks.append(block_with_lang)
+        should_skip_paragraph_lines = has_paragraph_flags or (
+            mode == "general_force" and bool(paragraph_blocks)
+        )
+        page_candidates: list[tuple[tuple[float, float, int], str, str]] = []
+
+        if use_structured_blocks:
+            for block in translatable_paragraph_blocks:
                 if table_bboxes and bbox_list_overlaps_tables(block.get("bbox"), table_bboxes):
                     continue
                 block_idx = int(block.get("block_index", 0))
                 custom_id = f"p{page_idx:04d}-b{block_idx:04d}"
-                _add_item(custom_id, block.get("text", ""))
+                page_candidates.append(
+                    (_page_item_sort_key(block.get("bbox"), 0), custom_id, str(block.get("text", "")))
+                )
 
         for cell_idx, cell in enumerate(merged_cells):
+            cell = {**cell, "_source_lang": source_lang, "_target_lang": target_lang}
             if not should_translate_merged_cell(cell, document_mode):
                 continue
             custom_id = f"p{page_idx:04d}-c{cell_idx:04d}"
-            _add_item(custom_id, cell.get("merged_text", ""))
+            page_candidates.append(
+                (_page_item_sort_key(cell.get("cell_box"), 1), custom_id, str(cell.get("merged_text", "")))
+            )
 
         for idx, text in enumerate(texts):
             if merged_only:
                 continue
+            line_bbox_list: list[float] | None = None
             if skip_table_lines and table_bboxes and idx < len(rec_polys):
                 bbox = poly_to_bbox(rec_polys[idx])
                 if bbox:
-                    if bbox_list_overlaps_tables(
-                        [
-                            float(bbox["x"]),
-                            float(bbox["y"]),
-                            float(bbox["x"]) + float(bbox["w"]),
-                            float(bbox["y"]) + float(bbox["h"]),
-                        ],
-                        table_bboxes,
-                    ):
-                        continue
-                    if has_paragraph_flags and should_skip_ocr_line_for_structured_blocks(
-                        [
-                            float(bbox["x"]),
-                            float(bbox["y"]),
-                            float(bbox["x"]) + float(bbox["w"]),
-                            float(bbox["y"]) + float(bbox["h"]),
-                        ],
-                        paragraph_blocks,
-                    ):
-                        continue
-            elif has_paragraph_flags and idx < len(rec_polys):
-                bbox = poly_to_bbox(rec_polys[idx])
-                if bbox and should_skip_ocr_line_for_structured_blocks(
-                    [
+                    line_bbox_list = [
                         float(bbox["x"]),
                         float(bbox["y"]),
                         float(bbox["x"]) + float(bbox["w"]),
                         float(bbox["y"]) + float(bbox["h"]),
-                    ],
-                    paragraph_blocks,
-                ):
-                    continue
+                    ]
+                    if bbox_list_overlaps_tables(
+                        line_bbox_list,
+                        table_bboxes,
+                    ):
+                        continue
+                    if should_skip_paragraph_lines and should_skip_ocr_line_for_structured_blocks(
+                        line_bbox_list,
+                        blocking_paragraph_blocks,
+                    ):
+                        continue
+            elif should_skip_paragraph_lines and idx < len(rec_polys):
+                bbox = poly_to_bbox(rec_polys[idx])
+                if bbox:
+                    line_bbox_list = [
+                        float(bbox["x"]),
+                        float(bbox["y"]),
+                        float(bbox["x"]) + float(bbox["w"]),
+                        float(bbox["y"]) + float(bbox["h"]),
+                    ]
+                    if should_skip_ocr_line_for_structured_blocks(
+                        line_bbox_list,
+                        blocking_paragraph_blocks,
+                    ):
+                        continue
             custom_id = f"p{page_idx:04d}-l{idx:04d}"
-            _add_item(custom_id, text)
+            page_candidates.append((_page_item_sort_key(line_bbox_list, 2), custom_id, str(text or "")))
 
-    if tm_dirty:
+        page_candidates.sort(key=lambda item: item[0])
+        for _, custom_id, raw_text in page_candidates:
+            _add_item(custom_id, raw_text)
+
+    if translation_memory_enabled and tm_dirty:
         translation_memory.write_translation_memory(translation_memory_data)
 
     return items, alias_map, key_map, prefilled
@@ -543,6 +767,46 @@ def write_jsonl(path: Path, items: list[dict[str, Any]]) -> None:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
+def build_jsonl_text_from_translations(translations: dict[str, str]) -> str:
+    lines: list[str] = []
+    for custom_id in sorted(translations.keys()):
+        translated = str(translations.get(custom_id) or "").strip()
+        if not translated:
+            continue
+        lines.append(
+            json.dumps(
+                {
+                    "custom_id": custom_id,
+                    "response": {"body": {"output_text": translated}},
+                },
+                ensure_ascii=False,
+            )
+        )
+    return "\n".join(lines)
+
+
+def load_realtime_debug_translations(job_dir: Path) -> dict[str, str]:
+    root = job_dir / "realtime_debug" / "chunks"
+    if not root.exists():
+        return {}
+    translations: dict[str, str] = {}
+    for path in sorted(root.rglob("parsed_translations.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for custom_id, translated in payload.items():
+            if not isinstance(custom_id, str):
+                continue
+            text = str(translated or "").strip()
+            if not text:
+                continue
+            translations[custom_id] = text
+    return translations
+
+
 def build_translations_from_jsonl_text(
     raw_text: str,
     alias_map: dict[str, str] | None = None,
@@ -550,7 +814,12 @@ def build_translations_from_jsonl_text(
 ) -> dict[str, str]:
     translations: dict[str, str] = {}
     if prefilled:
-        translations.update(prefilled)
+        translations.update(
+            {
+                key: glossary.restore_protected_glossary_terms(value)
+                for key, value in prefilled.items()
+            }
+        )
     for line in raw_text.splitlines():
         if not line.strip():
             continue
@@ -558,7 +827,7 @@ def build_translations_from_jsonl_text(
         custom_id = item.get("custom_id", "")
         translated = extract_batch_translation(item)
         if translated:
-            translations[custom_id] = translated
+            translations[custom_id] = glossary.restore_protected_glossary_terms(translated)
     if alias_map:
         for alias_id, canonical_id in alias_map.items():
             if alias_id in translations:
@@ -568,11 +837,26 @@ def build_translations_from_jsonl_text(
     return translations
 
 
+def apply_alias_map_to_translations(
+    translations: dict[str, str],
+    alias_map: dict[str, str] | None = None,
+) -> dict[str, str]:
+    resolved = dict(translations)
+    if alias_map:
+        for alias_id, canonical_id in alias_map.items():
+            if alias_id in resolved:
+                continue
+            if canonical_id in resolved:
+                resolved[alias_id] = resolved[canonical_id]
+    return resolved
+
+
 def build_edits_payload_from_translations(
     ocr_pages: list[dict[str, Any]],
     translations: dict[str, str],
     pp_pages: dict[int, dict[str, Any]] | None = None,
     target_lang: str = "en",
+    source_lang: str = "auto",
     document_mode: str = "form",
 ) -> dict[str, Any]:
     pages_payload: list[dict[str, Any]] = []
@@ -580,19 +864,19 @@ def build_edits_payload_from_translations(
     mode = resolve_document_mode(document_mode)
     translate_merged_cells = use_merged_cells_for_mode(document_mode)
     use_structured_blocks = use_structured_blocks_for_mode(document_mode)
+    document_term_map = document_terms.build_document_term_map(pp_pages)
 
     def build_tm_meta(source_text: str) -> dict[str, Any]:
-        if mode != "form":
-            return {}
-        normalized_source = normalize_for_translation(source_text)
-        if not normalized_source:
-            return {}
-        return {
+        matched_term = document_terms.lookup_document_term(source_text, document_term_map)
+        normalized_source = str((matched_term or {}).get("canonical_key") or normalize_for_translation(source_text))
+        payload = {
             "tm_source_text": str(source_text or ""),
-            "tm_source_normalized": normalized_source,
             "tm_target_lang": str(target_lang or "en"),
             "tm_document_mode": mode,
         }
+        if normalized_source:
+            payload["tm_source_normalized"] = normalized_source
+        return payload
     
     for page in ocr_pages:
         page_idx = int(page.get("page_index_0based", 0))
@@ -608,6 +892,10 @@ def build_edits_payload_from_translations(
                 if not text:
                     continue
                 text = normalize_text(text)
+                text = document_terms.restore_term_surface(
+                    rec_texts[idx] if idx < len(rec_texts) else "",
+                    text,
+                )
                 if not text or is_numeric_only(text):
                     continue
                 bbox = poly_to_bbox(poly)
@@ -620,6 +908,7 @@ def build_edits_payload_from_translations(
                         "text": text,
                         "deleted": False,
                         "auto_generated": True,
+                        "rotation": 0,
                         **build_tm_meta(rec_texts[idx] if idx < len(rec_texts) else ""),
                     }
                 )
@@ -636,6 +925,23 @@ def build_edits_payload_from_translations(
             paragraph_blocks,
             document_mode=document_mode,
         )
+        translatable_paragraph_blocks: list[dict[str, Any]] = []
+        blocking_paragraph_blocks: list[dict[str, Any]] = []
+        if use_structured_blocks:
+            for block in paragraph_blocks:
+                block_with_lang = {**block, "_source_lang": source_lang, "_target_lang": target_lang}
+                if should_translate_structured_block(
+                    block_with_lang,
+                    document_mode=document_mode,
+                    merged_only=merged_only,
+                ):
+                    translatable_paragraph_blocks.append(block_with_lang)
+                    blocking_paragraph_blocks.append(block_with_lang)
+                elif not block.get("should_translate"):
+                    blocking_paragraph_blocks.append(block_with_lang)
+        should_skip_paragraph_lines = has_paragraph_flags or (
+            mode == "general_force" and bool(paragraph_blocks)
+        )
         
 
         for idx, poly in enumerate(rec_polys):
@@ -645,6 +951,10 @@ def build_edits_payload_from_translations(
                 continue
             
             text = normalize_text(text)
+            text = document_terms.restore_term_surface(
+                rec_texts[idx] if idx < len(rec_texts) else "",
+                text,
+            )
             if not text:
                 continue
             if is_numeric_only(text):
@@ -665,14 +975,14 @@ def build_edits_payload_from_translations(
                     table_bboxes,
                 ):
                     continue
-            if has_paragraph_flags and should_skip_ocr_line_for_structured_blocks(
+            if should_skip_paragraph_lines and should_skip_ocr_line_for_structured_blocks(
                 [
                     float(bbox["x"]),
                     float(bbox["y"]),
                     float(bbox["x"]) + float(bbox["w"]),
                     float(bbox["y"]) + float(bbox["h"]),
                 ],
-                paragraph_blocks,
+                blocking_paragraph_blocks,
             ):
                 continue
             boxes.append(
@@ -682,19 +992,14 @@ def build_edits_payload_from_translations(
                     "text": text,
                     "deleted": False,
                     "auto_generated": True,
+                    "rotation": 0,
                     **build_tm_meta(rec_texts[idx] if idx < len(rec_texts) else ""),
                 }
             )
 
-        if paragraph_blocks:
+        if translatable_paragraph_blocks:
             base_id = 200000
-            for block in paragraph_blocks:
-                if not should_translate_structured_block(
-                    block,
-                    document_mode=document_mode,
-                    merged_only=merged_only,
-                ):
-                    continue
+            for block in translatable_paragraph_blocks:
                 if table_bboxes and bbox_list_overlaps_tables(block.get("bbox"), table_bboxes):
                     continue
                 block_idx = int(block.get("block_index", 0))
@@ -705,6 +1010,10 @@ def build_edits_payload_from_translations(
                     continue
                 
                 block_text = normalize_text(block_text)
+                block_text = document_terms.restore_term_surface(
+                    block.get("text", ""),
+                    block_text,
+                )
                 if not block_text:
                     continue
                 if is_numeric_only(block_text):
@@ -726,6 +1035,7 @@ def build_edits_payload_from_translations(
                         "deleted": False,
                         "no_clip": True,
                         "auto_generated": True,
+                        "rotation": 0,
                         **build_tm_meta(block.get("text", "")),
                     }
                 )
@@ -733,6 +1043,7 @@ def build_edits_payload_from_translations(
         if merged_cells:
             base_id = 100000
             for cell_idx, cell in enumerate(merged_cells):
+                cell = {**cell, "_source_lang": source_lang, "_target_lang": target_lang}
                 if not should_translate_merged_cell(cell, document_mode):
                     continue
                 custom_id = f"p{page_idx:04d}-c{cell_idx:04d}"
@@ -742,6 +1053,10 @@ def build_edits_payload_from_translations(
                     continue
                 
                 cell_text = normalize_text(cell_text)
+                cell_text = document_terms.restore_term_surface(
+                    cell.get("merged_text", ""),
+                    cell_text,
+                )
                 if not cell_text:
                     continue
                 if is_numeric_only(cell_text):
@@ -762,6 +1077,7 @@ def build_edits_payload_from_translations(
                         "text": cell_text,
                         "deleted": False,
                         "auto_generated": True,
+                        "rotation": 0,
                         **build_tm_meta(cell.get("merged_text", "")),
                     }
                 )
@@ -769,6 +1085,70 @@ def build_edits_payload_from_translations(
         pages_payload.append({"page_index_0based": page_idx, "boxes": boxes})
 
     return {"pages": pages_payload}
+
+
+def finalize_translation_job(
+    *,
+    job_id: str,
+    job_dir: Path,
+    ocr_pages: list[dict[str, Any]],
+    pp_pages: dict[int, dict[str, Any]] | None,
+    document_mode: str,
+    target_lang: str,
+    source_lang: str,
+    key_map: dict[str, dict[str, str]],
+    translations: dict[str, str],
+    status_meta: dict[str, Any],
+    backend_id: str,
+) -> None:
+    if str(backend_id).startswith("realtime"):
+        raw_text = build_jsonl_text_from_translations(translations)
+        if raw_text:
+            (job_dir / state.BATCH_OUTPUT_NAME).write_text(raw_text, encoding="utf-8")
+    if state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY and key_map:
+        with state.TRANSLATION_MEMORY_LOCK:
+            memory = translation_memory.load_translation_memory()
+            now_ts = time.time()
+            source_name = "realtime" if str(backend_id).startswith("realtime") else "batch"
+            for custom_id, source_meta in key_map.items():
+                translated = translations.get(custom_id)
+                if translated:
+                    translation_memory.upsert_entry(
+                        memory,
+                        source_meta.get("source_text", ""),
+                        translated,
+                        target_lang,
+                        document_mode,
+                        source_normalized=source_meta.get("source_normalized"),
+                        source=source_name,
+                        now_ts=now_ts,
+                    )
+            translation_memory.write_translation_memory(memory)
+    edits_payload = build_edits_payload_from_translations(
+        ocr_pages,
+        translations,
+        pp_pages=pp_pages,
+        target_lang=target_lang,
+        source_lang=source_lang,
+        document_mode=document_mode,
+    )
+    edits_path = job_dir / "edits.json"
+    edits_path.write_text(
+        json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    logger.info("Translation wrote edits.json=%s", edits_path.resolve())
+    ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)
+    logger.info("Translation wrote edited.pdf job_id=%s backend=%s", job_id, backend_id)
+    jobs.write_batch_status(job_dir, "completed", **status_meta, batch_id=backend_id)
+    now_ts = time.time()
+    jobs.set_job_state(
+        job_dir,
+        status="completed",
+        stage="completed",
+        progress=100.0,
+        completed_at=now_ts,
+        extra_meta={"translate_completed_at": now_ts},
+    )
 
 
 def run_batch_translate_job(
@@ -782,12 +1162,14 @@ def run_batch_translate_job(
     document_mode = resolve_document_mode(
         config.get("document_mode") or (jobs.load_job_meta(job_dir) or {}).get("document_mode")
     )
+    source_lang = str(config.get("source_lang") or "auto")
     target_lang = str(config.get("target_lang") or "en")
     model_name = str(config.get("model") or state.AZURE_BATCH_MODEL)
     system_prompt = resolve_batch_prompt(target_lang, config.get("system_prompt"))
     existing_status = jobs.load_batch_status(job_dir) or {}
     batch_id = str(existing_status.get("batch_id") or "")
     status_meta = _build_batch_status_meta(job_id, target_lang, model_name, existing_status)
+    status_meta["translate_mode"] = jobs.normalize_translate_mode(config.get("translate_mode"))
 
     if batch_id and batch_id != "prefill_only" and not _is_terminal_batch_status(existing_status.get("status")):
         try:
@@ -795,6 +1177,7 @@ def run_batch_translate_job(
                 job_id=job_id,
                 job_dir=job_dir,
                 document_mode=document_mode,
+                source_lang=source_lang,
                 target_lang=target_lang,
                 status_meta=status_meta,
                 batch_id=batch_id,
@@ -840,6 +1223,7 @@ def run_batch_translate_job(
             glossary_entries=glossary_entries,
             pp_pages=pp_pages,
             target_lang=target_lang,
+            source_lang=source_lang,
             document_mode=document_mode,
         )
         jobs.write_batch_alias_map(job_dir, alias_map)
@@ -862,6 +1246,7 @@ def run_batch_translate_job(
                 pp_pages=pp_pages,
                 document_mode=document_mode,
                 target_lang=target_lang,
+                source_lang=source_lang,
                 key_map=key_map,
                 alias_map=alias_map,
                 prefilled=prefilled,
@@ -918,6 +1303,7 @@ def _poll_batch_translate_job(
     job_id: str,
     job_dir: Path,
     document_mode: str,
+    source_lang: str,
     target_lang: str,
     status_meta: dict[str, Any],
     batch_id: str,
@@ -996,6 +1382,7 @@ def _poll_batch_translate_job(
         pp_pages=pp_pages,
         document_mode=document_mode,
         target_lang=target_lang,
+        source_lang=source_lang,
         key_map=key_map,
         alias_map=alias_map,
         prefilled=prefilled,
@@ -1015,6 +1402,7 @@ def _finalize_batch_translate_job(
     pp_pages: dict[int, dict[str, Any]] | None,
     document_mode: str,
     target_lang: str,
+    source_lang: str,
     key_map: dict[str, dict[str, str]],
     alias_map: dict[str, str],
     prefilled: dict[str, str],
@@ -1025,47 +1413,18 @@ def _finalize_batch_translate_job(
     translations = build_translations_from_jsonl_text(
         raw_text, alias_map=alias_map, prefilled=prefilled
     )
-    if key_map:
-        with state.TRANSLATION_MEMORY_LOCK:
-            memory = translation_memory.load_translation_memory()
-            now_ts = time.time()
-            for custom_id, source_meta in key_map.items():
-                translated = translations.get(custom_id)
-                if translated:
-                    translation_memory.upsert_entry(
-                        memory,
-                        source_meta.get("source_text", ""),
-                        translated,
-                        target_lang,
-                        document_mode,
-                        source_normalized=source_meta.get("source_normalized"),
-                        source="batch",
-                        now_ts=now_ts,
-                    )
-            translation_memory.write_translation_memory(memory)
-    edits_payload = build_edits_payload_from_translations(
-        ocr_pages,
-        translations,
+    finalize_translation_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        ocr_pages=ocr_pages,
         pp_pages=pp_pages,
-        target_lang=target_lang,
         document_mode=document_mode,
-    )
-    edits_path = job_dir / "edits.json"
-    edits_path.write_text(
-        json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    logger.info("Batch translate wrote edits.json=%s", edits_path.resolve())
-    ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)
-    logger.info("Batch translate wrote edited.pdf job_id=%s", job_id)
-    jobs.write_batch_status(job_dir, "completed", **status_meta, batch_id=batch_id)
-    now_ts = time.time()
-    jobs.set_job_state(
-        job_dir,
-        status="completed",
-        stage="completed",
-        progress=100.0,
-        completed_at=now_ts,
-        extra_meta={"translate_completed_at": now_ts},
+        target_lang=target_lang,
+        source_lang=source_lang,
+        key_map=key_map,
+        translations=translations,
+        status_meta=status_meta,
+        backend_id=batch_id,
     )
 
 
@@ -1078,6 +1437,9 @@ def poll_active_batch_jobs(limit: int = 1) -> int:
         if record.status not in {"running", "cancel_requested"}:
             continue
         job_dir = jobs.job_dir(record.job_id)
+        config = jobs.load_batch_config(job_dir) or {}
+        if jobs.normalize_translate_mode(config.get("translate_mode")) != "batch":
+            continue
         batch_status = jobs.load_batch_status(job_dir) or {}
         batch_id = str(batch_status.get("batch_id") or "")
         batch_state = str(batch_status.get("status") or "").strip().lower()

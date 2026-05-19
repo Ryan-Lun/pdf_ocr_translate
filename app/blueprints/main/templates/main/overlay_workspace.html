@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PDF 原版面翻譯</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
   </head>
   <body class="home">
@@ -11,9 +12,13 @@
       <header class="hero">
         <div class="hero-title-split">
           <h1>PDF 原版面翻譯</h1>
-          <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
+          <div class="button-row--tight">
+            <a class="ghost back-link" href="{{ url_for('.glossary_page') }}">詞彙庫管理</a>
+            <a class="ghost back-link" href="{{ url_for('.overlay_templates_page') }}">欄位翻譯模板</a>
+            <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
+          </div>
         </div>
-        <p class="eyebrow">PDF -> OCR -> Translate -> Overlay</p>
+        <!-- <p class="eyebrow">PDF -> OCR -> Translate -> Overlay</p> -->
       </header>
       <section class="upload-card">
         <form method="post" enctype="multipart/form-data" action="{{ url_for('.upload') }}">
@@ -51,10 +56,12 @@
             </label>
             <label>
               <span>文件模式</span>
-              <select name="document_mode">
+              <select id="documentModeSelect" name="document_mode">
                 <option value="form" selected>表單文件</option>
                 <option value="general">一般文件</option>
+                <option value="general_force">一般文件（中文必翻）</option>
                 <option value="scanned">掃描文件</option>
+                <option value="other">其他文件</option>
               </select>
             </label>
             <label>
@@ -66,26 +73,37 @@
               </select>
             </label>
             <label>
+              <span>來源語言</span>
+              <select id="sourceLangSelect" name="source_lang" disabled>
+                <option value="auto" selected>自動偵測 (auto)</option>
+                <option value="en">English (en)</option>
+                <option value="zh">繁體中文 (zh)</option>
+              </select>
+            </label>
+            <label>
               <span>翻譯語言</span>
               <select name="target_lang">
                 <option value="en" selected>English (en)</option>
-                <option value="zh">中文 (zh)</option>
+                <option value="zh">繁體中文 (zh)</option>
               </select>
             </label>
             <label>
               <span>翻譯模型</span>
-              <select name="model">
-                <option value="{{ batch_model }}" selected>{{ batch_model }}</option>
+              <select id="translateModelSelect" name="model">
+                <option value="{{ batch_model }}" data-mode="batch" selected>{{ batch_model }}</option>
+                <option value="{{ realtime_model }}" data-mode="realtime">{{ realtime_model }}</option>
               </select>
             </label>
           </div>
           <div class="form-note">
             <span>注意事項 : 此模式翻譯時間較久，翻譯完成後請檢查輸出結果</span>
             <p><code>表單文件</code><br>適用頁面以表格為主的文件<br>(Q-2001, Q-2010, Q-2014, Q-2013, Q-2011, Q-2156,<br>Q-2001, Q-2473, Q-2006, Q-2007, Q-2300, Q-2285, Q-2286,<br>Q-2027, Q-2039, Q-2088, Q-2404, Q-2531, Q-2530, Q-2439,<br>Q-2005, Q-2497, Q-2305)</p>
-            <p><code>一般文件</code><br>適用 Q-2305, Q-2005 格式的文件</p>
+            <p><code>一般文件</code><br>中英文翻譯對照檢查，如果已經有英文翻譯就不翻譯<br>適用 Q-2305, Q-2005 格式的文件</p>
+            <p><code>一般文件（中文必翻）</code><br>不做中英文翻譯對照檢查，只要包含中文就翻譯</p>
             <p><code>掃描文件</code><br>適用頁面以掃描為主的文件<br>(Q-2024, Q-2031, Q-2112, Q-2034, Q-2255, Q-2350, Q-2060)</p>
+            <p><code>其他文件</code><br>適用非既有格式的文件，只有此模式會使用來源語言設定</p>
           </div>
-          <button class="primary" type="submit">開始批次處理</button>
+          <button class="primary" type="submit">開始翻譯</button>
         </form>
       </section>
       <section class="upload-card jobs-board">
@@ -97,7 +115,8 @@
           <div class="jobs-actions">
             <button id="jobsSelectAll" class="ghost" type="button">全部勾選</button>
             <button id="jobsSelectNone" class="ghost" type="button">取消勾選</button>
-            <button id="jobsDownload" class="ghost" type="button">下載翻譯文件</button>
+            <button id="jobsDeleteSelected" class="danger" type="button">刪除勾選文件</button>
+            <button id="jobsDownload" class="primary" type="button">下載勾選文件</button>
             <button id="jobsRefresh" class="ghost" type="button">重新整理</button>
           </div>
         </div>
@@ -112,10 +131,15 @@
       const jobsDownload = document.getElementById("jobsDownload");
       const jobsSelectAll = document.getElementById("jobsSelectAll");
       const jobsSelectNone = document.getElementById("jobsSelectNone");
+      const jobsDeleteSelected = document.getElementById("jobsDeleteSelected");
       const uploadInput = document.getElementById("overlayUploadInput");
       const uploadFilesSummary = document.getElementById("uploadFilesSummary");
       const uploadFilesToggle = document.getElementById("uploadFilesToggle");
       const uploadFilesList = document.getElementById("uploadFilesList");
+      const documentModeSelect = document.getElementById("documentModeSelect");
+      const sourceLangSelect = document.getElementById("sourceLangSelect");
+      let translateModeSelect = document.getElementById("translateModeSelect");
+      const translateModelSelect = document.getElementById("translateModelSelect");
       const selectedJobs = new Set();
       let jobsLoading = false;
       let jobsSource = null;
@@ -136,6 +160,10 @@
 
       function formatDocumentMode(mode) {
         switch ((mode || "").toLowerCase()) {
+          case "other":
+            return "其他文件";
+          case "general_force":
+            return "一般文件（中文必翻）";
           case "general":
             return "一般文件";
           case "scanned":
@@ -146,8 +174,58 @@
         }
       }
 
+      function syncSourceLangControl() {
+        if (!documentModeSelect || !sourceLangSelect) return;
+        const allowSourceLang = (documentModeSelect.value || "").toLowerCase() === "other";
+        sourceLangSelect.disabled = !allowSourceLang;
+        if (!allowSourceLang) {
+          sourceLangSelect.value = "auto";
+        }
+      }
+
       function isActiveJob(job) {
         return ["queued", "running", "cancel_requested"].includes(job.job_status);
+      }
+
+      function formatTranslateMode(mode) {
+        return (mode || "").toLowerCase() === "realtime" ? "Quick" : "Batch";
+      }
+
+      function ensureTranslateModeControl() {
+        if (translateModeSelect || !translateModelSelect) return;
+        const label = document.createElement("label");
+        const title = document.createElement("span");
+        title.textContent = "翻譯模式";
+        translateModeSelect = document.createElement("select");
+        translateModeSelect.id = "translateModeSelect";
+        translateModeSelect.name = "translate_mode";
+        const batchOption = document.createElement("option");
+        batchOption.value = "batch";
+        batchOption.textContent = "Batch";
+        const realtimeOption = document.createElement("option");
+        realtimeOption.value = "realtime";
+        realtimeOption.textContent = "Quick";
+        realtimeOption.selected = true;
+        label.appendChild(title);
+        translateModeSelect.appendChild(batchOption);
+        translateModeSelect.appendChild(realtimeOption);
+        label.appendChild(translateModeSelect);
+        const modelLabel = translateModelSelect.closest("label");
+        modelLabel?.before(label);
+      }
+
+      function syncTranslateModelSelection() {
+        const mode = (translateModeSelect?.value || "batch").toLowerCase();
+        if (!translateModelSelect) return;
+        let matched = false;
+        Array.from(translateModelSelect.options).forEach((option) => {
+          const visible = !option.dataset.mode || option.dataset.mode === mode;
+          option.hidden = !visible;
+          if (visible && !matched) {
+            option.selected = true;
+            matched = true;
+          }
+        });
       }
 
       function canRetryJob(job) {
@@ -197,6 +275,9 @@
           const modeTag = document.createElement("div");
           modeTag.className = `job-badge job-badge--${(job.document_mode || "form").toLowerCase()}`;
           modeTag.textContent = formatDocumentMode(job.document_mode);
+          const translateTag = document.createElement("div");
+          translateTag.className = "job-badge";
+          translateTag.textContent = formatTranslateMode(job.translate_mode);
 
           const ownerTag = document.createElement("div");
           ownerTag.className = "job-badge";
@@ -217,6 +298,7 @@
           const headerMeta = document.createElement("div");
           headerMeta.className = "job-header-meta";
           headerMeta.appendChild(ownerTag);
+          headerMeta.appendChild(translateTag);
           headerMeta.appendChild(modeTag);
           headerMeta.appendChild(idTag);
           headerMain.appendChild(selectWrap);
@@ -233,7 +315,7 @@
           const translateDuration = formatDuration(job.translate_duration_seconds);
           const ocrText = ocrDuration ? ` · OCR: ${ocrDuration}` : "";
           const translateText = translateDuration ? ` · 翻譯: ${translateDuration}` : "";
-          meta.textContent = `Updated: ${formatDate(job.updated_at)} · Status: ${statusLabel}${durationText}${ocrText}${translateText}`;
+          meta.textContent = `上傳時間: ${formatDate(job.updated_at)} · 狀態: ${statusLabel}${durationText}${ocrText}${translateText}`;
 
           const actions = document.createElement("div");
           actions.className = "job-actions";
@@ -277,6 +359,13 @@
             downloadLink.className = "ghost";
             downloadLink.download = job.download_name || `${job.job_id}.pdf`;
             actions.appendChild(downloadLink);
+          } else if (!isActiveJob(job) && job.debug_pdf_url) {
+            const fallbackDownloadLink = document.createElement("a");
+            fallbackDownloadLink.href = `${job.debug_pdf_url}?download=1`;
+            fallbackDownloadLink.textContent = "下載已翻譯文件";
+            fallbackDownloadLink.className = "ghost";
+            fallbackDownloadLink.download = job.download_name || `${job.job_id}.pdf`;
+            actions.appendChild(fallbackDownloadLink);
           }
 
           if (canRetryJob(job)) {
@@ -400,6 +489,35 @@
         }
       }
 
+      async function deleteSelectedJobs() {
+        const jobIds = Array.from(selectedJobs);
+        if (jobIds.length === 0) {
+          alert("請先勾選要刪除的任務。");
+          return;
+        }
+        const ok = confirm(`確定要刪除 ${jobIds.length} 個任務嗎？此操作無法復原。`);
+        if (!ok) return;
+        jobsDeleteSelected.disabled = true;
+        let failed = 0;
+        for (const jobId of jobIds) {
+          try {
+            const res = await fetch(`/api/job/${jobId}`, { method: "DELETE" });
+            if (!res.ok) {
+              failed += 1;
+              continue;
+            }
+            selectedJobs.delete(jobId);
+          } catch (error) {
+            failed += 1;
+          }
+        }
+        jobsDeleteSelected.disabled = false;
+        if (failed > 0) {
+          alert(`有 ${failed} 個任務刪除失敗，請稍後再試。`);
+        }
+        loadJobs();
+      }
+
       function setAllSelections(checked) {
         const inputs = jobsList.querySelectorAll("input.job-check");
         inputs.forEach((input) => {
@@ -413,9 +531,21 @@
 
       function bindUploadFiles() {
         let filesExpanded = false;
+        let selectedFiles = [];
+
+        const fileKey = (file) => `${file.name}::${file.size}::${file.lastModified}`;
+        const syncUploadInputFiles = () => {
+          const dataTransfer = new DataTransfer();
+          selectedFiles.forEach((file) => dataTransfer.items.add(file));
+          uploadInput.files = dataTransfer.files;
+        };
+        const removeUploadFile = (targetKey) => {
+          selectedFiles = selectedFiles.filter((file) => fileKey(file) !== targetKey);
+          syncUploadInputFiles();
+          renderUploadFiles();
+        };
         const renderUploadFiles = () => {
-          const files = Array.from(uploadInput.files || []);
-          if (!files.length) {
+          if (!selectedFiles.length) {
             uploadFilesSummary.textContent = "尚未選擇檔案";
             uploadFilesToggle.style.display = "none";
             uploadFilesList.style.display = "none";
@@ -424,7 +554,7 @@
             uploadFilesToggle.textContent = "展開";
             return;
           }
-          uploadFilesSummary.textContent = `已選 ${files.length} 個檔案`;
+          uploadFilesSummary.textContent = `已選 ${selectedFiles.length} 個檔案`;
           uploadFilesToggle.style.display = "inline-flex";
           uploadFilesToggle.textContent = filesExpanded ? "收合" : "展開";
           if (!filesExpanded) {
@@ -432,14 +562,47 @@
             uploadFilesList.innerHTML = "";
             return;
           }
-          uploadFilesList.innerHTML = `<ul>${files.map((file) => `<li>${file.name}</li>`).join("")}</ul>`;
+          uploadFilesList.innerHTML = "";
+          const listEl = document.createElement("ul");
+          selectedFiles.forEach((file) => {
+            const itemEl = document.createElement("li");
+            itemEl.className = "upload-files-item";
+
+            const nameEl = document.createElement("span");
+            nameEl.className = "upload-files-name";
+            nameEl.textContent = file.name;
+
+            const removeBtn = document.createElement("button");
+            removeBtn.type = "button";
+            removeBtn.className = "Danger upload-files-remove";
+            removeBtn.textContent = "移除";
+            removeBtn.addEventListener("click", () => {
+              removeUploadFile(fileKey(file));
+            });
+
+            itemEl.appendChild(nameEl);
+            itemEl.appendChild(removeBtn);
+            listEl.appendChild(itemEl);
+          });
+          uploadFilesList.appendChild(listEl);
           uploadFilesList.style.display = "block";
         };
         uploadFilesToggle.addEventListener("click", () => {
           filesExpanded = !filesExpanded;
           renderUploadFiles();
         });
-        uploadInput.addEventListener("change", renderUploadFiles);
+        uploadInput.addEventListener("change", () => {
+          const nextFiles = Array.from(uploadInput.files || []);
+          const seen = new Set(selectedFiles.map((file) => fileKey(file)));
+          nextFiles.forEach((file) => {
+            const key = fileKey(file);
+            if (seen.has(key)) return;
+            selectedFiles.push(file);
+            seen.add(key);
+          });
+          syncUploadInputFiles();
+          renderUploadFiles();
+        });
         renderUploadFiles();
       }
 
@@ -447,6 +610,12 @@
       jobsDownload.addEventListener("click", downloadTranslatedBatch);
       jobsSelectAll.addEventListener("click", () => setAllSelections(true));
       jobsSelectNone.addEventListener("click", () => setAllSelections(false));
+      jobsDeleteSelected.addEventListener("click", deleteSelectedJobs);
+      ensureTranslateModeControl();
+      translateModeSelect?.addEventListener("change", syncTranslateModelSelection);
+      documentModeSelect?.addEventListener("change", syncSourceLangControl);
+      syncTranslateModelSelection();
+      syncSourceLangControl();
       bindUploadFiles();
       loadJobs();
       connectJobsStream();

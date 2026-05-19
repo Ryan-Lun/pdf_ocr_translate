@@ -8,7 +8,13 @@ from pathlib import Path
 import docx
 
 from app.services import state, translation_memory
-from app.services.word_translate import EnhancedWordTranslator, ensure_docx_source
+from app.services.word_translate import (
+    EnhancedWordTranslator,
+    build_word_quality_prompt,
+    build_word_system_prompt,
+    build_word_system_prompt_with_source,
+    ensure_docx_source,
+)
 
 
 class _FailingCompletions:
@@ -29,11 +35,13 @@ async def _consume_translation(
     source_path: Path,
     output_path: Path,
     *,
+    source_language: str = "auto",
     target_language: str = "en",
 ) -> None:
     async for _progress, _quality in translator.process_translation(
         source_path=source_path,
         output_path=output_path,
+        source_language=source_language,
         target_language=target_language,
         user_terms=[],
     ):
@@ -97,7 +105,7 @@ def test_word_translation_writes_tm_after_model_translation(tmp_path, monkeypatc
 
     translator = EnhancedWordTranslator()
 
-    async def fake_translate_text_with_quality(text, target_lang, user_terms, cancel_event=None):
+    async def fake_translate_text_with_quality(text, source_lang, target_lang, user_terms, cancel_event=None):
         return "table content", 35
 
     monkeypatch.setattr(translator, "translate_text_with_quality", fake_translate_text_with_quality)
@@ -131,3 +139,17 @@ def test_ensure_docx_source_converts_doc_with_word_converter(tmp_path, monkeypat
     result = ensure_docx_source(source_path, expected_path)
     assert result == expected_path
     assert expected_path.read_bytes() == b"converted"
+
+
+def test_word_zh_prompt_requires_traditional_chinese():
+    system_prompt = build_word_system_prompt("zh")
+    quality_prompt = build_word_quality_prompt("source", "translated", "zh")
+
+    assert "Traditional Chinese" in system_prompt
+    assert "Never use Simplified Chinese characters" in system_prompt
+    assert "Traditional Chinese" in quality_prompt
+
+
+def test_word_prompt_can_include_explicit_source_language():
+    system_prompt = build_word_system_prompt_with_source("en", "zh")
+    assert "Source language: English." in system_prompt

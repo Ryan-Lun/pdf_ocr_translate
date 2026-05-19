@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDF 原版面翻譯 / 欄位翻譯模板</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+  </head>
+  <body class="home">
+    <main class="shell">
+      <header class="hero">
+        <div class="hero-title-split">
+          <h1>欄位翻譯模板</h1>
+          <a class="ghost back-link" href="{{ url_for('.overlay_workspace') }}">返回 PDF 原版面翻譯</a>
+        </div>
+      </header>
+
+      <section class="upload-card">
+        <div class="jobs-header">
+          <div>
+          </div>
+        </div>
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('.upload_template_source') }}">
+          <label class="file-input">
+            <span>選擇 PDF</span>
+            <input type="file" name="pdf" accept="application/pdf" required />
+          </label>
+          <div class="form-grid">
+            <label>
+              <span>指定頁面</span>
+              <input type="number" name="page" value="1" min="1" required />
+            </label>
+          </div>
+          <button class="primary" type="submit">上傳文件</button>
+        </form>
+      </section>
+      <section class="upload-card jobs-board">
+        <div class="jobs-header">
+          <div>
+            <p class="eyebrow">Templates</p>
+            <h2>模板列表</h2>
+          </div>
+          <div class="jobs-actions">
+            <button id="templatesRefresh" class="ghost" type="button">重新整理</button>
+          </div>
+        </div>
+        <div id="templatesEmpty" class="hint">尚未建立模板。</div>
+        <div id="templatesList" class="jobs-list"></div>
+      </section>
+    </main>
+
+    <script>
+      const templatesList = document.getElementById("templatesList");
+      const templatesEmpty = document.getElementById("templatesEmpty");
+      const templatesRefresh = document.getElementById("templatesRefresh");
+      let jobMap = new Map();
+      let templatesSource = null;
+
+      function formatDate(ts) {
+        if (!ts) return "Unknown";
+        return new Date(ts * 1000).toLocaleString();
+      }
+
+      async function deleteTemplate(templateId, triggerBtn) {
+        if (!templateId) return;
+        const ok = confirm(`確定要刪除模板 ${templateId} 嗎？`);
+        if (!ok) return;
+        if (triggerBtn) {
+          triggerBtn.disabled = true;
+        }
+        try {
+          const res = await fetch(`/api/document-templates/${templateId}`, { method: "DELETE" });
+          const payload = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            alert(payload.error || "刪除模板失敗。");
+            return;
+          }
+          await loadTemplates();
+        } catch (error) {
+          alert("刪除模板失敗。");
+        } finally {
+          if (triggerBtn) {
+            triggerBtn.disabled = false;
+          }
+        }
+      }
+
+      function renderTemplates(items) {
+        templatesList.innerHTML = "";
+        if (!items || items.length === 0) {
+          templatesEmpty.style.display = "block";
+          return;
+        }
+        templatesEmpty.style.display = "none";
+        items.forEach((template) => {
+          const card = document.createElement("article");
+          card.className = "job-card template-card";
+
+          const header = document.createElement("div");
+          header.className = "job-header";
+
+          const headerMain = document.createElement("div");
+          headerMain.className = "job-header-main";
+
+          const title = document.createElement("div");
+          title.className = "job-title";
+          title.textContent = template.name || template.display_name || template.id.slice(0, 8);
+          headerMain.appendChild(title);
+
+          const headerMeta = document.createElement("div");
+          headerMeta.className = "job-header-meta";
+
+          const idTag = document.createElement("div");
+          idTag.className = "job-badge";
+          idTag.textContent = template.id.slice(0, 8);
+          headerMeta.appendChild(idTag);
+
+          header.appendChild(headerMain);
+          header.appendChild(headerMeta);
+
+          const sourceLabel = document.createElement("span");
+          sourceLabel.className = "job-muted";
+          sourceLabel.textContent = `來源文件: ${template.display_name || "-"}`;
+
+          const meta = document.createElement("div");
+          meta.className = "job-meta";
+          const statusLabel = template.status === "saved" ? "已保存" : "草稿";
+          const sourceJob = jobMap.get(template.source_job_id || "");
+          const jobStatus = sourceJob?.status_label || sourceJob?.status || "Unknown";
+          meta.textContent = `上傳時間: ${formatDate(template.updated_at)} · 來源文件: ${template.display_name || "-"} · 狀態: ${statusLabel} · OCR: ${jobStatus}`;
+
+          const actions = document.createElement("div");
+          actions.className = "job-actions";
+
+          if (template.source_job_id && sourceJob && ["completed", "done"].includes((sourceJob.status_code || "").toLowerCase())) {
+            const editLink = document.createElement("a");
+            editLink.className = "ghost";
+            editLink.href = `/workspace/pdf-overlay/templates/${template.source_job_id}`;
+            editLink.textContent = "編輯";
+            actions.appendChild(editLink);
+          } else {
+            const pendingLabel = document.createElement("span");
+            pendingLabel.className = "job-muted";
+            pendingLabel.textContent = "等待 OCR 完成";
+            actions.appendChild(pendingLabel);
+          }
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "danger job-delete";
+          deleteBtn.textContent = "刪除";
+          deleteBtn.addEventListener("click", () => {
+            deleteTemplate(template.id, deleteBtn);
+          });
+          actions.appendChild(deleteBtn);
+
+          card.appendChild(header);
+          card.appendChild(meta);
+          card.appendChild(actions);
+          templatesList.appendChild(card);
+        });
+      }
+
+      async function loadTemplates() {
+        templatesList.innerHTML = '<div class="hint">Loading...</div>';
+        try {
+          const jobsRes = await fetch("/api/template-jobs");
+          if (jobsRes.ok) {
+            const jobsPayload = await jobsRes.json();
+            jobMap = new Map((jobsPayload.jobs || []).map((item) => [item.job_id, item]));
+          } else {
+            jobMap = new Map();
+          }
+          const res = await fetch("/api/document-templates");
+          if (!res.ok) {
+            renderTemplates([]);
+            return;
+          }
+          const payload = await res.json();
+          renderTemplates(payload.templates || []);
+        } catch (error) {
+          renderTemplates([]);
+        }
+      }
+
+      async function refreshTemplatesFromJobs(jobs) {
+        jobMap = new Map((jobs || []).map((item) => [item.job_id, item]));
+        try {
+          const res = await fetch("/api/document-templates");
+          if (!res.ok) {
+            renderTemplates([]);
+            return;
+          }
+          const payload = await res.json();
+          renderTemplates(payload.templates || []);
+        } catch (error) {
+          renderTemplates([]);
+        }
+      }
+
+      function connectTemplatesStream() {
+        if (!window.EventSource) return;
+        if (templatesSource) templatesSource.close();
+        templatesSource = new EventSource("/api/template-jobs/stream");
+        templatesSource.addEventListener("jobs", async (event) => {
+          try {
+            const payload = JSON.parse(event.data) || {};
+            await refreshTemplatesFromJobs(payload.jobs || []);
+          } catch (error) {}
+        });
+        templatesSource.onerror = () => {
+          if (templatesSource) {
+            templatesSource.close();
+            templatesSource = null;
+          }
+          setTimeout(connectTemplatesStream, 5000);
+        };
+      }
+
+      templatesRefresh?.addEventListener("click", loadTemplates);
+      loadTemplates();
+      connectTemplatesStream();
+    </script>
+  </body>
+</html>

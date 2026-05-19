@@ -1,3 +1,5 @@
+IF OBJECT_ID(N'dbo.document_templates', N'U') IS NOT NULL
+    DROP TABLE dbo.document_templates;
 IF OBJECT_ID(N'dbo.job_events', N'U') IS NOT NULL
     DROP TABLE dbo.job_events;
 IF OBJECT_ID(N'dbo.job_artifacts', N'U') IS NOT NULL
@@ -51,6 +53,19 @@ CREATE TABLE dbo.job_events (
 );
 GO
 
+CREATE TABLE dbo.document_templates (
+    template_id char(32) NOT NULL,
+    name nvarchar(255) NOT NULL CONSTRAINT DF_document_templates_name DEFAULT (N''),
+    display_name nvarchar(255) NULL,
+    source_job_id char(32) NULL,
+    status varchar(20) NOT NULL CONSTRAINT DF_document_templates_status DEFAULT ('saved'),
+    payload_json nvarchar(max) NULL,
+    created_at datetime2(6) NOT NULL CONSTRAINT DF_document_templates_created_at DEFAULT (SYSUTCDATETIME()),
+    updated_at datetime2(6) NOT NULL CONSTRAINT DF_document_templates_updated_at DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_document_templates PRIMARY KEY CLUSTERED (template_id)
+);
+GO
+
 CREATE INDEX IX_jobs_status_created_at
 ON dbo.jobs (status, created_at);
 GO
@@ -69,4 +84,12 @@ GO
 
 CREATE INDEX IX_job_events_job_id_created_at
 ON dbo.job_events (job_id, created_at DESC);
+GO
+
+CREATE INDEX IX_document_templates_source_job_id
+ON dbo.document_templates (source_job_id);
+GO
+
+CREATE INDEX IX_document_templates_updated_at
+ON dbo.document_templates (updated_at DESC);
 GO

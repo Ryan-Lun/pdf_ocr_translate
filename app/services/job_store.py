@@ -3,13 +3,16 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, select, text
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 logger = logging.getLogger(__name__)
+_LOCAL_WORKER_ID_RE = re.compile(r"^worker-(\d+)$")
 
 
 class Base(DeclarativeBase):
@@ -59,9 +62,27 @@ class JobEventRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class DocumentTemplateRecord(Base):
+    __tablename__ = "document_templates"
+
+    template_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_job_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="saved")
+    payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 _engine = None
 _session_factory: sessionmaker[Session] | None = None
-REQUIRED_TABLES = ("jobs", "job_artifacts", "job_events")
+REQUIRED_TABLES = (
+    "jobs",
+    "job_artifacts",
+    "job_events",
+    "document_templates",
+)
 
 
 def utcnow() -> datetime:
@@ -85,10 +106,15 @@ def _assert_required_tables() -> None:
         raise RuntimeError("Database engine not initialized.")
     query = text(
         """
-        SELECT TABLE_NAME
-        FROM INFORMATION_SCHEMA.TABLES
+        SELECT TABLE_NAME, COLUMN_NAME
+        FROM INFORMATION_SCHEMA.COLUMNS
         WHERE TABLE_SCHEMA = 'dbo'
-          AND TABLE_NAME IN ('jobs', 'job_artifacts', 'job_events');
+          AND TABLE_NAME IN (
+            'jobs',
+            'job_artifacts',
+            'job_events',
+            'document_templates'
+          );
         """
     )
     with _engine.connect() as conn:
@@ -99,6 +125,16 @@ def _assert_required_tables() -> None:
         names = ", ".join(missing)
         raise RuntimeError(
             f"Missing required SQL Server tables: {names}. Run scripts/init_sqlserver_schema.sql first."
+        )
+    template_columns = {
+        str(row[1]).lower()
+        for row in rows
+        if str(row[0]).lower() == "document_templates"
+    }
+    if "payload_json" not in template_columns:
+        raise RuntimeError(
+            "Missing required SQL Server column: document_templates.payload_json. "
+            "Update the database schema before starting the app."
         )
 
 
@@ -296,6 +332,7 @@ def claim_next_job(
 ) -> JobRecord | None:
     concurrency_limits = concurrency_limits or {}
     ocr_limit = max(0, int(concurrency_limits.get("ocr_overlay", 1)))
+    pdf_translate_limit = max(0, int(concurrency_limits.get("pdf_translate", 1)))
     doc_limit = max(0, int(concurrency_limits.get("doc_workspace", 1)))
     word_limit = max(0, int(concurrency_limits.get("word_translate", 1)))
     with session_scope() as session:
@@ -311,19 +348,30 @@ def claim_next_job(
                     WHERE status = :queued_status
                       AND cancel_requested = 0
                       AND (
-                        (job_type = 'ocr_overlay' AND :ocr_limit > 0 AND (
+                        (job_type IN ('ocr_overlay', 'template_source') AND ISNULL(stage, '') <> 'translate' AND :ocr_limit > 0 AND (
                             SELECT COUNT(*)
                             FROM jobs AS active
-                            WHERE active.job_type = 'ocr_overlay'
+                            WHERE active.job_type IN ('ocr_overlay', 'template_source')
                               AND active.status IN ('running', 'cancel_requested')
+                              AND active.worker_id IS NOT NULL
                               AND ISNULL(active.stage, '') <> 'translate'
                         ) < :ocr_limit)
+                        OR
+                        (job_type IN ('ocr_overlay', 'template_source') AND ISNULL(stage, '') = 'translate' AND :pdf_translate_limit > 0 AND (
+                            SELECT COUNT(*)
+                            FROM jobs AS active
+                            WHERE active.job_type IN ('ocr_overlay', 'template_source')
+                              AND active.status IN ('running', 'cancel_requested')
+                              AND active.worker_id IS NOT NULL
+                              AND ISNULL(active.stage, '') = 'translate'
+                        ) < :pdf_translate_limit)
                         OR
                         (job_type = 'doc_workspace' AND :doc_limit > 0 AND (
                             SELECT COUNT(*)
                             FROM jobs AS active
                             WHERE active.job_type = 'doc_workspace'
                               AND active.status IN ('running', 'cancel_requested')
+                              AND active.worker_id IS NOT NULL
                         ) < :doc_limit)
                         OR
                         (job_type = 'word_translate' AND :word_limit > 0 AND (
@@ -331,6 +379,7 @@ def claim_next_job(
                             FROM jobs AS active
                             WHERE active.job_type = 'word_translate'
                               AND active.status IN ('running', 'cancel_requested')
+                              AND active.worker_id IS NOT NULL
                         ) < :word_limit)
                       )
                     ORDER BY created_at ASC
@@ -350,6 +399,7 @@ def claim_next_job(
                 "running_status": "running",
                 "worker_id": worker_id,
                 "ocr_limit": ocr_limit,
+                "pdf_translate_limit": pdf_translate_limit,
                 "doc_limit": doc_limit,
                 "word_limit": word_limit,
             },
@@ -360,7 +410,63 @@ def claim_next_job(
         return session.get(JobRecord, row[0])
 
 
+def _is_local_worker_id_stale(worker_id: str | None) -> bool:
+    if not worker_id:
+        return True
+    match = _LOCAL_WORKER_ID_RE.fullmatch(str(worker_id).strip())
+    if not match:
+        return False
+    pid = int(match.group(1))
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
+
+
+def recover_orphaned_active_jobs() -> list[str]:
+    """Requeue active jobs that have no live worker ownership.
+
+    Legitimate active jobs are claimed through ``claim_next_job``, which assigns
+    ``worker_id`` atomically. If an active row has ``worker_id IS NULL`` or
+    points to a dead local worker process, it is orphaned and should not block
+    queue concurrency forever.
+    """
+
+    with session_scope() as session:
+        candidates = list(
+            session.scalars(
+                select(JobRecord).where(JobRecord.status.in_(("running", "cancel_requested")))
+            ).all()
+        )
+        recovered: list[str] = []
+        for record in candidates:
+            if not _is_local_worker_id_stale(record.worker_id):
+                continue
+            if record.status == "cancel_requested" or record.cancel_requested:
+                record.status = "cancelled"
+                record.stage = "cancelled"
+                record.completed_at = utcnow()
+            else:
+                record.status = "queued"
+                record.stage = "translate" if str(record.stage or "").strip().lower() == "translate" else "queued"
+                record.started_at = None
+                record.completed_at = None
+                record.retry_count = int(record.retry_count or 0) + 1
+            record.worker_id = None
+            record.updated_at = utcnow()
+            recovered.append(record.job_id)
+        return recovered
+
+
 def deserialize_payload(record: JobRecord | None) -> dict[str, Any]:
     if record is None:
         return {}
     return _deserialize_payload(record.payload_json)
+
+
+def count_document_templates() -> int:
+    with session_scope() as session:
+        return int(session.scalar(select(func.count()).select_from(DocumentTemplateRecord)) or 0)

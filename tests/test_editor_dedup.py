@@ -51,6 +51,8 @@ def test_load_page_data_dedupes_duplicate_edit_boxes(tmp_path: Path):
         "auto_generated": True,
         "font_size": 25,
         "color": "#0000ff",
+        "text_align": "center",
+        "rotation": 90,
         "no_clip": False,
     }
 
@@ -63,6 +65,8 @@ def test_load_page_data_dedupes_duplicate_edit_boxes(tmp_path: Path):
     assert len(page["rec_polys"]) == 1
     assert len(page["edit_texts"]) == 1
     assert page["edit_texts"][0] == "Report Number: UOC-PQR-16013"
+    assert page["alignments"] == ["center"]
+    assert page["rotations"] == [90]
 
 
 def test_load_page_data_keeps_duplicate_manual_boxes(tmp_path: Path):
@@ -81,6 +85,8 @@ def test_load_page_data_keeps_duplicate_manual_boxes(tmp_path: Path):
         "auto_generated": False,
         "font_size": 18,
         "color": "#ff0000",
+        "text_align": "right",
+        "rotation": 0,
         "no_clip": False,
     }
 
@@ -92,3 +98,5 @@ def test_load_page_data_keeps_duplicate_manual_boxes(tmp_path: Path):
 
     assert len(page["rec_polys"]) == 2
     assert page["box_ids"] == [1, 2]
+    assert page["alignments"] == ["right", "right"]
+    assert page["rotations"] == [0, 0]

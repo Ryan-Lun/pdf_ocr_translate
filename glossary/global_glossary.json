@@ -1,0 +1,186 @@
+[
+  {
+    "cn": "0收1退",
+    "en": "0 accept 1 reject"
+  },
+  {
+    "cn": "覆驗者",
+    "en": "Approved by"
+  },
+  {
+    "cn": "檢驗者",
+    "en": "Inspected by"
+  },
+  {
+    "cn": "製表",
+    "en": "Prepared by"
+  },
+  {
+    "cn": "核准",
+    "en": "Approved by"
+  },
+  {
+    "cn": "表面粗糙度",
+    "en": "Surface Roughness"
+  },
+  {
+    "cn": "無磁性",
+    "en": "Non-magnetic"
+  },
+  {
+    "cn": "磁性",
+    "en": "Magnetic"
+  },
+  {
+    "cn": "磁性筆",
+    "en": "Magnetic Pen"
+  },
+  {
+    "cn": "磁吸性",
+    "en": "Magnetic Property"
+  },
+  {
+    "cn": "綜合判定",
+    "en": "Overall Judgment"
+  },
+  {
+    "cn": "地點",
+    "en": "Location"
+  },
+  {
+    "cn": "法規",
+    "en": "Regulartory Affair"
+  },
+  {
+    "cn": "研發工程師",
+    "en": "R&D Engineer"
+  },
+  {
+    "cn": "研發",
+    "en": "R&D"
+  },
+  {
+    "cn": "包裝系統設計評估表",
+    "en": "Packaging System Design Assessment Report"
+  },
+  {
+    "cn": "審核記錄",
+    "en": "Audit Record"
+  },
+  {
+    "cn": "品號",
+    "en": "Product No."
+  },
+  {
+    "cn": "專案編號",
+    "en": "Project No."
+  },
+  {
+    "cn": "專案計劃書",
+    "en": "Project Plan"
+  },
+  {
+    "cn": "會議內容",
+    "en": "Meeting Content"
+  },
+  {
+    "cn": "產品開發企劃書",
+    "en": "Product Develop Proposal"
+  },
+  {
+    "cn": "條碼標籤",
+    "en": "UDI Label"
+  },
+  {
+    "cn": "中文",
+    "en": "Chinese"
+  },
+  {
+    "cn": "簡體",
+    "en": "Simplified Chinese"
+  },
+  {
+    "cn": "產品標籤明細表",
+    "en": "Product Label List"
+  },
+  {
+    "cn": "外部會簽單位",
+    "en": "External Coutersigning Departments"
+  },
+  {
+    "cn": "填表人",
+    "en": "Preparer"
+  },
+  {
+    "cn": "產品設計輸入/產出檢查表",
+    "en": "Design Input/Output Checklist"
+  },
+  {
+    "cn": "權責單位",
+    "en": "Authorization"
+  },
+  {
+    "cn": "臨床評估報告書",
+    "en": "Clinical Evaluation Report"
+  },
+  {
+    "cn": "醫療器材基本安全要求檢查表",
+    "en": "Checklist for Essential Requirements"
+  },
+  {
+    "cn": "可用性評估報告",
+    "en": "Usability Evaluation Report"
+  },
+  {
+    "cn": "風險管理報告書",
+    "en": "Risk Management Report"
+  },
+  {
+    "cn": "風險管理計劃書",
+    "en": "Risk Management Plan"
+  },
+  {
+    "cn": "產品測試計劃書",
+    "en": "Products Testing Plan Form"
+  },
+  {
+    "cn": "產品測試檢查表",
+    "en": "Product Test Checklist"
+  },
+  {
+    "cn": "設計驗證",
+    "en": "Design Verification"
+  },
+  {
+    "cn": "設計確效",
+    "en": "Design Validation"
+  },
+  {
+    "cn": "產品包裝明細表",
+    "en": "Packaging Bill of Material List"
+  },
+  {
+    "cn": "植入物使用說明書",
+    "en": "IFU"
+  },
+  {
+    "cn": "品名",
+    "en": "Product Name"
+  },
+  {
+    "cn": "UR3",
+    "en": "Research & Design Division"
+  },
+  {
+    "cn": "外泡殼",
+    "en": "Outer blister"
+  },
+  {
+    "cn": "內泡殼",
+    "en": "Inner blister"
+  },
+  {
+    "cn": "超音波清洗系統",
+    "en": "Ultrasonic cleaning system"
+  }
+]

@@ -1,0 +1,490 @@
+[
+  {
+    "cn": "聯合骨科器材股份有限公司",
+    "en": "United Orthopedic Corporation"
+  },
+  {
+    "cn": "垂直度",
+    "en": "Perpendicularity"
+  },
+  {
+    "cn": "平面度",
+    "en": "Flatness"
+  },
+  {
+    "cn": "前端角度",
+    "en": "Anterior Angularity"
+  },
+  {
+    "cn": "平面厚度",
+    "en": "Inferior Thickness"
+  },
+  {
+    "cn": "垂直面厚度",
+    "en": "Posterior Thickness"
+  },
+  {
+    "cn": "表面狀況",
+    "en": "Surface Finish"
+  },
+  {
+    "cn": "目視",
+    "en": "visual inspection"
+  },
+  {
+    "cn": "燒結檢驗",
+    "en": "Sintering Inspection"
+  },
+  {
+    "cn": "珠子高度",
+    "en": "Thickness of Coating Layer"
+  },
+  {
+    "cn": "厚薄規",
+    "en": "shim stock"
+  },
+  {
+    "cn": "後端寬度",
+    "en": "Posterior Width"
+  },
+  {
+    "cn": "游標尺",
+    "en": "vernier caliper"
+  },
+  {
+    "cn": "髕骨軌跡半徑",
+    "en": "Patellar Tracking Radius"
+  },
+  {
+    "cn": "刻印",
+    "en": "Laser Marking"
+  },
+  {
+    "cn": "檢驗項目",
+    "en": "Inspection Item"
+  },
+  {
+    "cn": "檢驗儀器",
+    "en": "Inspection Instruments"
+  },
+  {
+    "cn": "垂直角度",
+    "en": "Perpendicularity"
+  },
+  {
+    "cn": "平面縫隙",
+    "en": "Gap"
+  },
+  {
+    "cn": "外觀",
+    "en": "Appearance"
+  },
+  {
+    "cn": "垂直高度",
+    "en": "Perpendicularity"
+  },
+  {
+    "cn": "R200",
+    "en": "R200"
+  },
+  {
+    "cn": "中心方孔寬度",
+    "en": "Center Box Width"
+  },
+  {
+    "cn": "溝槽寬度",
+    "en": "Groove Width"
+  },
+  {
+    "cn": "肉厚",
+    "en": "Thickness"
+  },
+  {
+    "cn": "百分表",
+    "en": "Indicator"
+  },
+  {
+    "cn": "鎖合機構位置深度",
+    "en": "Position of Lacking"
+  },
+  {
+    "cn": "凸緣深度",
+    "en": "Hood Depth"
+  },
+  {
+    "cn": "凸緣高度",
+    "en": "Hood Height"
+  },
+  {
+    "cn": "鳩尾面至平面尺寸\n鳩尾槽尺寸",
+    "en": "Dimension Between Groove and surface"
+  },
+  {
+    "cn": "TL20-0426 (壓配尺寸）\nTL2-0426 (59°)\nTL2-0426 (61°)",
+    "en": "TL20-0426 (Press fit dimension）\nTL2-0426 (59°)\nTL2-0426 (61°)"
+  },
+  {
+    "cn": "鳩尾槽位置",
+    "en": "Position of Groove"
+  },
+  {
+    "cn": "投影機",
+    "en": "Optical comparator"
+  },
+  {
+    "cn": "鳩尾槽高度",
+    "en": "Height of Groove"
+  },
+  {
+    "cn": "全高",
+    "en": "height"
+  },
+  {
+    "cn": "中心方柱寬度",
+    "en": "Center Spine Width"
+  },
+  {
+    "cn": "厚度",
+    "en": "Thickness"
+  },
+  {
+    "cn": "倒勾寬度",
+    "en": "Height of Groove"
+  },
+  {
+    "cn": "倒勾平面寬",
+    "en": "Residuary Thickness after Chamfering"
+  },
+  {
+    "cn": "倒角",
+    "en": "Thickness of Chamfer"
+  },
+  {
+    "cn": "壓配尺寸",
+    "en": "Fit Size"
+  },
+  {
+    "cn": "鎖合尺寸(go)",
+    "en": "Fit Size (Go)"
+  },
+  {
+    "cn": "鎖合尺寸(Nogo)",
+    "en": "Fit Size (NoGo)"
+  },
+  {
+    "cn": "骨柄垂直度",
+    "en": "Perpendicularity of Stem"
+  },
+  {
+    "cn": "倒勾深度",
+    "en": "Depth of Groove"
+  },
+  {
+    "cn": "髕骨厚度",
+    "en": "Patellar Component Thickness"
+  },
+  {
+    "cn": "固定準長度",
+    "en": "Length of Boss"
+  },
+  {
+    "cn": "髕骨外徑",
+    "en": "OD of Patellar Component"
+  },
+  {
+    "cn": "固定準外徑",
+    "en": "OD of Boss"
+  },
+  {
+    "cn": "外度弧",
+    "en": "Outside Arc"
+  },
+  {
+    "cn": "投影機_投影片",
+    "en": "Optical comparator"
+  },
+  {
+    "cn": "外圓直徑",
+    "en": "OD"
+  },
+  {
+    "cn": "外側分厘卡",
+    "en": "micrometer"
+  },
+  {
+    "cn": "內椎椎度",
+    "en": "inner taper angle"
+  },
+  {
+    "cn": "三次元",
+    "en": "3D measuring"
+  },
+  {
+    "cn": "內椎直徑",
+    "en": "diameter of inner bore"
+  },
+  {
+    "cn": "內孔深度",
+    "en": "deep of inner bore"
+  },
+  {
+    "cn": "真圓度(赤道、45°×2)",
+    "en": "roundness (equator, 45°×2)"
+  },
+  {
+    "cn": "真圓度機",
+    "en": "Roundness tester"
+  },
+  {
+    "cn": "M-L方向變形量",
+    "en": "deformation in M-L direction"
+  },
+  {
+    "cn": "投影機投影片",
+    "en": "Optical comparator"
+  },
+  {
+    "cn": "柄身直徑",
+    "en": "diameter of stem"
+  },
+  {
+    "cn": "骨柄全長",
+    "en": "length of stem"
+  },
+  {
+    "cn": "軸頭長度",
+    "en": "length of trunnion"
+  },
+  {
+    "cn": "敲擊孔",
+    "en": "impact hole"
+  },
+  {
+    "cn": "敲擊孔深",
+    "en": "deep of impact hole"
+  },
+  {
+    "cn": "燒結",
+    "en": "sintering"
+  },
+  {
+    "cn": "目視+立體顯微鏡",
+    "en": "visual inspection+stereo-microscope"
+  },
+  {
+    "cn": "軸頭椎度",
+    "en": "trunnion"
+  },
+  {
+    "cn": "椎度直徑",
+    "en": "diameter of taper"
+  },
+  {
+    "cn": "外側魚眼孔內徑",
+    "en": "inner diameter of outer countersink"
+  },
+  {
+    "cn": "內側魚眼孔內徑",
+    "en": "inner diameter of inner countersink"
+  },
+  {
+    "cn": "中心定位孔螺紋",
+    "en": "thread on center hole"
+  },
+  {
+    "cn": "螺紋栓規",
+    "en": "Thread plug gauge"
+  },
+  {
+    "cn": "溝槽外緣直徑",
+    "en": "diameter of edge of groove"
+  },
+  {
+    "cn": "三點式分厘卡",
+    "en": "Inside micrometer"
+  },
+  {
+    "cn": "內徑圓弧",
+    "en": "circular arc of inner surface"
+  },
+  {
+    "cn": "斷差高度",
+    "en": "depth of gap"
+  },
+  {
+    "cn": "斷差百分表",
+    "en": "Indicator"
+  },
+  {
+    "cn": "中心距",
+    "en": "distance between center of outer diameter and inner diameter"
+  },
+  {
+    "cn": "4*固定柱高度",
+    "en": "height of orientation tab"
+  },
+  {
+    "cn": "4*固定柱角度",
+    "en": "angle of orientation tab"
+  },
+  {
+    "cn": "檢具",
+    "en": "Gage"
+  },
+  {
+    "cn": "目視及手觸",
+    "en": "visual and touch inspection"
+  },
+  {
+    "cn": "外觀與刻印",
+    "en": "Appearance and Laser Marking"
+  },
+  {
+    "cn": "外圓直徑(一)",
+    "en": "OD (1)"
+  },
+  {
+    "cn": "外圓直徑(二)",
+    "en": "OD (2)"
+  },
+  {
+    "cn": "外徑圓弧",
+    "en": "circular arc of outer surface"
+  },
+  {
+    "cn": "斷差高度(一)",
+    "en": "depth of gap (1)"
+  },
+  {
+    "cn": "斷差高度(二)",
+    "en": "depth of gap (2)"
+  },
+  {
+    "cn": "卡溝寬度",
+    "en": "width of clip"
+  },
+  {
+    "cn": "圓弧深度",
+    "en": "deep of circular arc"
+  },
+  {
+    "cn": "外圓直徑(三)",
+    "en": "OD (3)"
+  },
+  {
+    "cn": "花瓣寬度",
+    "en": "width of locking crown"
+  },
+  {
+    "cn": "實配Gage",
+    "en": "gage"
+  },
+  {
+    "cn": "花瓣角度",
+    "en": "angle of locking crown"
+  },
+  {
+    "cn": "花瓣深度",
+    "en": "deep of locking crown"
+  },
+  {
+    "cn": "內徑卡規",
+    "en": "caliper gauge"
+  },
+  {
+    "cn": "六角",
+    "en": "hexagon"
+  },
+  {
+    "cn": "全長",
+    "en": "length"
+  },
+  {
+    "cn": "螺牙尺寸",
+    "en": "size of screw"
+  },
+  {
+    "cn": "外徑",
+    "en": "OD"
+  },
+  {
+    "cn": "頸部長度",
+    "en": "length of neck"
+  },
+  {
+    "cn": "六角孔深",
+    "en": "depth of hexagon hole"
+  },
+  {
+    "cn": "投影片",
+    "en": "Optical comparator"
+  },
+  {
+    "cn": "內徑斷差深度",
+    "en": "depth of gap"
+  },
+  {
+    "cn": "溝槽分厘卡",
+    "en": "slot micrometer"
+  },
+  {
+    "cn": "斷面高度",
+    "en": "depth of gap"
+  },
+  {
+    "cn": "溝槽百分表",
+    "en": "Indicator"
+  },
+  {
+    "cn": "內圓直徑",
+    "en": "ID"
+  },
+  {
+    "cn": "高規度",
+    "en": "height gauge"
+  },
+  {
+    "cn": "真圓度",
+    "en": "roundness"
+  },
+  {
+    "cn": "刻印、外觀",
+    "en": "Laser Marking and Appearance"
+  },
+  {
+    "cn": "球面拋光度",
+    "en": "spherical polish"
+  },
+  {
+    "cn": "外圓直徑一",
+    "en": "OD (1)"
+  },
+  {
+    "cn": "外圓直徑二",
+    "en": "OD (2)"
+  },
+  {
+    "cn": "圓孔直徑",
+    "en": "diameter of hole"
+  },
+  {
+    "cn": "圓孔深度",
+    "en": "deep of hole"
+  },
+  {
+    "cn": "底部厚度",
+    "en": "thickness of bottom"
+  },
+  {
+    "cn": "Impactor 功能測試",
+    "en": "function test of Impactor"
+  },
+  {
+    "cn": "帽沿高度",
+    "en": "height of lips"
+  },
+  {
+    "cn": "線圈直徑",
+    "en": "diameter of coil"
+  }
+]

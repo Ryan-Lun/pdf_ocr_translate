@@ -14,7 +14,7 @@
           <div class="launcher-intro">
             <h1>功能入口</h1>
           </div>
-          <div class="launcher-grid launcher-grid--triple">
+          <div class="launcher-grid launcher-grid--quad">
             <a class="launcher-card" href="{{ url_for('.overlay_workspace') }}">
               <div class="launcher-card__tile">
                 <i class="bi bi-file-earmark-pdf launcher-card__icon" aria-hidden="true"></i>
@@ -32,6 +32,12 @@
                 <i class="bi bi-file-earmark-word launcher-card__icon" aria-hidden="true"></i>
               </div>
               <div class="launcher-card__label">Word 原版面翻譯</div>
+            </a>
+            <a class="launcher-card" href="{{ url_for('.glossary_page') }}">
+              <div class="launcher-card__tile">
+                <i class="bi bi-journal-text launcher-card__icon" aria-hidden="true"></i>
+              </div>
+              <div class="launcher-card__label">詞彙庫管理</div>
             </a>
           </div>
         </div>

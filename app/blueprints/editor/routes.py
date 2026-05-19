@@ -13,8 +13,7 @@ editor_bp = Blueprint(
 )
 
 
-@editor_bp.route("/job/<job_id>", methods=["GET"], endpoint="editor")
-def editor(job_id: str) -> str:
+def _render_editor(job_id: str, *, template_mode: bool = False) -> str:
     if not jobs.safe_job_id(job_id):
         abort(404)
     job_dir = jobs.job_dir(job_id)
@@ -26,4 +25,15 @@ def editor(job_id: str) -> str:
         job_id=job_id,
         job_name=job_name,
         debug_pdf_url=url_for("jobs.job_file", job_id=job_id, filename="overlay_debug.pdf"),
+        template_mode=template_mode,
     )
+
+
+@editor_bp.route("/job/<job_id>", methods=["GET"], endpoint="editor")
+def editor(job_id: str) -> str:
+    return _render_editor(job_id)
+
+
+@editor_bp.route("/template/job/<job_id>", methods=["GET"], endpoint="template_editor")
+def template_editor(job_id: str) -> str:
+    return _render_editor(job_id, template_mode=True)

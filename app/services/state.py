@@ -18,6 +18,8 @@ if callable(load_dotenv):
 BASE_DIR = Path(__file__).resolve().parents[2]
 OUT_ROOT = BASE_DIR / "out"
 JOB_ROOT = OUT_ROOT / "jobs"
+TEMPLATE_ROOT = OUT_ROOT / "templates"
+TEMPLATE_JOB_ROOT = TEMPLATE_ROOT / "jobs"
 UPLOAD_ROOT = OUT_ROOT / "uploads"
 DOC_WORKSPACE_ROOT = OUT_ROOT / "doc_workspace"
 
@@ -48,6 +50,13 @@ GLOBAL_GLOSSARY_PATH = os.getenv(
     "GLOBAL_GLOSSARY_PATH",
     str((BASE_DIR / "glossary" / "global_glossary.json")),
 )
+SYSTEM_GLOSSARY_PATH = os.getenv(
+    "SYSTEM_GLOSSARY_PATH",
+    str((BASE_DIR / "glossary" / "system_glossary.json")),
+)
+DOCUMENT_TEMPLATES_PATH = Path(
+    os.getenv("DOCUMENT_TEMPLATES_PATH", str(TEMPLATE_ROOT / "document_templates.json"))
+)
 AZURE_BATCH_SYSTEM_PROMPT = os.getenv(
     "AZURE_BATCH_SYSTEM_PROMPT",
     "\n".join(
@@ -66,6 +75,7 @@ AZURE_BATCH_SYSTEM_PROMPT = os.getenv(
 ).strip()
 
 DOC_TRANSLATE_MODEL = openai_config.get_doc_translate_deployment()
+PDF_REALTIME_TRANSLATE_MODEL = openai_config.get_pdf_realtime_translate_deployment()
 WORD_TRANSLATE_MODEL = openai_config.get_word_translate_deployment()
 WORD_QUALITY_MODEL = openai_config.get_word_quality_deployment()
 DOC_TRANSLATE_MAX_CHARS = int(os.getenv("DOC_TRANSLATE_MAX_CHARS", "4000"))
@@ -87,8 +97,28 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 WORKER_POLL_SECONDS = float(os.getenv("WORKER_POLL_SECONDS", "3"))
 WORKER_ID = os.getenv("WORKER_ID", f"{os.getenv('COMPUTERNAME', 'worker')}-{os.getpid()}")
 WORKER_OCR_MAX_RUNNING = int(os.getenv("WORKER_OCR_MAX_RUNNING", "1"))
+WORKER_PDF_TRANSLATE_MAX_RUNNING = int(os.getenv("WORKER_PDF_TRANSLATE_MAX_RUNNING", "1"))
 WORKER_DOC_MAX_RUNNING = int(os.getenv("WORKER_DOC_MAX_RUNNING", "1"))
 WORKER_WORD_MAX_RUNNING = int(os.getenv("WORKER_WORD_MAX_RUNNING", "1"))
+PDF_REALTIME_JOB_CONCURRENCY = max(1, int(os.getenv("PDF_REALTIME_JOB_CONCURRENCY", "4")))
+PDF_REALTIME_GLOBAL_CONCURRENCY = max(1, int(os.getenv("PDF_REALTIME_GLOBAL_CONCURRENCY", "8")))
+PDF_REALTIME_RPM_LIMIT = max(1, int(os.getenv("PDF_REALTIME_RPM_LIMIT", "300")))
+PDF_REALTIME_MAX_SEGMENTS_PER_REQUEST = max(1, int(os.getenv("PDF_REALTIME_MAX_SEGMENTS_PER_REQUEST", "30")))
+PDF_REALTIME_MAX_CHARS_PER_REQUEST = max(500, int(os.getenv("PDF_REALTIME_MAX_CHARS_PER_REQUEST", "8000")))
+PDF_REALTIME_RATE_LIMIT_RPM = max(1, int(os.getenv("PDF_REALTIME_RATE_LIMIT_RPM", "2500")))
+PDF_REALTIME_RATE_LIMIT_TPM = max(1, int(os.getenv("PDF_REALTIME_RATE_LIMIT_TPM", "250000")))
+PDF_REALTIME_RATE_LIMIT_HEADROOM = min(
+    1.0,
+    max(0.1, float(os.getenv("PDF_REALTIME_RATE_LIMIT_HEADROOM", "0.8"))),
+)
+DEFAULT_OPENAI_RATE_LIMIT_RPM = max(1, int(os.getenv("DEFAULT_OPENAI_RATE_LIMIT_RPM", "300")))
+DEFAULT_OPENAI_RATE_LIMIT_TPM = max(1, int(os.getenv("DEFAULT_OPENAI_RATE_LIMIT_TPM", "120000")))
+DEFAULT_OPENAI_RATE_LIMIT_HEADROOM = min(
+    1.0,
+    max(0.1, float(os.getenv("DEFAULT_OPENAI_RATE_LIMIT_HEADROOM", "0.8"))),
+)
+USER_SUBMISSIONS_PER_MINUTE = max(1, int(os.getenv("USER_SUBMISSIONS_PER_MINUTE", "10")))
+REALTIME_COMPLETION_TOKEN_BUDGET = max(1, int(os.getenv("REALTIME_COMPLETION_TOKEN_BUDGET", "4000")))
 STARTUP_WARMUP_ENABLED = os.getenv("STARTUP_WARMUP_ENABLED", "1").strip() == "1"
 STARTUP_WARMUP_BLOCKING = os.getenv("STARTUP_WARMUP_BLOCKING", "1").strip() == "1"
 STARTUP_WARMUP_BGE = os.getenv("STARTUP_WARMUP_BGE", "1").strip() == "1"
@@ -106,6 +136,7 @@ DOC_STATUS_NAME = "document_status.json"
 ALLOWED_EXTENSIONS = {".pdf"}
 
 FONT_CANDIDATES = [
+    str(BASE_DIR / "assets" / "fonts" / "NotoSansTC-Regular.ttf"),
     r"C:\\Windows\\Fonts\\msjh.ttf",
     r"C:\\Windows\\Fonts\\msjhbd.ttf",
     r"C:\\Windows\\Fonts\\msjhl.ttf",
@@ -118,6 +149,17 @@ FONT_CANDIDATES = [
 
 DEFAULT_TEXT_COLOR = "#0000ff"
 DEFAULT_FONT_SIZE_PX = 25.0
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY = _env_bool(
+    "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY",
+    True,
+)
 
 TRANSLATION_MEMORY_PATH = Path(
     os.getenv("TRANSLATION_MEMORY_PATH", str(OUT_ROOT / "translation_memory.json"))

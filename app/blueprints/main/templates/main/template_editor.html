@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OCR Overlay Studio - Template Editor</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+    <style>
+      body.editor.template-editor-page .workspace {
+        grid-template-columns: auto minmax(0, 1fr);
+      }
+
+      @media (max-width: 1400px) {
+        body.editor.template-editor-page .workspace {
+          grid-template-columns: auto minmax(0, 1fr);
+        }
+      }
+
+      .topbar-actions a.ghost,
+      .topbar-actions button.ghost,
+      .topbar-actions button.primary {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 36px;
+        padding: 0 14px;
+        font-size: 0.9375rem;
+        line-height: 1;
+      }
+    </style>
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js" referrerpolicy="no-referrer"></script> -->
+    <script src="/static/pdfjs/pdf.min.js" referrerpolicy="no-referrer"></script>
+  </head>
+  <body
+    class="editor template-editor-page"
+    data-job-id="{{ job_id }}"
+    data-template-mode="true"
+    data-template-id="{{ template_record.id if template_record else '' }}"
+    data-template-name="{{ template_record.name if template_record else '' }}"
+    data-template-display-name="{{ template_record.display_name if template_record else '' }}"
+  >
+    <header class="topbar">
+      <div class="topbar-left">
+        <a class="topbar-back" href="{{ url_for('main.overlay_templates_page') }}" aria-label="返回版型模板">
+          <i class="bi bi-arrow-left"></i>
+        </a>
+        <div class="topbar-divider"></div>
+        <div class="topbar-title-stack">
+          <span class="topbar-breadcrumb">
+            PDF 原版面翻譯 / 欄位翻譯模板 / 模板編輯
+          </span>
+          <span class="topbar-filename-new" title="{{ job_name or '未命名文件' }}">
+            {{ job_name or "未命名文件" }}
+          </span>
+        </div>
+      </div>
+      <div class="topbar-pager">
+        <button id="prevPage" type="button" aria-label="上一頁">
+          <i class="bi bi-chevron-left"></i>
+        </button>
+        <select id="pageSelect" aria-label="頁碼"></select>
+        <button id="nextPage" type="button" aria-label="下一頁">
+          <i class="bi bi-chevron-right"></i>
+        </button>
+      </div>
+      <div class="topbar-actions">
+        <div class="dropdown">
+          <button id="templateManagerBtn" class="primary" type="button">保存模板</button>
+          <button id="menuBtn" class="ghost" type="button" aria-label="更多操作">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div id="menuDropdown" class="dropdown-menu" hidden>
+            <a id="editedPdfLink" class="dropdown-item" href="#" target="_blank" rel="noopener" style="display:none">
+              <i class="bi bi-file-earmark-pdf"></i> 預覽已編輯 PDF
+            </a>
+            <a class="dropdown-item" href="{{ debug_pdf_url }}" target="_blank" rel="noopener">
+              <i class="bi bi-bug"></i> 預覽除錯 PDF
+            </a>
+            <hr />
+            <button id="downloadBtn" class="dropdown-item" type="button">
+              <i class="bi bi-download"></i> 下載已編輯 PDF
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+    <main class="workspace">
+      <aside class="editor-sidebar">
+        <nav class="sidebar-rail" aria-label="Sidebar sections">
+          <button class="sidebar-rail__item is-active" type="button" data-sidebar-target="sidebarPagesSection">
+            <i class="bi bi-grid-1x2"></i>
+            <span>頁面</span>
+          </button>
+          <button class="sidebar-rail__item" type="button" data-sidebar-target="sidebarToolsSection">
+            <i class="bi bi-sliders2"></i>
+            <span>工具</span>
+          </button>
+          <button class="sidebar-rail__item" type="button" data-sidebar-target="sidebarShortcutsSection">
+            <i class="bi bi-keyboard"></i>
+            <span>快捷鍵</span>
+          </button>
+        </nav>
+        <aside class="panel">
+          <div class="panel-scroll">
+            <section id="sidebarPagesSection" class="sidebar-section is-active">
+              <h2>頁面</h2>
+              <label>
+                <span>縮放 (%)</span>
+                <div class="input-row">
+                  <input id="zoomRange" type="range" min="25" max="200" step="5" value="100" />
+                  <input id="zoomNumber" type="number" min="25" max="200" step="5" value="100" />
+                </div>
+              </label>
+              <div class="button-row">
+                <button id="fitToWidthBtn" class="ghost" type="button">頁面符合寬度</button>
+              </div>
+              <div class="button-row">
+                <button id="toggleThumbsBtn" class="ghost" type="button" aria-expanded="true">隱藏頁面縮圖</button>
+              </div>
+              <div class="button-row">
+                <button id="toggleViewModeBtn" class="ghost" type="button" aria-pressed="false">切換到連續模式</button>
+              </div>
+            </section>
+            <section id="sidebarToolsSection" class="sidebar-section" hidden>
+              <h2>編輯工具</h2>
+              <label>
+                <span>字體大小</span>
+                <div class="input-row">
+                  <input id="fontSize" type="range" min="8" max="72" value="16" />
+                  <input id="fontSizeNumber" type="number" min="8" max="72" value="16" />
+                </div>
+              </label>
+              <label>
+                <span>字體顏色</span>
+                <input id="fontColor" type="color" value="#0000ff" />
+              </label>
+              <label>
+                <span>文字對齊</span>
+                <div class="segmented-control" role="group" aria-label="文字對齊">
+                  <button id="alignLeft" class="ghost is-active" type="button" data-align="left"><i class="bi bi-justify-left"></i></button>
+                  <button id="alignCenter" class="ghost" type="button" data-align="center"><i class="bi bi-justify"></i></button>
+                  <button id="alignRight" class="ghost" type="button" data-align="right"><i class="bi bi-justify-right"></i></button>
+                </div>
+              </label>
+              <label>
+                <span>文字旋轉</span>
+                <div class="button-row button-row--tight">
+                  <button id="rotateLeft" class="ghost" type="button"><i class="bi bi-arrow-counterclockwise"></i></button>
+                  <!-- <button id="rotateReset" class="ghost" type="button">歸零</button> -->
+                  <button id="rotateRight" class="ghost" type="button"><i class="bi bi-arrow-clockwise"></i></button>
+                </div>
+                <!-- <p id="rotationSummary" class="hint">目前角度：0°</p> -->
+              </label>
+              <div class="button-row">
+                <button id="regionTranslateBtn" class="ghost" type="button">補翻選區</button>
+              </div>
+              <div class="button-row">
+                <button id="translateSelectedBoxesBtn" class="ghost" type="button">翻譯選取文字框</button>
+              </div>
+              <div class="button-row">
+                <button id="addBox" class="ghost">新增文字框</button>
+              </div>
+              <div class="button-row">
+                <button id="copyBox" class="ghost">複製文字框</button>
+              </div>
+              <div class="button-row">
+                <button id="batchApplyBoxes" class="ghost">批次新增文字框</button>
+              </div>
+              <div class="button-row">
+                <button id="batchDeleteBoxes" class="ghost">批次刪除文字框</button>
+              </div>
+              <div class="button-row">
+                <button id="deleteBox" class="danger">刪除文字框</button>
+              </div>
+            </section>
+            <section id="sidebarShortcutsSection" class="sidebar-section" hidden>
+              <h2>快捷鍵</h2>
+              <div class="shortcut-list" aria-label="快捷鍵與操作說明">
+                <div class="shortcut-row">
+                  <div class="shortcut-key"><code>Ctrl</code> + <code>滾輪</code></div>
+                  <div class="shortcut-desc">放大或縮小編輯區頁面</div>
+                </div>
+                <div class="shortcut-row">
+                  <div class="shortcut-key"><code>Ctrl</code> + <code>C</code></div>
+                  <div class="shortcut-desc">複製選取的文字框</div>
+                </div>
+                <div class="shortcut-row">
+                  <div class="shortcut-key"><code>Ctrl</code> + <code>V</code></div>
+                  <div class="shortcut-desc">貼上文字框到目前頁面</div>
+                </div>
+                <div class="shortcut-row">
+                  <div class="shortcut-key"><code>Ctrl</code> + <code>Z</code></div>
+                  <div class="shortcut-desc">復原</div>
+                </div>
+                <div class="shortcut-row">
+                  <div class="shortcut-key"><code>Ctrl</code> + <code>Y</code></div>
+                  <div class="shortcut-desc">取消復原</div>
+                </div>
+                <div class="shortcut-row">
+                  <div class="shortcut-key"><code>Delete</code></div>
+                  <div class="shortcut-desc">刪除目前選取的文字框</div>
+                </div>
+                <div class="shortcut-row">
+                  <div class="shortcut-key"><code>Ctrl</code> + <code>點選</code></div>
+                  <div class="shortcut-desc">多選或取消多選文字框</div>
+                </div>
+                <div class="shortcut-row">
+                  <div class="shortcut-key"><code>滑鼠框選</code></div>
+                  <div class="shortcut-desc">快速選取文字框</div>
+                </div>
+                <div class="shortcut-row">
+                  <div class="shortcut-key"><code>雙擊文字框</code></div>
+                  <div class="shortcut-desc">展開文字框內容</div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </aside>
+        <aside class="thumbs">
+          <div id="thumbs" class="thumbs-list"></div>
+        </aside>
+      </aside>
+      <section class="canvas">
+        <div class="viewer">
+          <div id="pages" class="pages"></div>
+        </div>
+      </section>
+    </main>
+    <div id="batchPageModal" class="modal" hidden>
+      <div class="modal-card modal-card--compact" role="dialog" aria-modal="true" aria-labelledby="batchPageTitle">
+        <div class="modal-header">
+          <h2 id="batchPageTitle">批次套用頁面</h2>
+          <button id="closeBatchPageModal" class="ghost" type="button">關閉</button>
+        </div>
+        <div class="modal-body">
+          <p id="batchPageSourceHint" class="hint"></p>
+          <label class="check-row">
+            <input id="batchPageAll" type="checkbox" />
+            <span>套用到全部其他頁</span>
+          </label>
+          <label class="check-row">
+            <input id="batchPageAfter" type="checkbox" />
+            <span>只套用到來源頁之後</span>
+          </label>
+          <label>
+            <span>指定頁碼</span>
+            <input id="batchPageInput" type="text" placeholder="例如 1,3,5 或 2-6" />
+          </label>
+          <p class="hint">勾選 `全部其他頁` 或 `來源頁之後` 時，會忽略頁碼輸入</p>
+          <div class="modal-actions">
+            <button id="confirmBatchPageModal" class="primary" type="button">確認</button>
+            <button id="cancelBatchPageModal" class="ghost" type="button">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="templateManagerModal" class="modal" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="templateManagerTitle">
+        <div class="modal-header">
+          <h2 id="templateManagerTitle">保存欄位翻譯模板</h2>
+        </div>
+        <div class="modal-body">
+          <section>
+            <label>
+              <span>模板名稱 (建議輸入文件格式 Q-xxxx 方便識別)</span>
+              <input id="templateName" type="text" placeholder="例如：Q-2011" />
+            </label>
+            <div class="button-row--tight2">
+              <button id="closeTemplateManager" class="ghost" type="button">取消</button>
+              <button id="saveTemplateBtn" class="primary" type="button">儲存</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+    <div id="regionPreviewModal" class="modal" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="regionPreviewTitle">
+        <div class="modal-header">
+          <h2 id="regionPreviewTitle">補翻預覽</h2>
+          <button id="closeRegionPreview" class="ghost" type="button">關閉</button>
+        </div>
+        <div class="modal-body">
+          <div class="region-preview-grid">
+            <div class="region-preview-pane">
+              <h3>擷取區域</h3>
+              <img id="regionPreviewImage" class="region-preview-image" alt="Selected OCR region" />
+            </div>
+            <div class="region-preview-pane">
+              <h3>OCR 結果</h3>
+              <textarea id="regionPreviewText" class="region-preview-textarea" rows="10"></textarea>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button id="confirmRegionPreview" class="primary" type="button">確認翻譯</button>
+            <button id="cancelRegionPreview" class="ghost" type="button">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+<script src="{{ url_for('static', filename='template_editor.js') }}"></script>
+  </body>
+</html>

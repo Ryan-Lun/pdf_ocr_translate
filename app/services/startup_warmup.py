@@ -47,11 +47,21 @@ def _run_startup_warmup() -> None:
     logger.info("Startup warmup started.")
     if state.STARTUP_WARMUP_OPENAI_CLIENTS:
         _warm_openai_clients()
-    if state.STARTUP_WARMUP_BGE:
+    if _should_warm_bge():
         _warm_bge_model()
     if state.STARTUP_WARMUP_TRITON:
         _warm_triton_service()
     logger.info("Startup warmup finished in %.2fs.", time.time() - started_at)
+
+
+def _runtime_role() -> str:
+    return str(os.getenv("APP_RUNTIME_ROLE") or "web").strip().lower()
+
+
+def _should_warm_bge() -> bool:
+    if not state.STARTUP_WARMUP_BGE:
+        return False
+    return _runtime_role() == "worker"
 
 
 def _warm_openai_clients() -> None:
@@ -67,7 +77,10 @@ def _warm_bge_model() -> None:
     try:
         from ocr_pipeline.paragraph_align import get_model
 
-        get_model()
+        model = get_model()
+        if model is None:
+            logger.warning("Startup warmup: BGE-M3 model unavailable.")
+            return
         logger.info("Startup warmup: BGE-M3 model loaded.")
     except Exception as exc:
         logger.warning("Startup warmup: failed to load BGE-M3 model: %s", exc)

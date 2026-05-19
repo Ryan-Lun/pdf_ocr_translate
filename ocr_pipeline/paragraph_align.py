@@ -2,21 +2,31 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import re
 from typing import Any
 
 _model = None
+_model_load_failed = False
+logger = logging.getLogger(__name__)
 
 
 def get_model():
-    global _model
+    global _model, _model_load_failed
+    if _model_load_failed:
+        return None
     if _model is None:
-        print("Loading BGE-M3 model on CPU...")
-        from sentence_transformers import SentenceTransformer
+        try:
+            print("Loading BGE-M3 model on CPU...")
+            from sentence_transformers import SentenceTransformer
 
-        _model = SentenceTransformer("BAAI/bge-m3", device="cpu")
-        print("Model loaded.")
+            _model = SentenceTransformer("BAAI/bge-m3", device="cpu")
+            print("Model loaded.")
+        except Exception as exc:
+            _model_load_failed = True
+            logger.exception("Failed to load BGE-M3 model: %s", exc)
+            return None
     return _model
 
 
@@ -78,35 +88,39 @@ def align_and_update_json(data: dict) -> dict:
         en_texts = [item["text"] for item in en_list]
 
         model = get_model()
-        from sentence_transformers import util
+        if model is not None:
+            from sentence_transformers import util
 
-        zh_emb = model.encode(zh_texts, convert_to_tensor=True)
-        en_emb = model.encode(en_texts, convert_to_tensor=True)
-        cos_matrix = util.cos_sim(zh_emb, en_emb).numpy()
+            zh_emb = model.encode(zh_texts, convert_to_tensor=True)
+            en_emb = model.encode(en_texts, convert_to_tensor=True)
+            cos_matrix = util.cos_sim(zh_emb, en_emb).numpy()
+        else:
+            cos_matrix = None
 
-        for i, zh_item in enumerate(zh_list):
-            best_score = 0
-            best_en_idx = -1
+        if cos_matrix is not None:
+            for i, zh_item in enumerate(zh_list):
+                best_score = 0
+                best_en_idx = -1
 
-            for j, en_item in enumerate(en_list):
-                if not bbox_vertical_match(zh_item["box"], en_item["box"]):
-                    continue
+                for j, en_item in enumerate(en_list):
+                    if not bbox_vertical_match(zh_item["box"], en_item["box"]):
+                        continue
 
-                score = cos_matrix[i][j]
-                if score > best_score:
-                    best_score = score
-                    best_en_idx = j
+                    score = cos_matrix[i][j]
+                    if score > best_score:
+                        best_score = score
+                        best_en_idx = j
 
-            if best_score > 0.6:
-                pairs.append(
-                    {
-                        "zh": zh_item["text"],
-                        "en": en_list[best_en_idx]["text"],
-                        "similarity": float(round(best_score, 4)),
-                    }
-                )
-                matched_indices.add(zh_item["index"])
-                matched_indices.add(en_list[best_en_idx]["index"])
+                if best_score > 0.6:
+                    pairs.append(
+                        {
+                            "zh": zh_item["text"],
+                            "en": en_list[best_en_idx]["text"],
+                            "similarity": float(round(best_score, 4)),
+                        }
+                    )
+                    matched_indices.add(zh_item["index"])
+                    matched_indices.add(en_list[best_en_idx]["index"])
 
     for idx, block in enumerate(blocks):
         label = block.get("block_label", "")

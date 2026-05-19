@@ -1,0 +1,754 @@
+[
+  {
+    "cn": "協力廠代加工*(器械)",
+    "en": "Subcontracting Processing*(Instrument)"
+  },
+  {
+    "cn": "市購品(由採購購買)",
+    "en": "Outsourcing Product (Purchase by Purchasing division)"
+  },
+  {
+    "cn": "熱處理試片製程",
+    "en": "Heat Treatment Specimen Pocess"
+  },
+  {
+    "cn": "協力廠機加工",
+    "en": "Subcontracting Machining"
+  },
+  {
+    "cn": "協力廠複合加工",
+    "en": "Subcontracting Compound Machining"
+  },
+  {
+    "cn": "協力廠複合加工含電漿噴塗",
+    "en": "Subcontracting Compound Machining & Ti Plasma Spray"
+  },
+  {
+    "cn": "協力廠複合加工含HA",
+    "en": "Subcontracting Compound Machining & HA"
+  },
+  {
+    "cn": "協力廠複合加工含HA/Ti",
+    "en": "Subcontracting Compound Machining  &  HA/Ti"
+  },
+  {
+    "cn": "協力廠複合加工含鈦粉燒結",
+    "en": "Subcontracting Compound Machining  & Sintering of Ti Powder"
+  },
+  {
+    "cn": "雷射刻印",
+    "en": "Laser Marking"
+  },
+  {
+    "cn": "打磨",
+    "en": "Manual Grinding"
+  },
+  {
+    "cn": "噴砂處理",
+    "en": "Blasting"
+  },
+  {
+    "cn": "拋光",
+    "en": "Manual Polishing"
+  },
+  {
+    "cn": "塗佈",
+    "en": "Coating"
+  },
+  {
+    "cn": "燒結",
+    "en": "Sintering"
+  },
+  {
+    "cn": "清洗(金屬件)",
+    "en": "Cleaning (Metal)"
+  },
+  {
+    "cn": "研磨",
+    "en": "Lapping"
+  },
+  {
+    "cn": "鈷鉻鉬塗佈＊(高雄)",
+    "en": "CCM Coating*(Kaohsiung)"
+  },
+  {
+    "cn": "組裝領料(批號:     )＊(西安)",
+    "en": "Assembly picking (Lot:)* (Xian)"
+  },
+  {
+    "cn": "備熱處理試片＊(西安)",
+    "en": "Heat Treatment Specimen preperation*(Xian)"
+  },
+  {
+    "cn": "乾燥",
+    "en": "Drying"
+  },
+  {
+    "cn": "燒結後打磨＊(高雄)",
+    "en": "Manual Grinding(After  Sintering)*(Kaohsiung)"
+  },
+  {
+    "cn": "熱處理(固溶處理)",
+    "en": "Heat Treatment (Solution Treatment)"
+  },
+  {
+    "cn": "內圓拋光",
+    "en": "Inner Diameter Polishing"
+  },
+  {
+    "cn": "自動清洗(金屬件)*(高雄)",
+    "en": "Automatic Cleaning(Metal)*(Kaohsiung)"
+  },
+  {
+    "cn": "預燒結",
+    "en": "Pre-sintering"
+  },
+  {
+    "cn": "切斷",
+    "en": "Cutting"
+  },
+  {
+    "cn": "鉗工",
+    "en": "Bench Work"
+  },
+  {
+    "cn": "振動研磨",
+    "en": "Vibrating Lapping"
+  },
+  {
+    "cn": "焊接",
+    "en": "Welding"
+  },
+  {
+    "cn": "滾筒研磨",
+    "en": "Tumbling"
+  },
+  {
+    "cn": "塗膠",
+    "en": "Gluing"
+  },
+  {
+    "cn": "線圈製作",
+    "en": "Coil Production"
+  },
+  {
+    "cn": "氬 焊",
+    "en": "Arc Welding"
+  },
+  {
+    "cn": "擦拭",
+    "en": "Wiping"
+  },
+  {
+    "cn": "珠擊處理",
+    "en": "Bead Blasting"
+  },
+  {
+    "cn": "熱處理 (H900硬化處理)",
+    "en": "Heat Treatment (H900 Hardening Treatment)"
+  },
+  {
+    "cn": "熱處理(H950硬化處理)",
+    "en": "Heat Treatment (H950 Hardening Treatment)"
+  },
+  {
+    "cn": "酸洗",
+    "en": "Pickling"
+  },
+  {
+    "cn": "振動拋光",
+    "en": "Vibrating Polishing"
+  },
+  {
+    "cn": "低溫熱處理",
+    "en": "Low Temperature Heat Treatment"
+  },
+  {
+    "cn": "彎曲加工",
+    "en": "Bending"
+  },
+  {
+    "cn": "機器拋光",
+    "en": "Plane Polishing"
+  },
+  {
+    "cn": "機器研磨",
+    "en": "Plane Lapping"
+  },
+  {
+    "cn": "熱處理(H1025硬化處理)",
+    "en": "Heat Treatment (H1025 Hardening Treatment)"
+  },
+  {
+    "cn": "熱處理(H1050硬化處理)",
+    "en": "Heat Treatment (H1050 Hardening Treatment)"
+  },
+  {
+    "cn": "濕式噴砂處理",
+    "en": "Wet Bead Blasting"
+  },
+  {
+    "cn": "熱處理(H1000硬化處理)",
+    "en": "Heat Treatment (H1000 Hardening Treatment)"
+  },
+  {
+    "cn": "熱處理(H1100硬化處理)",
+    "en": "Heat Treatment (H1100 Hardening Treatment)"
+  },
+  {
+    "cn": "包膠帶",
+    "en": "Taping"
+  },
+  {
+    "cn": "去除膠帶",
+    "en": "Tape Removing"
+  },
+  {
+    "cn": "電解拋光＊(西安)",
+    "en": "Electro-polishing*(Xian)"
+  },
+  {
+    "cn": "微氬弧焊＊(西安)",
+    "en": "Micro Arc Welding*(Xian)"
+  },
+  {
+    "cn": "衝壓成型＊(西安)",
+    "en": "Stamping Forming*(Xian)"
+  },
+  {
+    "cn": "果酸電解",
+    "en": "Acid Electro-Polishing"
+  },
+  {
+    "cn": "鐳射焊接＊(西安)",
+    "en": "Laser Welding*(Xian)"
+  },
+  {
+    "cn": "模具打磨＊(高雄)",
+    "en": "Tooling Grinding*(Kaohsiung)"
+  },
+  {
+    "cn": "熱處理(420SS淬火)",
+    "en": "Heat Treatment (420SS Hardening)"
+  },
+  {
+    "cn": "熱處理(420SS回火)",
+    "en": "Heat Treatment (420SS Tempering)"
+  },
+  {
+    "cn": "果酸除氧化層*(西安)",
+    "en": "Oxide Layer Removal by Acid * (Xian)"
+  },
+  {
+    "cn": "製程中清洗＊(高雄)",
+    "en": "In-process Cleaning*(Kaohsiung)"
+  },
+  {
+    "cn": "自動噴砂處理(冠亞)＊(高雄)",
+    "en": "Automatically Blasting (A-Spine) *(Kaohsiung)"
+  },
+  {
+    "cn": "銑削加工",
+    "en": "Milling"
+  },
+  {
+    "cn": "車削加工",
+    "en": "Turning"
+  },
+  {
+    "cn": "磨床加工",
+    "en": "Grinding"
+  },
+  {
+    "cn": "切割",
+    "en": "Cutting"
+  },
+  {
+    "cn": "鑽孔",
+    "en": "Drilling"
+  },
+  {
+    "cn": "扭曲校正",
+    "en": "Bending Calibration"
+  },
+  {
+    "cn": "倒角",
+    "en": "Chamfer Processing"
+  },
+  {
+    "cn": "沖床加工",
+    "en": "Punch Processing"
+  },
+  {
+    "cn": "除(去)油",
+    "en": "Degreasing"
+  },
+  {
+    "cn": "M/C銑削加工(金屬件)\nM/C",
+    "en": "Milling Process (Metal)"
+  },
+  {
+    "cn": "研磨外徑",
+    "en": "OD Grinding"
+  },
+  {
+    "cn": "線切割(託外加工)",
+    "en": "Wire Cutting (Outsourcing)"
+  },
+  {
+    "cn": "球面研磨",
+    "en": "Spherical Grinding"
+  },
+  {
+    "cn": "鑿鑽",
+    "en": "Drilling"
+  },
+  {
+    "cn": "走心式車削加工",
+    "en": "Swiss Type CNC Turning"
+  },
+  {
+    "cn": "毛邊磨除(金屬)",
+    "en": "Deburring (Metal)"
+  },
+  {
+    "cn": "五軸M/C加工",
+    "en": "CNC 5-Axis Milling"
+  },
+  {
+    "cn": "鋸床加工",
+    "en": "Sawing"
+  },
+  {
+    "cn": "線切割加工",
+    "en": "Wire cutting"
+  },
+  {
+    "cn": "細孔放電加工",
+    "en": "Drilling EDM"
+  },
+  {
+    "cn": "整直加工",
+    "en": "Straightening"
+  },
+  {
+    "cn": "球面拋光",
+    "en": "Spherical polishing"
+  },
+  {
+    "cn": "五軸研磨加工\n5-",
+    "en": "Axis Grinding"
+  },
+  {
+    "cn": "傳統加工",
+    "en": "Manual Machining"
+  },
+  {
+    "cn": "機器手臂研磨",
+    "en": "Robotic Grinding"
+  },
+  {
+    "cn": "機器手臂拋光",
+    "en": "Robotic Polishing"
+  },
+  {
+    "cn": "無心研磨＊(西安)",
+    "en": "Centerless Grinding*(Xian)"
+  },
+  {
+    "cn": "線切割(中/快走絲)＊(西安)",
+    "en": "Wire Cutting (MS/ HS-WEDM)*(Xian)"
+  },
+  {
+    "cn": "線切割(慢走絲)＊(西安)",
+    "en": "Wire Cutting (LS-WEDM)*(Xian)"
+  },
+  {
+    "cn": "線切割(快走絲)＊(西安)",
+    "en": "Wire Cutting (HS-WEDM)*(Xian)"
+  },
+  {
+    "cn": "五軸複合加工\n5-",
+    "en": "Axis Compound Machining"
+  },
+  {
+    "cn": "放電加工＊(高雄)",
+    "en": "EDM*(Kaohsiung)"
+  },
+  {
+    "cn": "五軸立式車銑\n5-",
+    "en": "Axis Vertical Milling-turning"
+  },
+  {
+    "cn": "M/C銑削(模具區輕切削)＊(高雄)\nM/C",
+    "en": "Milling (Light milling in mold area)*(Kaohsiung)"
+  },
+  {
+    "cn": "M/C銑削(模具區重切削)＊(高雄)\nM/C",
+    "en": "Milling (Heavy milling in mold area)*(Kaohsiung)"
+  },
+  {
+    "cn": "M/C銑削加工(金屬件重切削)＊(高雄)\nM/C",
+    "en": "Milling (Heavy)* (Kaohsiung)"
+  },
+  {
+    "cn": "M/C銑削加工(金屬件中心出水)\nM/C",
+    "en": "Milling Process(Coolant  through Spindle)"
+  },
+  {
+    "cn": "塑膠刻印",
+    "en": "Plastic Marking"
+  },
+  {
+    "cn": "切割材料",
+    "en": "Material Cutting"
+  },
+  {
+    "cn": "M/C銑削加工(塑膠件)\nM/C",
+    "en": "Milling (Plastic)"
+  },
+  {
+    "cn": "清洗(塑膠件)",
+    "en": "Cleaning (Plastic)"
+  },
+  {
+    "cn": "潔淨室包裝",
+    "en": "Packing in Clean Room"
+  },
+  {
+    "cn": "潔淨室包裝(3)*(高雄)",
+    "en": "Packing In Clean Room(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "去除毛邊",
+    "en": "Deburring"
+  },
+  {
+    "cn": "包裝",
+    "en": "Packing"
+  },
+  {
+    "cn": "去除包裝",
+    "en": "Package Removing"
+  },
+  {
+    "cn": "塑膠熱處理",
+    "en": "Plastic Heat Treatment"
+  },
+  {
+    "cn": "收縮膜包裝",
+    "en": "Shrink Film Packing"
+  },
+  {
+    "cn": "標籤列印",
+    "en": "Label Printing"
+  },
+  {
+    "cn": "紙盒包裝",
+    "en": "Box Packing"
+  },
+  {
+    "cn": "拆紙盒",
+    "en": "Box Unpacking"
+  },
+  {
+    "cn": "自動清洗(塑膠件)*(高雄)",
+    "en": "Automatic Cleaning(Plastic)*(Kaohsiung)"
+  },
+  {
+    "cn": "無塵室自動清洗(塑膠件)*(高雄)",
+    "en": "Clean Room Automatic Cleaning(Plastic)*(Kaohsiung)"
+  },
+  {
+    "cn": "紙盒包裝(3)*(高雄)",
+    "en": "Box Packing(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "收縮膜包裝(3)*(高雄)",
+    "en": "Shrink Film Packing(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "去除包裝(3)*(高雄)",
+    "en": "Package Removing(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "俄羅斯說明書",
+    "en": "Russian Instruction Manual"
+  },
+  {
+    "cn": "塗佈檢驗＊(西安)",
+    "en": "Coating Inspection*(Xian)"
+  },
+  {
+    "cn": "製程檢驗",
+    "en": "In-process Quality Control"
+  },
+  {
+    "cn": "最終檢驗",
+    "en": "Final Quality Control"
+  },
+  {
+    "cn": "進料檢驗＊(西安)",
+    "en": "Incoming Quality Control*(Xian)"
+  },
+  {
+    "cn": "功能實配檢驗",
+    "en": "Function Quality Check"
+  },
+  {
+    "cn": "模具最終檢驗＊(高雄)",
+    "en": "Mold Final Quality Check*(Kaohsiung)"
+  },
+  {
+    "cn": "潔淨室最終檢驗",
+    "en": "Final Quality Control in Clean Room"
+  },
+  {
+    "cn": "功能實配檢驗(3)＊(高雄)",
+    "en": "Function Quality Check(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "熱均壓處理(託外加工)",
+    "en": "Hot Isostatic Pressing (Outsourcing)"
+  },
+  {
+    "cn": "滅菌(託外加工)",
+    "en": "Sterilization (Outsourcing)"
+  },
+  {
+    "cn": "氬焊(託外加工)",
+    "en": "Arc Welding (Outsourcing)"
+  },
+  {
+    "cn": "螢光滲透檢驗(託外加工)",
+    "en": "Fluorescent-Penetrant Inspection (Outsourcing)"
+  },
+  {
+    "cn": "電解拋光(託外加工)",
+    "en": "Electro-polishing (Outsourcing)"
+  },
+  {
+    "cn": "放電加工(託外加工)",
+    "en": "EDM(Outsourcing)"
+  },
+  {
+    "cn": "無心研磨(託外加工)",
+    "en": "Centerless Grinding (Outsourcing)"
+  },
+  {
+    "cn": "陽極處理(託外加工)",
+    "en": "Anodizing (Outsourcing)"
+  },
+  {
+    "cn": "研磨加工(託外加工)",
+    "en": "Grinding (Outsourcing)"
+  },
+  {
+    "cn": "鎗鑽加工(託外加工)",
+    "en": "Drilling (Outsourcing)"
+  },
+  {
+    "cn": "插床加工(託外加工)",
+    "en": "Slotting (Outsourcing)"
+  },
+  {
+    "cn": "高壓消(託外加工)",
+    "en": "High Pressure Sterilization (Outsourcing)"
+  },
+  {
+    "cn": "鋸切加工(託外加工)",
+    "en": "Sawing (Outsourcing)"
+  },
+  {
+    "cn": "沖壓成型(託外加工)",
+    "en": "Stamping Forming (Outsouring)"
+  },
+  {
+    "cn": "鍍膜處理(託外加工)",
+    "en": "Coating Treatment (Outsourcing)"
+  },
+  {
+    "cn": "521   塑膠雷射刻印(託外加工)",
+    "en": "Plastic Laser Marking (Outsourcing)"
+  },
+  {
+    "cn": "網印(託外加工)",
+    "en": "Screen Printing (Outsourcing)"
+  },
+  {
+    "cn": "拉床加工(託外加工)",
+    "en": "Broaching (Outsourcing)"
+  },
+  {
+    "cn": "走心式車削(託外加工)",
+    "en": "Swiss Type CNC Machining (Outsourcing)"
+  },
+  {
+    "cn": "整直處理(託外加工)",
+    "en": "Straightening (Outsourcing)"
+  },
+  {
+    "cn": "熱處理(託外加工)",
+    "en": "Heat Treatment (Outsourcing)"
+  },
+  {
+    "cn": "封矽膠環(託外加工)",
+    "en": "Silicon Sealing (Outsourcing)"
+  },
+  {
+    "cn": "壓花(託外加工)",
+    "en": "Embossing (Outsourcing)"
+  },
+  {
+    "cn": "電解拋光、刻印、鈍化(託外加工)",
+    "en": "EP/ Marking/ Passivation (Outsourcing)"
+  },
+  {
+    "cn": "鍍硬鉻處理(託外加工)",
+    "en": "Hard Chrome Plating (Outsourcing)"
+  },
+  {
+    "cn": "雷射焊接(託外加工)",
+    "en": "Laser Welding (Outsourcing)"
+  },
+  {
+    "cn": "滾齒加工(託外加工)",
+    "en": "Hobbing (Outsourcing)"
+  },
+  {
+    "cn": "雷射刻印(託外加工)",
+    "en": "Laser Marking (Outsourcing)"
+  },
+  {
+    "cn": "燒結(託外加工)",
+    "en": "Sintering (Outsourcing)"
+  },
+  {
+    "cn": "電漿塗佈 (託外加工)",
+    "en": "Plasma Coating (Outsourcing)"
+  },
+  {
+    "cn": "鍍鈦處理 (託外加工) ＊(西安)",
+    "en": "Titanium Plating (Outsourcing)*(Xian)"
+  },
+  {
+    "cn": "線切割 (慢走絲託外)＊(西安)",
+    "en": "Wire Cutting (LS-WEDM Outsourcing)*(Xian)"
+  },
+  {
+    "cn": "線切割 (快走絲託外)＊(西安)",
+    "en": "Wire Cutting (HS-WEDM Outsourcing)*(Xian)"
+  },
+  {
+    "cn": "銑床加工(託外加工)",
+    "en": "Milling (Outsourcing)"
+  },
+  {
+    "cn": "工具箱組裝(託外加工)",
+    "en": "Tool Case Assembly (Outsourcing)"
+  },
+  {
+    "cn": "塑膠射出(託外加工)",
+    "en": "Plastic Injection (Outsourcing)"
+  },
+  {
+    "cn": "模具熱處理(託外加工)＊(高雄)",
+    "en": "Mold Heat Treatment (Outsourcing)*(Kaohsiung)"
+  },
+  {
+    "cn": "填色(託外加工)",
+    "en": "Colouring (Outsourcing)"
+  },
+  {
+    "cn": "鍍膜退鍍 (託外加工)",
+    "en": "Stripping (Outsourcing)"
+  },
+  {
+    "cn": "鍍膜退鍍再重鍍 (託外加工)",
+    "en": "Stripping and Replating (Outsourcing)"
+  },
+  {
+    "cn": "陽極退鍍 (託外加工)",
+    "en": "Anodizing Stripping (Outsourcing)"
+  },
+  {
+    "cn": "新華重工(託外加工)",
+    "en": "Shinva United Reworking (Outsourcing)"
+  },
+  {
+    "cn": "塑膠直接模壓成型(託外加工)",
+    "en": "Plastic Direct Compression Moulding(Outsourcing)"
+  },
+  {
+    "cn": "鈦粉燒結(託外加工)＊(高雄)",
+    "en": "Sintering of Ti Powder(Outsourcing)*(Kaohsiung)"
+  },
+  {
+    "cn": "模具表面處理(託外加工)＊(高雄)",
+    "en": "Mold Surface Treatment (Outsourcing)*(Kaohsiung)"
+  },
+  {
+    "cn": "入庫＊(西安)",
+    "en": "Storage*(Xian)"
+  },
+  {
+    "cn": "交回原部門",
+    "en": "Return to Original Division"
+  },
+  {
+    "cn": "塗佈整修",
+    "en": "Porous Coating Repair"
+  },
+  {
+    "cn": "組裝",
+    "en": "Assembly"
+  },
+  {
+    "cn": "燒結整修",
+    "en": "Sintering Repair"
+  },
+  {
+    "cn": "隔離組裝",
+    "en": "Clean Room Assembly"
+  },
+  {
+    "cn": "模具組裝＊(高雄)",
+    "en": "Mold Assembly*(Kaohsiung)"
+  },
+  {
+    "cn": "隔離組裝(3)*(高雄)",
+    "en": "Clean Room Assembly(3)*(Kaohsiung)"
+  },
+  {
+    "cn": "高雄廠燒結",
+    "en": "Kaohsiung Facility Sintering"
+  },
+  {
+    "cn": "高雄廠機加工",
+    "en": "Kaohsiung Facility Machining"
+  },
+  {
+    "cn": "高雄廠HA/Ti",
+    "en": "Kaohsiung Facility HA/Ti"
+  },
+  {
+    "cn": "高雄廠電漿噴塗",
+    "en": "Kaohsiung Facility Ti Plasma Spray"
+  },
+  {
+    "cn": "高雄廠複合加工",
+    "en": "Kaohsiung Facility Compound Machining"
+  },
+  {
+    "cn": "高雄廠鋸料",
+    "en": "Kaohsiung Facility Material Sawing"
+  },
+  {
+    "cn": "高雄廠HA",
+    "en": "Kaohsiung Facility HA"
+  },
+  {
+    "cn": "高雄廠燒結(鈷鉻鉬)",
+    "en": "Kaohsiung Facility Sintering (CoCrMo)"
+  }
+]
