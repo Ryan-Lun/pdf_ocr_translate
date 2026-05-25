@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PDF 翻譯重建</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
   </head>
   <body class="home">
@@ -48,10 +49,15 @@
               </select>
             </label>
           </div>
+          <div class="form-grid">
+            <label>
+              <span>使用者名稱</span>
+              <input type="text" name="creator_name" maxlength="60" placeholder="請輸入姓名或工號" />
+            </label>
+          </div>
           <div class="form-note">
             <h4><i class="bi bi-info-circle"></i> 注意事項</h4>
-            <p>Word 文件排版格式不會與原始 PDF 文件完全相同。</p>
-            <p>較複雜的表格可能會重建失敗，翻譯完成後請檢查輸出結果。</p>
+            <p>Word 文件排版格式不會與原始 PDF 文件完全相同，較複雜的表格可能會重建失敗，翻譯完成後請檢查輸出結果。</p>
           </div>
           <button class="primary" type="submit">開始文件轉檔</button>
         </form>
@@ -59,10 +65,14 @@
       <section class="upload-card jobs-board">
         <div class="jobs-header">
           <div>
-            <p class="eyebrow">Document</p>
-            <h2>文件工作區任務</h2>
+            <p class="eyebrow">Manage</p>
+            <h2>任務列表</h2>
           </div>
           <div class="jobs-actions">
+            <button id="docJobsSelectAll" class="ghost" type="button">全部勾選</button>
+            <button id="docJobsSelectNone" class="ghost" type="button">取消勾選</button>
+            <button id="docJobsDeleteSelected" class="danger" type="button">刪除選取任務</button>
+            <button id="docJobsDownload" class="primary" type="button">下載選取文件</button>
             <button id="docJobsRefresh" class="ghost" type="button">重新整理</button>
           </div>
         </div>
@@ -75,6 +85,11 @@
       const docJobsList = document.getElementById("docJobsList");
       const docJobsEmpty = document.getElementById("docJobsEmpty");
       const docJobsRefresh = document.getElementById("docJobsRefresh");
+      const docJobsSelectAll = document.getElementById("docJobsSelectAll");
+      const docJobsSelectNone = document.getElementById("docJobsSelectNone");
+      const docJobsDeleteSelected = document.getElementById("docJobsDeleteSelected");
+      const docJobsDownload = document.getElementById("docJobsDownload");
+      const selectedDocJobs = new Set();
       let docJobsLoading = false;
 
       function formatDate(ts) {
@@ -116,13 +131,40 @@
           return;
         }
         docJobsEmpty.style.display = "none";
+        const available = new Set();
         jobs.forEach((job) => {
+          available.add(job.job_id);
           const card = document.createElement("article");
-          card.className = "job-card doc-job-card";
+          card.className = "job-card";
+
+          const selectWrap = document.createElement("label");
+          selectWrap.className = "job-select";
+          const selectInput = document.createElement("input");
+          selectInput.type = "checkbox";
+          selectInput.className = "job-check";
+          selectInput.dataset.jobId = job.job_id;
+          selectInput.checked = selectedDocJobs.has(job.job_id);
+          selectInput.addEventListener("change", () => {
+            if (selectInput.checked) selectedDocJobs.add(job.job_id);
+            else selectedDocJobs.delete(job.job_id);
+          });
+          selectWrap.appendChild(selectInput);
 
           const idTag = document.createElement("div");
-          idTag.className = "job-id";
+          idTag.className = "job-badge";
           idTag.textContent = job.job_id.slice(0, 8);
+
+          const typeTag = document.createElement("div");
+          typeTag.className = "job-badge";
+          typeTag.textContent = "Document";
+
+          const statusTag = document.createElement("div");
+          statusTag.className = "job-badge";
+          statusTag.textContent = job.status_label || "Unknown";
+
+          const ownerTag = document.createElement("div");
+          ownerTag.className = "job-badge";
+          ownerTag.textContent = `建立者：${job.creator_name || "未命名"}`;
 
           const title = document.createElement("div");
           title.className = "job-title";
@@ -130,11 +172,28 @@
             ? job.job_name
             : `Doc ${job.job_id.slice(0, 8)}`;
 
+          const header = document.createElement("div");
+          header.className = "job-header";
+
+          const headerMain = document.createElement("div");
+          headerMain.className = "job-header-main";
+
+          const headerMeta = document.createElement("div");
+          headerMeta.className = "job-header-meta";
+          headerMeta.appendChild(ownerTag);
+          // headerMeta.appendChild(typeTag);
+          // headerMeta.appendChild(statusTag);
+          headerMeta.appendChild(idTag);
+          headerMain.appendChild(selectWrap);
+          headerMain.appendChild(title);
+          header.appendChild(headerMain);
+          header.appendChild(headerMeta);
+
           const meta = document.createElement("div");
           meta.className = "job-meta";
           const durationLabel = formatDuration(job.duration_seconds);
           const durationText = durationLabel ? ` · 處理時間: ${durationLabel}` : "";
-          meta.textContent = `Updated: ${formatDate(job.updated_at)} · Status: ${job.status_label || "Unknown"}${durationText}`;
+          meta.textContent = `上傳時間: ${formatDate(job.updated_at)} · 狀態: ${job.status_label || "Unknown"}${durationText}`;
 
           const actions = document.createElement("div");
           actions.className = "job-actions";
@@ -158,29 +217,29 @@
             actions.appendChild(cancelBtn);
           }
 
-          if (job.structure_md_url) {
-            const mdLink = document.createElement("a");
-            mdLink.href = `${job.structure_md_url}?download=1`;
-            mdLink.textContent = "下載原始 MD";
-            mdLink.className = "ghost";
-            actions.appendChild(mdLink);
-          }
+          // if (job.structure_md_url) {
+          //   const mdLink = document.createElement("a");
+          //   mdLink.href = `${job.structure_md_url}?download=1`;
+          //   mdLink.textContent = "下載原始 MD";
+          //   mdLink.className = "ghost";
+          //   actions.appendChild(mdLink);
+          // }
 
-          if (job.structure_html_url) {
-            const htmlLink = document.createElement("a");
-            htmlLink.href = `${job.structure_html_url}?download=1`;
-            htmlLink.textContent = "下載原始 HTML";
-            htmlLink.className = "ghost";
-            actions.appendChild(htmlLink);
-          }
+          // if (job.structure_html_url) {
+          //   const htmlLink = document.createElement("a");
+          //   htmlLink.href = `${job.structure_html_url}?download=1`;
+          //   htmlLink.textContent = "下載原始 HTML";
+          //   htmlLink.className = "ghost";
+          //   actions.appendChild(htmlLink);
+          // }
 
-          if (job.translated_html_url) {
-            const translatedLink = document.createElement("a");
-            translatedLink.href = `${job.translated_html_url}?download=1`;
-            translatedLink.textContent = "下載翻譯 HTML";
-            translatedLink.className = "ghost";
-            actions.appendChild(translatedLink);
-          }
+          // if (job.translated_html_url) {
+          //   const translatedLink = document.createElement("a");
+          //   translatedLink.href = `${job.translated_html_url}?download=1`;
+          //   translatedLink.textContent = "下載翻譯 HTML";
+          //   translatedLink.className = "ghost";
+          //   actions.appendChild(translatedLink);
+          // }
 
           if (job.docx_url) {
             const docxLink = document.createElement("a");
@@ -229,12 +288,91 @@
           });
           actions.appendChild(deleteBtn);
 
-          card.appendChild(idTag);
-          card.appendChild(title);
+          card.appendChild(header);
           card.appendChild(meta);
           card.appendChild(actions);
           docJobsList.appendChild(card);
         });
+        Array.from(selectedDocJobs).forEach((jobId) => {
+          if (!available.has(jobId)) selectedDocJobs.delete(jobId);
+        });
+      }
+
+      function setAllDocSelections(checked) {
+        const inputs = docJobsList.querySelectorAll("input.job-check");
+        inputs.forEach((input) => {
+          const jobId = input.dataset.jobId;
+          if (!jobId) return;
+          input.checked = checked;
+          if (checked) selectedDocJobs.add(jobId);
+          else selectedDocJobs.delete(jobId);
+        });
+      }
+
+      async function deleteSelectedDocJobs() {
+        const jobIds = Array.from(selectedDocJobs);
+        if (jobIds.length === 0) {
+          alert("請先選取要刪除的任務。");
+          return;
+        }
+        const ok = confirm(`確定要刪除 ${jobIds.length} 個任務？此操作無法復原。`);
+        if (!ok) return;
+        docJobsDeleteSelected.disabled = true;
+        let failed = 0;
+        for (const jobId of jobIds) {
+          try {
+            const res = await fetch(`/api/job/${jobId}`, { method: "DELETE" });
+            if (!res.ok) {
+              failed += 1;
+              continue;
+            }
+            selectedDocJobs.delete(jobId);
+          } catch (error) {
+            failed += 1;
+          }
+        }
+        docJobsDeleteSelected.disabled = false;
+        if (failed > 0) {
+          alert(`${failed} 個任務刪除失敗，請重新整理後再試。`);
+        }
+        loadDocJobs();
+      }
+
+      async function downloadSelectedDocJobs() {
+        if (selectedDocJobs.size === 0) {
+          alert("請先選取要下載的任務。");
+          return;
+        }
+        docJobsDownload.disabled = true;
+        try {
+          const res = await fetch("/api/doc-jobs/download-docx", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ job_ids: Array.from(selectedDocJobs) }),
+          });
+          if (!res.ok) {
+            let msg = "下載失敗，找不到可下載的 Word 文件。";
+            try {
+              const body = await res.json();
+              if (body && body.error) msg = body.error;
+            } catch (error) {}
+            alert(msg);
+            return;
+          }
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = "document_workspace_docx.zip";
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          URL.revokeObjectURL(url);
+        } catch (error) {
+          alert("下載失敗，請稍後再試。");
+        } finally {
+          docJobsDownload.disabled = false;
+        }
       }
 
       async function loadDocJobs() {
@@ -254,6 +392,10 @@
       }
 
       docJobsRefresh.addEventListener("click", loadDocJobs);
+      docJobsSelectAll.addEventListener("click", () => setAllDocSelections(true));
+      docJobsSelectNone.addEventListener("click", () => setAllDocSelections(false));
+      docJobsDeleteSelected.addEventListener("click", deleteSelectedDocJobs);
+      docJobsDownload.addEventListener("click", downloadSelectedDocJobs);
       bindUploadFiles({
         inputId: "docUploadInput",
         summaryId: "docUploadFilesSummary",

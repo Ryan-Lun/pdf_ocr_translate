@@ -237,7 +237,8 @@ def upload_doc_workspace() -> str:
 
     source_lang = request.form.get("source_lang", "auto").strip() or "auto"
     target_lang = request.form.get("target_lang", "en").strip() or "en"
-    _enforce_submit_quota("")
+    creator_name = _display_creator_name(request.form.get("creator_name", ""))
+    _enforce_submit_quota(creator_name)
 
     for file in files:
         if not file or file.filename == "":
@@ -253,6 +254,7 @@ def upload_doc_workspace() -> str:
             display_name,
             source_lang,
             target_lang,
+            creator_name,
         )
         try:
             tmp_path.unlink(missing_ok=True)
@@ -275,7 +277,8 @@ def upload_word_workspace() -> str:
     source_lang = request.form.get("source_lang", "auto").strip() or "auto"
     target_lang = request.form.get("target_lang", "en").strip() or "en"
     retain_terms = request.form.get("retain_terms", "")
-    _enforce_submit_quota("")
+    creator_name = _display_creator_name(request.form.get("creator_name", ""))
+    _enforce_submit_quota(creator_name)
 
     for file in files:
         if not file or file.filename == "":
@@ -291,6 +294,7 @@ def upload_word_workspace() -> str:
             display_name,
             source_lang,
             target_lang,
+            creator_name=creator_name,
             retain_terms_raw=retain_terms,
         )
         try:

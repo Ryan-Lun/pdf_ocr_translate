@@ -149,6 +149,7 @@ def enqueue_doc_job_from_upload(
     display_name: str,
     source_lang: str,
     target_lang: str,
+    creator_name: str = "",
 ) -> str:
     job_id = uuid.uuid4().hex
     job_dir = jobs.job_dir(job_id)
@@ -163,6 +164,7 @@ def enqueue_doc_job_from_upload(
             "doc_stage": "uploaded",
             "source_lang": source_lang,
             "target_lang": target_lang,
+            "creator_name": creator_name,
         },
     )
     jobs.job_store.create_job(
