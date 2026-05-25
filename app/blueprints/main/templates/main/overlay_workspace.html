@@ -124,6 +124,7 @@
         <div id="jobsList" class="jobs-list"></div>
       </section>
     </main>
+    <script src="{{ url_for('static', filename='upload_files.js') }}"></script>
     <script>
       const jobsList = document.getElementById("jobsList");
       const jobsEmpty = document.getElementById("jobsEmpty");
@@ -132,10 +133,6 @@
       const jobsSelectAll = document.getElementById("jobsSelectAll");
       const jobsSelectNone = document.getElementById("jobsSelectNone");
       const jobsDeleteSelected = document.getElementById("jobsDeleteSelected");
-      const uploadInput = document.getElementById("overlayUploadInput");
-      const uploadFilesSummary = document.getElementById("uploadFilesSummary");
-      const uploadFilesToggle = document.getElementById("uploadFilesToggle");
-      const uploadFilesList = document.getElementById("uploadFilesList");
       const documentModeSelect = document.getElementById("documentModeSelect");
       const sourceLangSelect = document.getElementById("sourceLangSelect");
       let translateModeSelect = document.getElementById("translateModeSelect");
@@ -529,83 +526,6 @@
         });
       }
 
-      function bindUploadFiles() {
-        let filesExpanded = false;
-        let selectedFiles = [];
-
-        const fileKey = (file) => `${file.name}::${file.size}::${file.lastModified}`;
-        const syncUploadInputFiles = () => {
-          const dataTransfer = new DataTransfer();
-          selectedFiles.forEach((file) => dataTransfer.items.add(file));
-          uploadInput.files = dataTransfer.files;
-        };
-        const removeUploadFile = (targetKey) => {
-          selectedFiles = selectedFiles.filter((file) => fileKey(file) !== targetKey);
-          syncUploadInputFiles();
-          renderUploadFiles();
-        };
-        const renderUploadFiles = () => {
-          if (!selectedFiles.length) {
-            uploadFilesSummary.textContent = "尚未選擇檔案";
-            uploadFilesToggle.style.display = "none";
-            uploadFilesList.style.display = "none";
-            uploadFilesList.innerHTML = "";
-            filesExpanded = false;
-            uploadFilesToggle.textContent = "展開";
-            return;
-          }
-          uploadFilesSummary.textContent = `已選 ${selectedFiles.length} 個檔案`;
-          uploadFilesToggle.style.display = "inline-flex";
-          uploadFilesToggle.textContent = filesExpanded ? "收合" : "展開";
-          if (!filesExpanded) {
-            uploadFilesList.style.display = "none";
-            uploadFilesList.innerHTML = "";
-            return;
-          }
-          uploadFilesList.innerHTML = "";
-          const listEl = document.createElement("ul");
-          selectedFiles.forEach((file) => {
-            const itemEl = document.createElement("li");
-            itemEl.className = "upload-files-item";
-
-            const nameEl = document.createElement("span");
-            nameEl.className = "upload-files-name";
-            nameEl.textContent = file.name;
-
-            const removeBtn = document.createElement("button");
-            removeBtn.type = "button";
-            removeBtn.className = "Danger upload-files-remove";
-            removeBtn.textContent = "移除";
-            removeBtn.addEventListener("click", () => {
-              removeUploadFile(fileKey(file));
-            });
-
-            itemEl.appendChild(nameEl);
-            itemEl.appendChild(removeBtn);
-            listEl.appendChild(itemEl);
-          });
-          uploadFilesList.appendChild(listEl);
-          uploadFilesList.style.display = "block";
-        };
-        uploadFilesToggle.addEventListener("click", () => {
-          filesExpanded = !filesExpanded;
-          renderUploadFiles();
-        });
-        uploadInput.addEventListener("change", () => {
-          const nextFiles = Array.from(uploadInput.files || []);
-          const seen = new Set(selectedFiles.map((file) => fileKey(file)));
-          nextFiles.forEach((file) => {
-            const key = fileKey(file);
-            if (seen.has(key)) return;
-            selectedFiles.push(file);
-            seen.add(key);
-          });
-          syncUploadInputFiles();
-          renderUploadFiles();
-        });
-        renderUploadFiles();
-      }
-
       jobsRefresh.addEventListener("click", loadJobs);
       jobsDownload.addEventListener("click", downloadTranslatedBatch);
       jobsSelectAll.addEventListener("click", () => setAllSelections(true));
@@ -616,7 +536,12 @@
       documentModeSelect?.addEventListener("change", syncSourceLangControl);
       syncTranslateModelSelection();
       syncSourceLangControl();
-      bindUploadFiles();
+      bindUploadFiles({
+        inputId: "overlayUploadInput",
+        summaryId: "uploadFilesSummary",
+        toggleId: "uploadFilesToggle",
+        listId: "uploadFilesList",
+      });
       loadJobs();
       connectJobsStream();
     </script>

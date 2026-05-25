@@ -12,7 +12,10 @@
       <header class="hero">
         <div class="hero-title-split">
           <h1>Word 原版面翻譯</h1>
-          <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
+          <div class="button-row--tight">
+            <a class="ghost back-link" href="{{ url_for('.glossary_page') }}">詞彙庫管理</a>
+            <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
+          </div>
         </div>
         <!-- <p class="eyebrow">DOCX -> Translate -> DOCX</p> -->
       </header>
@@ -20,8 +23,15 @@
         <form method="post" enctype="multipart/form-data" action="{{ url_for('.upload_word_workspace') }}">
           <label class="file-input">
             <span>選擇 Word（.doc / .docx，可多選）</span>
-            <input type="file" name="docx" accept=".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple />
+            <input id="wordUploadInput" type="file" name="docx" accept=".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple />
           </label>
+          <div id="wordUploadFiles" class="upload-files">
+            <div class="upload-files-header">
+              <span id="wordUploadFilesSummary">尚未選擇檔案</span>
+              <button id="wordUploadFilesToggle" class="ghost" type="button" style="display:none">展開</button>
+            </div>
+            <div id="wordUploadFilesList" class="upload-files-list" style="display:none"></div>
+          </div>
           <div class="form-grid">
             <label>
               <span>來源語言</span>
@@ -60,6 +70,7 @@
         <div id="wordJobsList" class="jobs-list"></div>
       </section>
     </main>
+    <script src="{{ url_for('static', filename='upload_files.js') }}"></script>
     <script>
       const wordJobsList = document.getElementById("wordJobsList");
       const wordJobsEmpty = document.getElementById("wordJobsEmpty");
@@ -224,6 +235,12 @@
       }
 
       wordJobsRefresh.addEventListener("click", loadWordJobs);
+      bindUploadFiles({
+        inputId: "wordUploadInput",
+        summaryId: "wordUploadFilesSummary",
+        toggleId: "wordUploadFilesToggle",
+        listId: "wordUploadFilesList",
+      });
       loadWordJobs();
       setInterval(loadWordJobs, 10000);
     </script>

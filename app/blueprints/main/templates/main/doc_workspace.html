@@ -11,7 +11,10 @@
       <header class="hero">
         <div class="hero-title-split">
           <h1>PDF 翻譯重建</h1>
-          <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
+          <div class="button-row--tight">
+            <a class="ghost back-link" href="{{ url_for('.glossary_page') }}">詞彙庫管理</a>
+            <a class="ghost back-link" href="{{ url_for('.index') }}">返回功能入口</a>
+          </div>
         </div>
         <!-- <p class="eyebrow">PDF -> PP-StructureV3 -> Markdown -> HTML -> Translate -> Word</p> -->
       </header>
@@ -19,8 +22,15 @@
         <form method="post" enctype="multipart/form-data" action="{{ url_for('.upload_doc_workspace') }}">
           <label class="file-input">
             <span>選擇 PDF（可多選）</span>
-            <input type="file" name="pdf" accept="application/pdf" multiple />
+            <input id="docUploadInput" type="file" name="pdf" accept="application/pdf" multiple />
           </label>
+          <div id="docUploadFiles" class="upload-files">
+            <div class="upload-files-header">
+              <span id="docUploadFilesSummary">尚未選擇檔案</span>
+              <button id="docUploadFilesToggle" class="ghost" type="button" style="display:none">展開</button>
+            </div>
+            <div id="docUploadFilesList" class="upload-files-list" style="display:none"></div>
+          </div>
           <div class="form-grid">
             <label>
               <span>來源語言</span>
@@ -60,6 +70,7 @@
         <div id="docJobsList" class="jobs-list"></div>
       </section>
     </main>
+    <script src="{{ url_for('static', filename='upload_files.js') }}"></script>
     <script>
       const docJobsList = document.getElementById("docJobsList");
       const docJobsEmpty = document.getElementById("docJobsEmpty");
@@ -243,6 +254,12 @@
       }
 
       docJobsRefresh.addEventListener("click", loadDocJobs);
+      bindUploadFiles({
+        inputId: "docUploadInput",
+        summaryId: "docUploadFilesSummary",
+        toggleId: "docUploadFilesToggle",
+        listId: "docUploadFilesList",
+      });
       loadDocJobs();
       setInterval(loadDocJobs, 10000);
     </script>
