@@ -96,7 +96,8 @@
             </label>
           </div>
           <div class="form-note">
-            <span>注意事項 : 此模式翻譯時間較久，翻譯完成後請檢查輸出結果</span>
+            <h4><i class="bi bi-info-circle"></i> 注意事項</h4>
+            <p>此模式翻譯時間較久，翻譯完成後請檢查輸出結果</p>
             <p><code>表單文件</code><br>適用頁面以表格為主的文件<br>(Q-2001, Q-2010, Q-2014, Q-2013, Q-2011, Q-2156,<br>Q-2001, Q-2473, Q-2006, Q-2007, Q-2300, Q-2285, Q-2286,<br>Q-2027, Q-2039, Q-2088, Q-2404, Q-2531, Q-2530, Q-2439,<br>Q-2005, Q-2497, Q-2305)</p>
             <p><code>一般文件</code><br>中英文翻譯對照檢查，如果已經有英文翻譯就不翻譯<br>適用 Q-2305, Q-2005 格式的文件</p>
             <p><code>一般文件（中文必翻）</code><br>不做中英文翻譯對照檢查，只要包含中文就翻譯</p>
@@ -124,6 +125,7 @@
         <div id="jobsList" class="jobs-list"></div>
       </section>
     </main>
+    <script src="{{ url_for('static', filename='upload_files.js') }}"></script>
     <script>
       const jobsList = document.getElementById("jobsList");
       const jobsEmpty = document.getElementById("jobsEmpty");
@@ -132,10 +134,6 @@
       const jobsSelectAll = document.getElementById("jobsSelectAll");
       const jobsSelectNone = document.getElementById("jobsSelectNone");
       const jobsDeleteSelected = document.getElementById("jobsDeleteSelected");
-      const uploadInput = document.getElementById("overlayUploadInput");
-      const uploadFilesSummary = document.getElementById("uploadFilesSummary");
-      const uploadFilesToggle = document.getElementById("uploadFilesToggle");
-      const uploadFilesList = document.getElementById("uploadFilesList");
       const documentModeSelect = document.getElementById("documentModeSelect");
       const sourceLangSelect = document.getElementById("sourceLangSelect");
       let translateModeSelect = document.getElementById("translateModeSelect");
@@ -529,83 +527,6 @@
         });
       }
 
-      function bindUploadFiles() {
-        let filesExpanded = false;
-        let selectedFiles = [];
-
-        const fileKey = (file) => `${file.name}::${file.size}::${file.lastModified}`;
-        const syncUploadInputFiles = () => {
-          const dataTransfer = new DataTransfer();
-          selectedFiles.forEach((file) => dataTransfer.items.add(file));
-          uploadInput.files = dataTransfer.files;
-        };
-        const removeUploadFile = (targetKey) => {
-          selectedFiles = selectedFiles.filter((file) => fileKey(file) !== targetKey);
-          syncUploadInputFiles();
-          renderUploadFiles();
-        };
-        const renderUploadFiles = () => {
-          if (!selectedFiles.length) {
-            uploadFilesSummary.textContent = "尚未選擇檔案";
-            uploadFilesToggle.style.display = "none";
-            uploadFilesList.style.display = "none";
-            uploadFilesList.innerHTML = "";
-            filesExpanded = false;
-            uploadFilesToggle.textContent = "展開";
-            return;
-          }
-          uploadFilesSummary.textContent = `已選 ${selectedFiles.length} 個檔案`;
-          uploadFilesToggle.style.display = "inline-flex";
-          uploadFilesToggle.textContent = filesExpanded ? "收合" : "展開";
-          if (!filesExpanded) {
-            uploadFilesList.style.display = "none";
-            uploadFilesList.innerHTML = "";
-            return;
-          }
-          uploadFilesList.innerHTML = "";
-          const listEl = document.createElement("ul");
-          selectedFiles.forEach((file) => {
-            const itemEl = document.createElement("li");
-            itemEl.className = "upload-files-item";
-
-            const nameEl = document.createElement("span");
-            nameEl.className = "upload-files-name";
-            nameEl.textContent = file.name;
-
-            const removeBtn = document.createElement("button");
-            removeBtn.type = "button";
-            removeBtn.className = "Danger upload-files-remove";
-            removeBtn.textContent = "移除";
-            removeBtn.addEventListener("click", () => {
-              removeUploadFile(fileKey(file));
-            });
-
-            itemEl.appendChild(nameEl);
-            itemEl.appendChild(removeBtn);
-            listEl.appendChild(itemEl);
-          });
-          uploadFilesList.appendChild(listEl);
-          uploadFilesList.style.display = "block";
-        };
-        uploadFilesToggle.addEventListener("click", () => {
-          filesExpanded = !filesExpanded;
-          renderUploadFiles();
-        });
-        uploadInput.addEventListener("change", () => {
-          const nextFiles = Array.from(uploadInput.files || []);
-          const seen = new Set(selectedFiles.map((file) => fileKey(file)));
-          nextFiles.forEach((file) => {
-            const key = fileKey(file);
-            if (seen.has(key)) return;
-            selectedFiles.push(file);
-            seen.add(key);
-          });
-          syncUploadInputFiles();
-          renderUploadFiles();
-        });
-        renderUploadFiles();
-      }
-
       jobsRefresh.addEventListener("click", loadJobs);
       jobsDownload.addEventListener("click", downloadTranslatedBatch);
       jobsSelectAll.addEventListener("click", () => setAllSelections(true));
@@ -616,7 +537,12 @@
       documentModeSelect?.addEventListener("change", syncSourceLangControl);
       syncTranslateModelSelection();
       syncSourceLangControl();
-      bindUploadFiles();
+      bindUploadFiles({
+        inputId: "overlayUploadInput",
+        summaryId: "uploadFilesSummary",
+        toggleId: "uploadFilesToggle",
+        listId: "uploadFilesList",
+      });
       loadJobs();
       connectJobsStream();
     </script>

@@ -2077,6 +2077,7 @@ body.editor .thumbs {
   border: none;
   background: transparent;
   padding: 0 0 0 0rem;
+  gap: 0.5rem;
   display: grid;
   justify-items: center;
   align-items: start;

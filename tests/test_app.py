@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import threading
+import zipfile
 from pathlib import Path
 
 from app.services import jobs, pipeline, state, translation_memory
@@ -519,6 +520,36 @@ def test_api_jobs_returns_json(client):
     assert "jobs" in payload
 
 
+def test_doc_jobs_download_docx_returns_zip(client, monkeypatch):
+    captured = {}
+
+    def fake_zip(job_ids, job_type):
+        captured["job_ids"] = job_ids
+        captured["job_type"] = job_type
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as zf:
+            zf.writestr("sample_translated.docx", b"docx")
+        stream.seek(0)
+        return stream, 1
+
+    monkeypatch.setattr(jobs, "build_docx_zip", fake_zip)
+
+    resp = client.post("/api/doc-jobs/download-docx", json={"job_ids": ["a" * 32]})
+
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/zip"
+    assert captured == {"job_ids": {"a" * 32}, "job_type": "doc_workspace"}
+    with zipfile.ZipFile(io.BytesIO(resp.data)) as zf:
+        assert zf.namelist() == ["sample_translated.docx"]
+
+
+def test_word_jobs_download_docx_requires_selected_jobs(client):
+    resp = client.post("/api/word-jobs/download-docx", json={"job_ids": []})
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "No valid job IDs selected."
+
+
 def test_run_ocr_pipeline_job_skips_paragraph_align_for_general_force(tmp_path, monkeypatch):
     job_id = "d" * 32
     job_dir = tmp_path / "jobs" / job_id
@@ -830,13 +861,14 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
     captured: list[dict[str, str]] = []
 
-    def fake_enqueue(source_path, display_name, source_lang, target_lang, retain_terms_raw=None):
+    def fake_enqueue(source_path, display_name, source_lang, target_lang, creator_name="", retain_terms_raw=None):
         captured.append(
             {
                 "source_name": Path(source_path).name,
                 "display_name": display_name,
                 "source_lang": source_lang,
                 "target_lang": target_lang,
+                "creator_name": creator_name,
             }
         )
         return "b" * 32
@@ -851,6 +883,7 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
         data={
             "source_lang": "auto",
             "target_lang": "en",
+            "creator_name": "alice",
             "docx": (io.BytesIO(b"legacy doc"), "legacy.doc"),
         },
         content_type="multipart/form-data",
@@ -862,6 +895,7 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
     assert captured[0]["display_name"] == "legacy"
     assert captured[0]["source_lang"] == "auto"
     assert captured[0]["target_lang"] == "en"
+    assert captured[0]["creator_name"] == "alice"
 
 
 def test_upload_word_workspace_preserves_chinese_display_name(client, tmp_path, monkeypatch):
@@ -869,13 +903,14 @@ def test_upload_word_workspace_preserves_chinese_display_name(client, tmp_path, 
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
     captured: list[dict[str, str]] = []
 
-    def fake_enqueue(source_path, display_name, source_lang, target_lang, retain_terms_raw=None):
+    def fake_enqueue(source_path, display_name, source_lang, target_lang, creator_name="", retain_terms_raw=None):
         captured.append(
             {
                 "source_name": Path(source_path).name,
                 "display_name": display_name,
                 "source_lang": source_lang,
                 "target_lang": target_lang,
+                "creator_name": creator_name,
             }
         )
         return "b" * 32
@@ -901,6 +936,7 @@ def test_upload_word_workspace_preserves_chinese_display_name(client, tmp_path, 
     assert captured[0]["display_name"] == "中文檔名"
     assert captured[0]["source_lang"] == "auto"
     assert captured[0]["target_lang"] == "en"
+    assert captured[0]["creator_name"] == ""
 
 
 def test_upload_doc_workspace_passes_source_language(client, tmp_path, monkeypatch):
@@ -908,13 +944,14 @@ def test_upload_doc_workspace_passes_source_language(client, tmp_path, monkeypat
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
     captured: list[dict[str, str]] = []
 
-    def fake_enqueue(source_path, display_name, source_lang, target_lang):
+    def fake_enqueue(source_path, display_name, source_lang, target_lang, creator_name=""):
         captured.append(
             {
                 "source_name": Path(source_path).name,
                 "display_name": display_name,
                 "source_lang": source_lang,
                 "target_lang": target_lang,
+                "creator_name": creator_name,
             }
         )
         return "c" * 32
@@ -929,6 +966,7 @@ def test_upload_doc_workspace_passes_source_language(client, tmp_path, monkeypat
         data={
             "source_lang": "en",
             "target_lang": "zh",
+            "creator_name": "bob",
             "pdf": (io.BytesIO(b"%PDF-1.4"), "source.pdf"),
         },
         content_type="multipart/form-data",
@@ -941,6 +979,7 @@ def test_upload_doc_workspace_passes_source_language(client, tmp_path, monkeypat
             "display_name": "source",
             "source_lang": "en",
             "target_lang": "zh",
+            "creator_name": "bob",
         }
     ]
 

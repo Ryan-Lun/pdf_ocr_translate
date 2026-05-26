@@ -672,6 +672,50 @@ def download_translated_batch():
     )
 
 
+def _selected_job_ids_from_request() -> set[str] | tuple[Response, int]:
+    payload = request.get_json(force=True, silent=True) or {}
+    raw_ids = payload.get("job_ids")
+    if not isinstance(raw_ids, list):
+        return jsonify({"ok": False, "error": "Invalid job_ids payload."}), 400
+    job_ids = {str(item) for item in raw_ids if isinstance(item, str) and jobs.safe_job_id(item)}
+    if not job_ids:
+        return jsonify({"ok": False, "error": "No valid job IDs selected."}), 400
+    return job_ids
+
+
+def _download_docx_batch(job_type: str, empty_message: str, download_name: str):
+    selected = _selected_job_ids_from_request()
+    if isinstance(selected, tuple):
+        return selected
+    buf, count = jobs.build_docx_zip(selected, job_type)
+    if count == 0:
+        return jsonify({"ok": False, "error": empty_message}), 400
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=download_name,
+    )
+
+
+@api_bp.route("/doc-jobs/download-docx", methods=["POST"], endpoint="download_doc_jobs_docx")
+def download_doc_jobs_docx():
+    return _download_docx_batch(
+        "doc_workspace",
+        "No Word files found for selected document jobs.",
+        "document_workspace_docx.zip",
+    )
+
+
+@api_bp.route("/word-jobs/download-docx", methods=["POST"], endpoint="download_word_jobs_docx")
+def download_word_jobs_docx():
+    return _download_docx_batch(
+        "word_translate",
+        "No translated Word files found for selected jobs.",
+        "translated_word_docx.zip",
+    )
+
+
 @api_bp.route("/jobs/stream", methods=["GET"], endpoint="jobs_stream")
 def jobs_stream():
     @stream_with_context

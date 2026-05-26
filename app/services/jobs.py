@@ -392,6 +392,7 @@ def build_jobs_list(
                     "status_label": status_label,
                     "status": status_label,
                     "job_name": job_name,
+                    "creator_name": str(job_meta.get("creator_name") or "").strip() or None,
                     "download_name": build_docx_name(job_id, job_name),
                     "source_pdf_url": url_for(
                         "jobs.job_file", job_id=job_id, filename="source.pdf"
@@ -441,6 +442,7 @@ def build_jobs_list(
                     "status_label": status_label,
                     "status": status_label,
                     "job_name": job_name,
+                    "creator_name": str(job_meta.get("creator_name") or "").strip() or None,
                     "progress": float(job_meta.get("progress") or record.progress or 0.0),
                     "avg_quality": float(job_meta.get("avg_quality") or 0.0),
                     "target_lang": record.target_lang or job_meta.get("target_lang"),
@@ -833,6 +835,35 @@ def build_translated_zip(job_ids: set[str] | None) -> tuple[io.BytesIO, int]:
             count += 1
     buf.seek(0)
     return buf, count
+
+
+def build_docx_zip(job_ids: set[str], job_type: str) -> tuple[io.BytesIO, int]:
+    state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    buf = io.BytesIO()
+    names: set[str] = set()
+    base_counts: dict[str, int] = {}
+    file_count = 0
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for record in job_store.list_jobs(job_type):
+            job_id = record.job_id
+            if not safe_job_id(job_id) or job_id not in job_ids:
+                continue
+            job_dir_path = job_dir(job_id)
+            docx_path = job_dir_path / "output" / "output.docx"
+            if not docx_path.exists():
+                continue
+            job_name = normalize_job_name(getattr(record, "job_name", None)) or get_job_name(job_dir_path)
+            safe_name = build_download_base(job_id, job_name)
+            duplicate_count = base_counts.get(safe_name, 0) + 1
+            base_counts[safe_name] = duplicate_count
+            filename = build_docx_name(job_id, job_name)
+            if filename in names:
+                filename = f"{safe_name}_translated_{duplicate_count}.docx"
+            names.add(filename)
+            zf.write(docx_path, arcname=filename)
+            file_count += 1
+    buf.seek(0)
+    return buf, file_count
 
 
 def delete_job_dir(job_id: str) -> tuple[bool, str | None]:
