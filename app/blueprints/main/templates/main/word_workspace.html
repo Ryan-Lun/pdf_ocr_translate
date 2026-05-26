@@ -201,7 +201,8 @@
           const qualityText = typeof job.avg_quality === "number" && job.avg_quality > 0
             ? ` · 品質: ${job.avg_quality.toFixed(1)}/40`
             : "";
-          meta.textContent = `上傳時間: ${formatDate(job.updated_at)} · 狀態: ${job.status_label || "Unknown"}${durationText}${progressText}${qualityText}`;
+          // meta.textContent = `上傳時間: ${formatDate(job.updated_at)} · 狀態: ${job.status_label || "Unknown"}${durationText}${progressText}${qualityText}`;
+          meta.textContent = `上傳時間: ${formatDate(job.updated_at)} · 狀態: ${job.status_label || "Unknown"}${durationText}${progressText}`;
 
           const actions = document.createElement("div");
           actions.className = "job-actions";

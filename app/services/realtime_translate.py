@@ -30,6 +30,14 @@ def _realtime_debug_dir(job_dir: Path) -> Path:
     return job_dir / "realtime_debug" / "chunks"
 
 
+def _output_realtime_debug_dir(job_dir: Path) -> Path:
+    return job_dir / "output" / "realtime_debug" / "chunks"
+
+
+def _realtime_debug_roots(job_dir: Path) -> tuple[Path, ...]:
+    return (_realtime_debug_dir(job_dir), _output_realtime_debug_dir(job_dir))
+
+
 def _write_debug_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(str(content or ""), encoding="utf-8")
@@ -44,6 +52,10 @@ def _chunk_debug_path(job_dir: Path, chunk_label: str) -> Path:
     return _realtime_debug_dir(job_dir) / chunk_label
 
 
+def _chunk_debug_paths(job_dir: Path, chunk_label: str) -> tuple[Path, ...]:
+    return tuple(root / chunk_label for root in _realtime_debug_roots(job_dir))
+
+
 def _record_chunk_request(
     *,
     job_dir: Path,
@@ -53,16 +65,16 @@ def _record_chunk_request(
     payload: str,
     expected_ids: list[str],
 ) -> None:
-    chunk_dir = _chunk_debug_path(job_dir, chunk_label)
-    _write_debug_json(
-        chunk_dir / "request_meta.json",
-        {
-            "mode": mode,
-            "expected_ids": expected_ids,
-        },
-    )
-    _write_debug_text(chunk_dir / "system_prompt.txt", system_prompt)
-    _write_debug_text(chunk_dir / "payload.txt", payload)
+    for chunk_dir in _chunk_debug_paths(job_dir, chunk_label):
+        _write_debug_json(
+            chunk_dir / "request_meta.json",
+            {
+                "mode": mode,
+                "expected_ids": expected_ids,
+            },
+        )
+        _write_debug_text(chunk_dir / "system_prompt.txt", system_prompt)
+        _write_debug_text(chunk_dir / "payload.txt", payload)
 
 
 def _record_chunk_response(
@@ -72,10 +84,11 @@ def _record_chunk_response(
     attempt: int,
     content: str,
 ) -> None:
-    _write_debug_text(
-        _chunk_debug_path(job_dir, chunk_label) / f"response_attempt_{attempt}.txt",
-        content,
-    )
+    for chunk_dir in _chunk_debug_paths(job_dir, chunk_label):
+        _write_debug_text(
+            chunk_dir / f"response_attempt_{attempt}.txt",
+            content,
+        )
 
 
 def _record_chunk_error(
@@ -85,10 +98,11 @@ def _record_chunk_error(
     attempt: int,
     error: str,
 ) -> None:
-    _write_debug_text(
-        _chunk_debug_path(job_dir, chunk_label) / f"error_attempt_{attempt}.txt",
-        error,
-    )
+    for chunk_dir in _chunk_debug_paths(job_dir, chunk_label):
+        _write_debug_text(
+            chunk_dir / f"error_attempt_{attempt}.txt",
+            error,
+        )
 
 
 def _record_chunk_parsed(
@@ -97,10 +111,11 @@ def _record_chunk_parsed(
     chunk_label: str,
     translations: dict[str, str],
 ) -> None:
-    _write_debug_json(
-        _chunk_debug_path(job_dir, chunk_label) / "parsed_translations.json",
-        translations,
-    )
+    for chunk_dir in _chunk_debug_paths(job_dir, chunk_label):
+        _write_debug_json(
+            chunk_dir / "parsed_translations.json",
+            translations,
+        )
 
 
 def _record_chunk_plan(job_dir: Path, chunks: list[list[dict[str, Any]]]) -> None:
@@ -121,6 +136,7 @@ def _record_chunk_plan(job_dir: Path, chunks: list[list[dict[str, Any]]]) -> Non
             }
         )
     _write_debug_json(job_dir / "realtime_debug" / "chunk_plan.json", payload)
+    _write_debug_json(job_dir / "output" / "realtime_debug" / "chunk_plan.json", payload)
 
 
 def _normalize_numbered_item_breaks(text: str) -> str:

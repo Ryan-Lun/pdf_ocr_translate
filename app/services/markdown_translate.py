@@ -14,7 +14,7 @@ from lang_utils import (
     traditional_chinese_instruction,
 )
 
-from . import glossary, openai_config, state
+from . import glossary, openai_config, state, translation_debug
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +134,9 @@ def _build_system_prompt(
         glossary_lines = "\n".join(
             f"- {src} => {dst}" for src, dst in glossary_entries[:50]
         )
+        prompt.append(
+            "If the input contains tokens in the form [[[GLOSSARY_TERM_0001::TERM]]], copy those tokens exactly unchanged and keep TERM verbatim."
+        )
         prompt.append("Use the following glossary when applicable:")
         prompt.append(glossary_lines)
     return "\n".join(part for part in prompt if part).strip()
@@ -153,18 +156,55 @@ def _translate_snippet(
     client: Any,
     model: str,
     system_prompt: str,
+    glossary_entries: list[tuple[str, str]] | None = None,
+    debug_job_dir: Path | None = None,
+    debug_custom_id: str | None = None,
 ) -> str:
     if not snippet.strip():
         return snippet
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": snippet},
-        ],
-    )
+    protected_snippet = glossary.apply_glossary_with_protection(snippet, glossary_entries)
+    if debug_job_dir is not None and debug_custom_id:
+        translation_debug.record_request(
+            job_dir=debug_job_dir,
+            chunk_label=debug_custom_id,
+            mode="doc_workspace_markdown",
+            system_prompt=system_prompt,
+            payload=protected_snippet,
+            expected_ids=[debug_custom_id],
+        )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": protected_snippet},
+            ],
+        )
+    except Exception as exc:
+        if debug_job_dir is not None and debug_custom_id:
+            translation_debug.record_error(
+                job_dir=debug_job_dir,
+                chunk_label=debug_custom_id,
+                attempt=1,
+                error=str(exc),
+            )
+        raise
     translated = _extract_message_text(response)
-    return translated or snippet
+    if debug_job_dir is not None and debug_custom_id:
+        translation_debug.record_response(
+            job_dir=debug_job_dir,
+            chunk_label=debug_custom_id,
+            attempt=1,
+            content=translated,
+        )
+    restored = glossary.restore_protected_glossary_terms(translated)
+    if debug_job_dir is not None and debug_custom_id and restored:
+        translation_debug.record_parsed(
+            job_dir=debug_job_dir,
+            chunk_label=debug_custom_id,
+            translations={debug_custom_id: restored},
+        )
+    return restored or glossary.restore_protected_glossary_terms(snippet)
 
 
 def _translate_text(
@@ -172,25 +212,60 @@ def _translate_text(
     client: Any,
     model: str,
     system_prompt: str,
+    glossary_entries: list[tuple[str, str]] | None = None,
+    debug_job_dir: Path | None = None,
+    debug_custom_id: str | None = None,
 ) -> str:
     if not text.strip():
         return text
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    "Translate the following source text from an HTML text node.\n"
-                    "Return only the translated text. Do not add tags or explanations.\n"
-                    f"{text}"
-                ),
-            },
-        ],
+    protected_text = glossary.apply_glossary_with_protection(text, glossary_entries)
+    payload = (
+        "Translate the following source text from an HTML text node.\n"
+        "Return only the translated text. Do not add tags or explanations.\n"
+        f"{protected_text}"
     )
+    if debug_job_dir is not None and debug_custom_id:
+        translation_debug.record_request(
+            job_dir=debug_job_dir,
+            chunk_label=debug_custom_id,
+            mode="doc_workspace_html",
+            system_prompt=system_prompt,
+            payload=payload,
+            expected_ids=[debug_custom_id],
+        )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": payload},
+            ],
+        )
+    except Exception as exc:
+        if debug_job_dir is not None and debug_custom_id:
+            translation_debug.record_error(
+                job_dir=debug_job_dir,
+                chunk_label=debug_custom_id,
+                attempt=1,
+                error=str(exc),
+            )
+        raise
     translated = _extract_message_text(response)
-    return translated or text
+    if debug_job_dir is not None and debug_custom_id:
+        translation_debug.record_response(
+            job_dir=debug_job_dir,
+            chunk_label=debug_custom_id,
+            attempt=1,
+            content=translated,
+        )
+    restored = glossary.restore_protected_glossary_terms(translated)
+    if debug_job_dir is not None and debug_custom_id and restored:
+        translation_debug.record_parsed(
+            job_dir=debug_job_dir,
+            chunk_label=debug_custom_id,
+            translations={debug_custom_id: restored},
+        )
+    return restored or glossary.restore_protected_glossary_terms(text)
 
 
 def _translate_pandoc_doc(
@@ -200,6 +275,7 @@ def _translate_pandoc_doc(
     target_lang: str,
     snippet_to_text,
     text_to_blocks,
+    debug_job_dir: Path | None = None,
 ) -> dict[str, Any]:
     api_version = doc.get("pandoc-api-version", [])
     blocks = doc.get("blocks", []) or []
@@ -212,13 +288,24 @@ def _translate_pandoc_doc(
     translated_blocks: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
     pending_len = 0
+    chunk_counter = 0
 
     def flush_pending() -> None:
-        nonlocal pending, pending_len
+        nonlocal pending, pending_len, chunk_counter
         if not pending:
             return
+        chunk_counter += 1
         snippet = snippet_to_text(api_version, meta, pending)
-        translated_snippet = _translate_snippet(snippet, client, model, system_prompt)
+        chunk_label = f"chunk_{chunk_counter:04d}"
+        translated_snippet = _translate_snippet(
+            snippet,
+            client,
+            model,
+            system_prompt,
+            glossary_entries=glossary_entries,
+            debug_job_dir=debug_job_dir,
+            debug_custom_id=chunk_label,
+        )
         parsed_blocks = text_to_blocks(translated_snippet)
         translated_blocks.extend(parsed_blocks or pending)
         pending = []
@@ -236,6 +323,18 @@ def _translate_pandoc_doc(
         pending_len += len(block_snippet)
 
     flush_pending()
+    if debug_job_dir is not None:
+        translation_debug.record_plan(
+            debug_job_dir,
+            [
+                {
+                    "chunk_label": f"chunk_{index:04d}",
+                    "mode": "doc_workspace_markdown",
+                    "size": 1,
+                }
+                for index in range(1, chunk_counter + 1)
+            ],
+        )
 
     translated_doc = {
         "pandoc-api-version": api_version,
@@ -250,6 +349,7 @@ def translate_markdown_file(
     out_path: Path,
     source_lang: str = "auto",
     target_lang: str = "en",
+    debug_job_dir: Path | None = None,
 ) -> Path:
     markdown_text = source_path.read_text(encoding="utf-8")
     doc = markdown_to_doc(markdown_text)
@@ -259,6 +359,7 @@ def translate_markdown_file(
         target_lang=target_lang,
         snippet_to_text=blocks_to_markdown,
         text_to_blocks=markdown_to_blocks,
+        debug_job_dir=debug_job_dir,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(doc_to_markdown(translated_doc), encoding="utf-8")
@@ -297,6 +398,7 @@ def _translate_html_text_nodes(
     *,
     source_lang: str = "auto",
     target_lang: str,
+    debug_job_dir: Path | None = None,
 ) -> str:
     parts = re.split(r"(<[^>]+>)", html_text)
     client, model = _get_translation_client()
@@ -304,6 +406,8 @@ def _translate_html_text_nodes(
     system_prompt = _build_system_prompt(target_lang, glossary_entries, source_lang=source_lang)
     translated_cache: dict[str, str] = {}
     translated_parts: list[str] = []
+    debug_ids: dict[str, str] = {}
+    debug_plan: list[dict[str, Any]] = []
 
     for part in parts:
         if not part:
@@ -321,10 +425,33 @@ def _translate_html_text_nodes(
             continue
         translated_core = translated_cache.get(core)
         if translated_core is None:
-            translated_core = _translate_text(core, client, model, system_prompt)
+            debug_custom_id = debug_ids.get(core)
+            if debug_custom_id is None:
+                debug_custom_id = f"chunk_{len(debug_ids) + 1:04d}"
+                debug_ids[core] = debug_custom_id
+                debug_plan.append(
+                    {
+                        "chunk_label": debug_custom_id,
+                        "mode": "doc_workspace_html",
+                        "size": 1,
+                        "chars": len(core),
+                        "ids": [debug_custom_id],
+                    }
+                )
+            translated_core = _translate_text(
+                core,
+                client,
+                model,
+                system_prompt,
+                glossary_entries=glossary_entries,
+                debug_job_dir=debug_job_dir,
+                debug_custom_id=debug_custom_id,
+            )
             translated_cache[core] = translated_core
         translated_parts.append(f"{leading}{escape(translated_core, quote=False)}{trailing}")
 
+    if debug_job_dir is not None:
+        translation_debug.record_plan(debug_job_dir, debug_plan)
     return "".join(translated_parts)
 
 
@@ -333,6 +460,7 @@ def translate_html_file(
     out_path: Path,
     source_lang: str = "auto",
     target_lang: str = "en",
+    debug_job_dir: Path | None = None,
 ) -> Path:
     html_text = source_path.read_text(encoding="utf-8")
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -340,6 +468,7 @@ def translate_html_file(
         html_text,
         source_lang=source_lang,
         target_lang=target_lang,
+        debug_job_dir=debug_job_dir,
     )
     out_path.write_text(_unwrap_html_code_fences(translated_html), encoding="utf-8")
     return out_path

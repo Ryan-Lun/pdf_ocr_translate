@@ -89,6 +89,7 @@ def run_doc_workspace_job(
             translated_html_path,
             source_lang=source_lang,
             target_lang=target_lang,
+            debug_job_dir=job_dir,
         )
 
         _raise_if_cancel_requested(job_id)

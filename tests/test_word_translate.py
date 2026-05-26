@@ -4,15 +4,19 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from zipfile import ZipFile
 
 import docx
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
-from app.services import state, translation_memory
+from app.services import jobs, state, translation_memory
 from app.services.word_translate import (
     EnhancedWordTranslator,
     build_word_quality_prompt,
     build_word_system_prompt,
     build_word_system_prompt_with_source,
+    enqueue_word_job_from_upload,
     ensure_docx_source,
 )
 
@@ -105,7 +109,16 @@ def test_word_translation_writes_tm_after_model_translation(tmp_path, monkeypatc
 
     translator = EnhancedWordTranslator()
 
-    async def fake_translate_text_with_quality(text, source_lang, target_lang, user_terms, cancel_event=None):
+    async def fake_translate_text_with_quality(
+        text,
+        source_lang,
+        target_lang,
+        user_terms,
+        glossary_entries=None,
+        debug_job_dir=None,
+        debug_custom_id=None,
+        cancel_event=None,
+    ):
         return "table content", 35
 
     monkeypatch.setattr(translator, "translate_text_with_quality", fake_translate_text_with_quality)
@@ -147,9 +160,150 @@ def test_word_zh_prompt_requires_traditional_chinese():
 
     assert "Traditional Chinese" in system_prompt
     assert "Never use Simplified Chinese characters" in system_prompt
+    assert "No Unnecessary Source-Language Leakage" in system_prompt
+    assert "Do not output bilingual text" in system_prompt
     assert "Traditional Chinese" in quality_prompt
+    assert "leaving unnecessary source-language text mixed into the output" in quality_prompt
 
 
 def test_word_prompt_can_include_explicit_source_language():
     system_prompt = build_word_system_prompt_with_source("en", "zh")
     assert "Source language: English." in system_prompt
+
+
+def test_word_prompt_requires_translating_translatable_segments():
+    system_prompt = build_word_system_prompt_with_source("en", "zh")
+
+    assert "Translate every translatable segment into Traditional Chinese" in system_prompt
+    assert "Preserve source-language text only when it is clearly non-translatable" in system_prompt
+
+
+def test_word_translation_applies_combined_glossary(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [("表格內容", "table content")],
+    )
+
+    class _EchoProtectedCompletions:
+        async def create(self, **kwargs):
+            payload = kwargs["messages"][-1]["content"]
+            protected_text = payload.split("<SOURCE_TEXT>\n", 1)[1].split("\n</SOURCE_TEXT>", 1)[0]
+            message = type("Message", (), {"content": protected_text})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _EchoProtectedChat:
+        completions = _EchoProtectedCompletions()
+
+    class _EchoProtectedClient:
+        chat = _EchoProtectedChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _EchoProtectedClient(),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("表格內容")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+
+    async def fake_validate_translation_quality(original, translated, target_lang):
+        return 40
+
+    monkeypatch.setattr(translator, "validate_translation_quality", fake_validate_translation_quality)
+    asyncio.run(_consume_translation(translator, source_path, output_path))
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == ["table content"]
+    assert (tmp_path / "realtime_debug" / "chunk_plan.json").exists()
+    assert (tmp_path / "realtime_debug" / "chunks" / "chunk_0001" / "parsed_translations.json").exists()
+
+
+def test_enqueue_word_job_from_upload_stores_creator_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    captured: dict[str, object] = {}
+
+    def fake_create_job(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.create_job", fake_create_job)
+    monkeypatch.setattr("app.services.word_translate.jobs.notify_jobs_update", lambda: None)
+
+    source_path = tmp_path / "source.docx"
+    source_path.write_bytes(b"docx")
+
+    job_id = enqueue_word_job_from_upload(
+        source_path,
+        "sample",
+        "auto",
+        "en",
+        creator_name="alice",
+    )
+
+    meta = jobs.load_job_meta(state.JOB_ROOT / job_id)
+    assert meta is not None
+    assert meta["creator_name"] == "alice"
+    assert captured["payload"]["creator_name"] == "alice"
+
+
+def test_word_translation_preserves_header_field_code_paragraph(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _FailingClient(),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("表格內容")
+    header = source_doc.sections[0].header
+    paragraph = header.paragraphs[0]
+    paragraph.add_run("頁次: ")
+    begin = paragraph.add_run()
+    begin._r.append(OxmlElement("w:fldChar"))
+    begin._r[-1].set(qn("w:fldCharType"), "begin")
+    instr = paragraph.add_run()
+    instr_text = OxmlElement("w:instrText")
+    instr_text.set(qn("xml:space"), "preserve")
+    instr_text.text = " PAGE "
+    instr._r.append(instr_text)
+    separate = paragraph.add_run()
+    separate._r.append(OxmlElement("w:fldChar"))
+    separate._r[-1].set(qn("w:fldCharType"), "separate")
+    result = paragraph.add_run("1")
+    end = paragraph.add_run()
+    end._r.append(OxmlElement("w:fldChar"))
+    end._r[-1].set(qn("w:fldCharType"), "end")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+
+    async def fake_translate_text_with_quality(
+        text,
+        source_lang,
+        target_lang,
+        user_terms,
+        glossary_entries=None,
+        debug_job_dir=None,
+        debug_custom_id=None,
+        cancel_event=None,
+    ):
+        return "table content", 35
+
+    monkeypatch.setattr(translator, "translate_text_with_quality", fake_translate_text_with_quality)
+    asyncio.run(_consume_translation(translator, source_path, output_path))
+
+    translated_doc = docx.Document(output_path)
+    assert translated_doc.paragraphs[0].text == "table content"
+    assert translated_doc.sections[0].header.paragraphs[0].text == "頁次: 1"
+    with ZipFile(output_path) as zf:
+        header_xml = zf.read("word/header1.xml").decode("utf-8", "ignore")
+    assert "instrText" in header_xml
+    assert " PAGE " in header_xml

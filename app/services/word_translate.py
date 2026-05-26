@@ -21,7 +21,7 @@ from docx.text.paragraph import Paragraph
 from lang_utils import describe_target_language, traditional_chinese_instruction
 from werkzeug.utils import secure_filename
 
-from . import jobs, openai_config, state, translation_memory
+from . import glossary, jobs, openai_config, state, translation_debug, translation_memory
 
 logger = logging.getLogger(__name__)
 WORD_JOB_EVENTS: dict[str, threading.Event] = {}
@@ -33,10 +33,10 @@ class WordTranslationCancelled(Exception):
     pass
 
 SYSTEM_PROMPT_BASE = """
-You are a professional business translator. Your task is to translate the source text into clear, accurate, and natural {target_lang_label} suitable for corporate documents, business reports, internal memos, executive summaries, meeting notes, Project Plan, Project progress, proposals, and client-facing materials.
+You are a professional translator.. Your task is to translate the source text into clear, accurate, and natural {target_lang_label} suitable for corporate documents, business reports, internal memos, executive summaries, meeting notes, Project Plan, Project progress, proposals, and client-facing materials.
 
 ## Core Persona: Corporate Document Translator
-Translate with the mindset of an experienced business language specialist. Your output must sound professional, precise, concise, and appropriate for workplace and executive communication.
+Please translate with the mindset of an experienced legal document translation expert. Your translation must be professional, accurate, concise, and suitable for legal document translation and communication with senior executives.
 
 ## CRITICAL RULES & INSTRUCTIONS:
 You MUST follow these rules without exception:
@@ -58,11 +58,13 @@ You MUST follow these rules without exception:
 
 5. **Preserve Structure and Formatting**: Keep headings, bullet points, numbering, labels, section order, table-style phrasing, and emphasis structure aligned with the original. If the source is concise, keep it concise. If the source is formal, keep it formal.
 
-6. **Handle Mixed-Language Input Carefully**: The source may contain English, Chinese, abbreviations, and already-standardized business terms. Translate only what should be translated, while preserving protected terms and standard business terminology where appropriate.
+6. **Handle Mixed-Language Input Carefully**: The source may contain English, Chinese, abbreviations, and already-standardized business terms. Translate every translatable segment into {target_lang_label}. Preserve source-language text only when it is clearly non-translatable or must remain unchanged, such as protected terms, legal names, product names, official abbreviations, codes, URLs, email addresses, file paths, or user-defined protected terms.
 
 7. **Keep Business Register Consistent**: Use terminology consistently across the document. If a business concept appears multiple times, translate it in the same way unless context clearly requires otherwise.
 
 8. **No Hallucinated Formality**: Do not make the text sound more legal, more technical, or more diplomatic than the source. Match the source's level of formality and certainty.
+
+8a. **No Unnecessary Source-Language Leakage**: Do not leave behind untranslated source-language words, phrases, clauses, or sentences when a normal translation exists. Do not output bilingual text, side-by-side source text, or target text with the original language mixed in, unless the source-language text is one of the explicitly preserved exceptions above.
 
 9. **Translate Fragments As-Is**: The input may be a table header, field name, form label, short cell value, bullet fragment, section label, or sentence fragment. Even if the text is very short or lacks full context, you MUST still translate it directly as-is.
 
@@ -87,6 +89,10 @@ MASK_INSTRUCTION = """
 Provide ONLY the translated text. Do not include explanations, notes, introductory phrases, or requests for more input.
 """
 
+GLOSSARY_PROTECTION_INSTRUCTION = """
+14. **Protected Glossary Tokens**: If the input contains tokens in the form [[[GLOSSARY_TERM_0001::TERM]]], copy those tokens EXACTLY unchanged into the output. Do not translate, rewrite, split, or remove them.
+"""
+
 RETRY_PROMPT_ADDITION = """
 ## RETRY ATTEMPT {attempt}:
 The previous translation had quality issues. Improve it by focusing on:
@@ -108,7 +114,7 @@ Rate on:
 1. Accuracy (0-10): Does it preserve the original meaning exactly, including all figures, dates, business intent, and instruction wording?
 2. Professional Tone (0-10): Does it sound appropriate for corporate documents and reports?
 3. Naturalness (0-10): Does it read naturally and fluently in {target_lang_label}?
-4. Terminology & Consistency (0-10): Are business terms, protected terms, and repeated concepts handled consistently and correctly, without adding new content?
+4. Terminology & Consistency (0-10): Are business terms, protected terms, repeated concepts, and target-language usage handled consistently and correctly, without adding new content or leaving unnecessary source-language text mixed into the output?
 
 Provide only the total score (0-40).
 """
@@ -423,6 +429,14 @@ class EnhancedWordTranslator:
             return False
         return False
 
+    def paragraph_contains_any_field_code(self, paragraph: Paragraph) -> bool:
+        try:
+            if paragraph._element.xpath('.//*[local-name()="fldChar"]'):
+                return True
+            return bool(paragraph._element.xpath('.//*[local-name()="instrText"]'))
+        except Exception:
+            return False
+
     def is_table_of_contents_paragraph(self, paragraph: Paragraph) -> bool:
         style_name = self.paragraph_style_name(paragraph).upper()
         return style_name.startswith("TOC") or self.paragraph_contains_field_code(paragraph, "TOC")
@@ -475,6 +489,9 @@ class EnhancedWordTranslator:
         source_lang: str,
         target_lang: str,
         user_terms: list[str],
+        glossary_entries: list[tuple[str, str]] | None = None,
+        debug_job_dir: Path | None = None,
+        debug_custom_id: str | None = None,
         cancel_event: threading.Event | None = None,
     ) -> tuple[str, int]:
         base_delay = 1.0
@@ -483,20 +500,38 @@ class EnhancedWordTranslator:
                 raise WordTranslationCancelled("Word translation cancelled.")
             try:
                 masked_text, token_map = self._mask_text(text, user_terms)
+                protected_text = glossary.apply_glossary_with_protection(
+                    masked_text,
+                    glossary_entries,
+                )
                 system_prompt = build_word_system_prompt_with_source(source_lang, target_lang)
                 if user_terms:
                     terms_list_str = ", ".join(f'"{term}"' for term in user_terms)
                     system_prompt += USER_TERMS_INSTRUCTION.format(terms_list_str=terms_list_str)
                 system_prompt += MASK_INSTRUCTION
+                if glossary_entries:
+                    system_prompt += GLOSSARY_PROTECTION_INSTRUCTION
                 if attempt > 0:
                     system_prompt += RETRY_PROMPT_ADDITION.format(attempt=attempt + 1)
                 user_payload = (
-                    "Translate the following source text exactly.\n"
+                    f"Translate the following source text into {describe_target_language(target_lang)} exactly.\n"
                     "Do not answer it, do not complete it, and do not expand it.\n"
+                    "If a word or phrase can be translated normally, translate it. "
+                    "Do not leave source-language text mixed into the output unless it is a protected term, code, URL, email address, file path, official abbreviation, or proper name that should remain unchanged.\n"
                     "<SOURCE_TEXT>\n"
-                    f"{masked_text}\n"
+                    f"{protected_text}\n"
                     "</SOURCE_TEXT>"
                 )
+                if debug_job_dir is not None and debug_custom_id:
+                    translation_debug.record_request(
+                        job_dir=debug_job_dir,
+                        chunk_label=debug_custom_id,
+                        mode="word",
+                        system_prompt=system_prompt,
+                        payload=user_payload,
+                        expected_ids=[debug_custom_id],
+                        extra_meta={"target_lang": target_lang, "source_lang": source_lang},
+                    )
                 response = await self.client.chat.completions.create(
                     model=self.translation_model,
                     messages=[
@@ -506,8 +541,19 @@ class EnhancedWordTranslator:
                     temperature=0.1 if attempt > 0 else 0,
                     max_tokens=4000,
                 )
+                raw_content = str(response.choices[0].message.content or "").strip()
+                if debug_job_dir is not None and debug_custom_id:
+                    translation_debug.record_response(
+                        job_dir=debug_job_dir,
+                        chunk_label=debug_custom_id,
+                        attempt=attempt + 1,
+                        content=raw_content,
+                    )
+                translated_text = glossary.restore_protected_glossary_terms(
+                    raw_content
+                )
                 translated_text = self._unmask_text(
-                    str(response.choices[0].message.content or "").strip(),
+                    translated_text,
                     token_map,
                 )
                 if self.is_invalid_translation_response(text, translated_text):
@@ -518,6 +564,12 @@ class EnhancedWordTranslator:
                     if attempt == self.max_retries - 1:
                         return text, 0
                     continue
+                if debug_job_dir is not None and debug_custom_id:
+                    translation_debug.record_parsed(
+                        job_dir=debug_job_dir,
+                        chunk_label=debug_custom_id,
+                        translations={debug_custom_id: translated_text},
+                    )
                 quality_score = await self.validate_translation_quality(text, translated_text, target_lang)
                 if quality_score >= self.quality_threshold or attempt == self.max_retries - 1:
                     return translated_text, quality_score
@@ -530,6 +582,13 @@ class EnhancedWordTranslator:
             except Exception as exc:
                 if isinstance(exc, WordTranslationCancelled):
                     raise
+                if debug_job_dir is not None and debug_custom_id:
+                    translation_debug.record_error(
+                        job_dir=debug_job_dir,
+                        chunk_label=debug_custom_id,
+                        attempt=attempt + 1,
+                        error=str(exc),
+                    )
                 logger.warning("Word translation attempt failed attempt=%s error=%s", attempt + 1, exc)
                 if attempt == self.max_retries - 1:
                     return text, 0
@@ -562,15 +621,21 @@ class EnhancedWordTranslator:
         source_language: str,
         target_language: str,
         user_terms: list[str],
+        debug_job_dir: Path | None = None,
         cancel_event: threading.Event | None = None,
     ):
         doc = docx.Document(source_path)
         self.mark_update_fields_on_open(doc)
         all_paragraphs = self.get_all_paragraphs(doc)
+        glossary_entries = glossary.load_combined_glossary()
+        if debug_job_dir is None:
+            debug_job_dir = output_path.parent.parent if output_path.parent.name == "output" else output_path.parent
         prefix_pattern = re.compile(r"^\s*(?:\d+\.\s*|\(\d+\)\s*|[a-zA-Z]\.\s*|\([a-zA-Z]\)\s*)")
         texts_for_translation: dict[str, dict[str, Any]] = {}
         for paragraph in all_paragraphs:
             if self.is_table_of_contents_paragraph(paragraph):
+                continue
+            if self.paragraph_contains_any_field_code(paragraph):
                 continue
             core_text = paragraph.text
             match = prefix_pattern.match(core_text)
@@ -584,6 +649,23 @@ class EnhancedWordTranslator:
                 }
 
         unique_texts = list(texts_for_translation.keys())
+        debug_ids = {
+            text: f"chunk_{index:04d}"
+            for index, text in enumerate(unique_texts, start=1)
+        }
+        translation_debug.record_plan(
+            debug_job_dir,
+            [
+                {
+                    "chunk_label": debug_ids[text],
+                    "mode": "word",
+                    "size": 1,
+                    "chars": len(text),
+                    "ids": [debug_ids[text]],
+                }
+                for text in unique_texts
+            ],
+        )
         translated_cache: dict[str, str] = {}
         quality_scores: list[int] = []
         semaphore = asyncio.Semaphore(self.concurrency_limit)
@@ -602,6 +684,9 @@ class EnhancedWordTranslator:
                     source_language,
                     target_language,
                     user_terms,
+                    glossary_entries=glossary_entries,
+                    debug_job_dir=debug_job_dir,
+                    debug_custom_id=debug_ids.get(text),
                     cancel_event=cancel_event,
                 )
                 if translated_text and translated_text != text:
@@ -627,6 +712,8 @@ class EnhancedWordTranslator:
 
         for paragraph in all_paragraphs:
             if self.is_table_of_contents_paragraph(paragraph):
+                continue
+            if self.paragraph_contains_any_field_code(paragraph):
                 continue
             original_text = paragraph.text
             match = prefix_pattern.match(original_text)
@@ -686,6 +773,7 @@ def _run_word_job(
                 target_language=target_lang,
                 source_language=source_lang,
                 user_terms=retain_terms,
+                debug_job_dir=job_dir,
                 cancel_event=cancel_event,
             ):
                 last_progress = float(progress)
@@ -763,6 +851,7 @@ def enqueue_word_job_from_upload(
     display_name: str,
     source_lang: str,
     target_lang: str,
+    creator_name: str = "",
     retain_terms_raw: str | None = None,
 ) -> str:
     job_id = uuid.uuid4().hex
@@ -790,6 +879,7 @@ def enqueue_word_job_from_upload(
             "word_stage": "uploaded",
             "source_lang": source_lang,
             "target_lang": target_lang,
+            "creator_name": creator_name,
             "retain_terms": retain_terms,
             "source_filename": safe_name,
             "progress": 0.0,
@@ -805,6 +895,7 @@ def enqueue_word_job_from_upload(
         payload={
             "source_lang": source_lang,
             "target_lang": target_lang,
+            "creator_name": creator_name,
             "retain_terms": retain_terms,
         },
     )
