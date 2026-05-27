@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Sign In{% endblock %}
+
+{% block content %}
+<main style="min-height: 100vh; display: grid; place-items: center; background: linear-gradient(160deg, #eef6ff 0%, #f8fafc 50%, #e7eef7 100%); padding: 24px;">
+  <section style="width: min(420px, 100%); background: rgba(255, 255, 255, 0.96); border: 1px solid rgba(15, 23, 42, 0.08); border-radius: 20px; box-shadow: 0 20px 60px rgba(15, 23, 42, 0.12); padding: 28px;">
+    <div style="margin-bottom: 20px;">
+      <div style="font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #64748b; margin-bottom: 8px;">{% if stub_enabled %}Stub Login{% else %}LDAP Login{% endif %}</div>
+      <h1 style="margin: 0; font-size: 28px; color: #0f172a;">登入系統</h1>
+      <p style="margin: 10px 0 0; color: #475569; line-height: 1.5;">{% if stub_enabled %}目前為 stub login，用來驗證 session、登入攔截與導頁流程。{% else %}目前為 phase-2 LDAP 驗證，不含群組 gate 與本機授權名單。{% endif %}</p>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div style="display: grid; gap: 8px; margin-bottom: 16px;">
+          {% for category, message in messages %}
+            <div style="padding: 10px 12px; border-radius: 12px; background: {% if category == 'error' %}#fef2f2{% else %}#eff6ff{% endif %}; color: {% if category == 'error' %}#b91c1c{% else %}#1d4ed8{% endif %}; border: 1px solid {% if category == 'error' %}#fecaca{% else %}#bfdbfe{% endif %};">
+              {{ message }}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% if error %}
+      <div style="padding: 10px 12px; border-radius: 12px; background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; margin-bottom: 16px;">
+        {{ error }}
+      </div>
+    {% endif %}
+
+    <form method="post" style="display: grid; gap: 14px;">
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <label style="display: grid; gap: 6px;">
+        <span style="font-size: 14px; color: #334155;">工號 / 使用者名稱</span>
+        <input name="username" value="{{ username }}" autofocus required style="height: 44px; border-radius: 12px; border: 1px solid #cbd5e1; padding: 0 12px; font-size: 15px;" />
+      </label>
+      {% if stub_enabled %}
+      <label style="display: grid; gap: 6px;">
+        <span style="font-size: 14px; color: #334155;">顯示名稱</span>
+        <input name="display_name" value="{{ display_name }}" placeholder="可選，未填時沿用工號" style="height: 44px; border-radius: 12px; border: 1px solid #cbd5e1; padding: 0 12px; font-size: 15px;" />
+      </label>
+      {% else %}
+      <label style="display: grid; gap: 6px;">
+        <span style="font-size: 14px; color: #334155;">密碼</span>
+        <input name="password" type="password" required style="height: 44px; border-radius: 12px; border: 1px solid #cbd5e1; padding: 0 12px; font-size: 15px;" />
+      </label>
+      {% endif %}
+      <button type="submit" style="height: 46px; border: 0; border-radius: 12px; background: linear-gradient(135deg, #0f766e 0%, #0f172a 100%); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer;">
+        Sign In
+      </button>
+    </form>
+  </section>
+</main>
+{% endblock %}

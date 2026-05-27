@@ -22,6 +22,7 @@ TEMPLATE_ROOT = OUT_ROOT / "templates"
 TEMPLATE_JOB_ROOT = TEMPLATE_ROOT / "jobs"
 UPLOAD_ROOT = OUT_ROOT / "uploads"
 DOC_WORKSPACE_ROOT = OUT_ROOT / "doc_workspace"
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret").strip() or "dev-secret"
 
 TRITON_URL = os.getenv("TRITON_URL", "https://racks-editing-norm-timber.trycloudflare.com/table-recognition")
 PP_STRUCTURE_URL = os.getenv(
@@ -156,6 +157,22 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+AUTH_ENABLED = _env_bool("AUTH_ENABLED", False)
+AUTH_STUB_ENABLED = _env_bool("AUTH_STUB_ENABLED", True)
+SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", False)
+LDAP_HOST = os.getenv("LDAP_HOST", "").strip()
+LDAP_PORT = int(os.getenv("LDAP_PORT", "636" if _env_bool("LDAP_USE_SSL", False) else "389"))
+LDAP_USE_SSL = _env_bool("LDAP_USE_SSL", False)
+LDAP_BASE_DN = os.getenv("LDAP_BASE_DN", "").strip()
+LDAP_BIND_DN = os.getenv("LDAP_BIND_DN", "").strip()
+LDAP_BIND_PASSWORD = os.getenv("LDAP_BIND_PASSWORD", "")
+LDAP_USER_LOGIN_ATTR = os.getenv("LDAP_USER_LOGIN_ATTR", "sAMAccountName").strip() or "sAMAccountName"
+LDAP_USER_OBJECT_FILTER = os.getenv("LDAP_USER_OBJECT_FILTER", "(&(objectClass=user)(!(objectClass=computer)))").strip() or "(&(objectClass=user)(!(objectClass=computer)))"
+LDAP_USER_DISPLAY_ATTR = os.getenv("LDAP_USER_DISPLAY_ATTR", "displayName").strip() or "displayName"
+LDAP_USER_EMAIL_ATTR = os.getenv("LDAP_USER_EMAIL_ATTR", "mail").strip() or "mail"
+LDAP_USER_SEARCH_SCOPE = os.getenv("LDAP_USER_SEARCH_SCOPE", "SUBTREE").strip() or "SUBTREE"
 
 PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY = _env_bool(
     "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY",

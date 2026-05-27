@@ -8,6 +8,8 @@ from .errors import register_error_handlers
 from .extensions import init_app as init_extensions
 from .hooks import register_before_request
 from .services import state
+from .services.auth_service import init_auth
+
 
 
 def create_app(config_name: str | None = None) -> Flask:
@@ -21,6 +23,7 @@ def create_app(config_name: str | None = None) -> Flask:
     app.config.from_object(config_cls)
 
     init_extensions(app)
+    init_auth(app)
     register_blueprints(app)
     register_error_handlers(app)
     register_before_request(app)
