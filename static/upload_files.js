@@ -12,6 +12,7 @@ function bindUploadFiles(options) {
   const expandedText = options.expandedText || "收合";
   const collapsedText = options.collapsedText || "展開";
   const removeText = options.removeText || "移除";
+  const onFilesChange = typeof options.onFilesChange === "function" ? options.onFilesChange : null;
   let filesExpanded = false;
   let selectedFiles = [];
 
@@ -31,6 +32,7 @@ function bindUploadFiles(options) {
       uploadFilesList.innerHTML = "";
       filesExpanded = false;
       uploadFilesToggle.textContent = collapsedText;
+      onFilesChange?.([]);
       return;
     }
 
@@ -41,6 +43,7 @@ function bindUploadFiles(options) {
     if (!filesExpanded) {
       uploadFilesList.style.display = "none";
       uploadFilesList.innerHTML = "";
+      onFilesChange?.([...selectedFiles]);
       return;
     }
 
@@ -71,6 +74,7 @@ function bindUploadFiles(options) {
     });
     uploadFilesList.appendChild(listEl);
     uploadFilesList.style.display = "block";
+    onFilesChange?.([...selectedFiles]);
   };
 
   uploadFilesToggle.addEventListener("click", () => {

@@ -130,6 +130,7 @@ def upload() -> str:
     files = request.files.getlist("pdf")
     if not files or all(f.filename == "" for f in files):
         abort(400, "Missing PDF file.")
+    upload_files = [f for f in files if f and f.filename]
 
     state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
     state.UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
@@ -138,6 +139,9 @@ def upload() -> str:
     start_page = int(request.form.get("start", 1))
     end_page_raw = request.form.get("end", "").strip()
     end_page = int(end_page_raw) if end_page_raw else None
+    if len(upload_files) > 1:
+        start_page = 1
+        end_page = None
     enable_translate = request.form.get("translate") == "on"
     translate_source_lang = request.form.get("source_lang", "auto").strip() or "auto"
     translate_target_lang = request.form.get("target_lang", "en").strip() or "en"
@@ -158,7 +162,7 @@ def upload() -> str:
     if keep_lang not in {"all", "zh", "en"}:
         keep_lang = "all"
 
-    for file in files:
+    for file in upload_files:
         if not file or file.filename == "":
             continue
         ext = Path(file.filename).suffix.lower()

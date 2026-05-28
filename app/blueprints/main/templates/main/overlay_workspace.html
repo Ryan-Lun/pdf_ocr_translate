@@ -38,11 +38,11 @@
           <div class="form-grid">
             <label>
               <span>開始頁</span>
-              <input type="number" name="start" value="1" min="1" />
+              <input id="overlayStartPageInput" type="number" name="start" value="1" min="1" />
             </label>
             <label>
               <span>結束頁</span>
-              <input type="number" name="end" placeholder="可留空" min="1" />
+              <input id="overlayEndPageInput" type="number" name="end" placeholder="可留空" min="1" />
             </label>
           </div>
           <div class="form-grid">
@@ -93,6 +93,7 @@
           </div>
           <div class="form-note">
             <h4><i class="bi bi-info-circle"></i> 注意事項</h4>
+            <p> 單一文件可指定開始與結束頁，多個文件會自動翻譯整份文件</p>
             <p>此模式翻譯時間較久，翻譯完成後請檢查輸出結果</p>
             <p><code>表單文件</code><br>適用頁面以表格為主的文件<br>(Q-2001, Q-2010, Q-2014, Q-2013, Q-2011, Q-2156, Q-2001, Q-2473, Q-2006, Q-2007, Q-2300, Q-2285, Q-2286<br>Q-2027, Q-2039, Q-2088, Q-2404, Q-2531, Q-2530, Q-2439, Q-2005, Q-2497, Q-2305)</p>
             <p><code>一般文件</code><br>中英文翻譯對照檢查，如果已經有英文翻譯就不翻譯<br>適用 Q-2305, Q-2005 格式的文件</p>
@@ -132,6 +133,9 @@
       const jobsDeleteSelected = document.getElementById("jobsDeleteSelected");
       const documentModeSelect = document.getElementById("documentModeSelect");
       const sourceLangSelect = document.getElementById("sourceLangSelect");
+      const overlayStartPageInput = document.getElementById("overlayStartPageInput");
+      const overlayEndPageInput = document.getElementById("overlayEndPageInput");
+      const overlayPageRangeHint = document.getElementById("overlayPageRangeHint");
       let translateModeSelect = document.getElementById("translateModeSelect");
       const translateModelSelect = document.getElementById("translateModelSelect");
       const selectedJobs = new Set();
@@ -206,6 +210,22 @@
         label.appendChild(translateModeSelect);
         const modelLabel = translateModelSelect.closest("label");
         modelLabel?.before(label);
+      }
+
+      function syncPageRangeInputs(files) {
+        if (!overlayStartPageInput || !overlayEndPageInput) return;
+        const allowRange = (files?.length || 0) <= 1;
+        overlayStartPageInput.disabled = !allowRange;
+        overlayEndPageInput.disabled = !allowRange;
+        if (!allowRange) {
+          overlayStartPageInput.value = "1";
+          overlayEndPageInput.value = "";
+        }
+        if (overlayPageRangeHint) {
+          overlayPageRangeHint.textContent = allowRange
+            ? "單一文件可指定開始與結束頁；多個文件會自動翻譯整份文件。"
+            : "已選擇多個文件：系統會自動翻譯每一份文件的全部頁面。";
+        }
       }
 
       function syncTranslateModelSelection() {
@@ -538,7 +558,9 @@
         summaryId: "uploadFilesSummary",
         toggleId: "uploadFilesToggle",
         listId: "uploadFilesList",
+        onFilesChange: syncPageRangeInputs,
       });
+      syncPageRangeInputs([]);
       loadJobs();
       connectJobsStream();
     </script>
