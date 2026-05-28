@@ -1905,6 +1905,7 @@ body.editor .panel {
   color: #5a6b74;
   font-size: 0.82rem;
   line-height: 1.35;
+  min-width: 0;
 }
 
 .shortcut-key code {
@@ -1916,6 +1917,14 @@ body.editor .panel {
   font-size: 0.84rem;
   line-height: 1.45;
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1400px) {
+  .shortcut-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.3rem;
+  }
 }
 
 .panel h2 {
