@@ -1,0 +1,21 @@
+{% set current_section = nav_section|default('') %}
+{% set current_title = nav_title|default('法規文件轉換平台') %}
+{% if auth_enabled and current_user %}
+<nav class="app-navbar" aria-label="Global navigation">
+  <div class="app-navbar__inner">
+    <div class="app-navbar__brand">
+      <a class="app-navbar__logo-link" href="{{ url_for('main.index') }}" aria-label="{{ current_title }}">
+        <img class="app-navbar__logo" src="{{ url_for('static', filename='logo.svg') }}" alt="{{ current_title }}" />
+      </a>
+      <span class="app-navbar__system-name">文件翻譯系統</span>
+    </div>
+    <div class="app-navbar__meta">
+      <span class="app-navbar__user">{{ current_user.display_name or current_user.work_id }}</span>
+      {% if current_user.is_admin %}
+      <a class="ghost app-navbar__link {% if current_section == 'admin' %}is-active{% endif %}" href="{{ url_for('admin.users') }}">使用者管理</a>
+      {% endif %}
+      <a class="ghost app-navbar__logout" href="{{ url_for('auth.logout') }}">登出</a>
+    </div>
+  </div>
+</nav>
+{% endif %}

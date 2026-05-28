@@ -7,14 +7,12 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
   </head>
-  <body class="home">
+  <body class="home has-global-nav">
+    {% set nav_section = 'templates' %}
+    {% set nav_title = '法規文件轉換平台' %}
+    {% include "_global_nav.html" %}
     <main class="shell">
       <header class="hero">
-        {% if auth_enabled and current_user %}
-        <div class="hero-toolbar hero-toolbar--right">
-          <a class="ghost back-link" href="{{ url_for('auth.logout') }}">登出</a>
-        </div>
-        {% endif %}
         <div class="hero-title-split">
           <h1>欄位翻譯模板</h1>
           <div class="button-row--tight">
