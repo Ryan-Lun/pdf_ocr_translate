@@ -316,7 +316,7 @@ def init_auth(app) -> None:
     login_manager.login_view = "auth.login"
     register_auth_handlers()
     register_auth_context(app)
-    if not app.config.get("TESTING"):
+    if not app.config.get("TESTING") and app.config.get("AUTO_SCHEMA_MANAGEMENT", True):
         auth_store.bootstrap_auth_store(app.config)
 
 

@@ -30,7 +30,12 @@ def client(app):
 
 
 @pytest.fixture(autouse=True)
-def clean_document_templates(app, monkeypatch, tmp_path):
+def clean_document_templates(request, monkeypatch, tmp_path):
+    if "app" not in request.fixturenames:
+        yield
+        return
+
+    request.getfixturevalue("app")
     monkeypatch.setattr(state, "DOCUMENT_TEMPLATES_PATH", tmp_path / "document_templates.json")
     with job_store.session_scope() as session:
         session.execute(delete(job_store.DocumentTemplateRecord))

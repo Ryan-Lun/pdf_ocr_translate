@@ -4,6 +4,7 @@ import os
 import re
 import threading
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from . import openai_config
 
@@ -14,6 +15,28 @@ except Exception:  # pragma: no cover - optional import guard
 
 if callable(load_dotenv):
     load_dotenv()
+
+
+def normalize_database_url(database_url: str) -> str:
+    if not database_url.lower().startswith("mssql+pyodbc"):
+        return database_url
+    parsed = urlsplit(database_url)
+    pairs = []
+    changed = False
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        if key.lower() == "trustservercertificate":
+            normalized = value.strip().lower()
+            if normalized in {"1", "true"}:
+                value = "yes"
+                changed = True
+            elif normalized in {"0", "false"}:
+                value = "no"
+                changed = True
+        pairs.append((key, value))
+    if not changed:
+        return database_url
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(pairs), parsed.fragment))
+
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 OUT_ROOT = BASE_DIR / "out"
@@ -95,7 +118,7 @@ DOC_TRANSLATE_SYSTEM_PROMPT = os.getenv(
     ),
 ).strip()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+DATABASE_URL = normalize_database_url(os.getenv("DATABASE_URL", "").strip())
 WORKER_POLL_SECONDS = float(os.getenv("WORKER_POLL_SECONDS", "3"))
 WORKER_ID = os.getenv("WORKER_ID", f"{os.getenv('COMPUTERNAME', 'worker')}-{os.getpid()}")
 WORKER_OCR_MAX_RUNNING = int(os.getenv("WORKER_OCR_MAX_RUNNING", "1"))

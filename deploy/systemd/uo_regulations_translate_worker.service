@@ -1,0 +1,17 @@
+[Unit]
+Description=PDF OCR Translate Worker
+After=network.target
+
+[Service]
+Type=simple
+User=NE025
+Group=NE025
+WorkingDirectory=/home/NE025/pdf_ocr_translate
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/NE025/pdf_ocr_translate/.env
+ExecStart=/home/NE025/pdf_ocr_translate/.venv/bin/python worker.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

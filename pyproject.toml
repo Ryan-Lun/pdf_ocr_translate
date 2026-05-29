@@ -11,6 +11,7 @@ dependencies = [
   "flask>=3.1.2",
   "flask-login>=0.6.3",
   "gunicorn>=25.3.0",
+  "alembic>=1.13.2",
   "img2table>=1.4.2",
   "ipykernel>=7.1.0",
   "jieba>=0.42.1",

@@ -349,7 +349,7 @@ def count_users_with_role(role_name: str) -> int:
             select(UserRecord.id)
             .join(UserRoleRecord, UserRoleRecord.user_id == UserRecord.id)
             .join(RoleRecord, RoleRecord.id == UserRoleRecord.role_id)
-            .where(RoleRecord.name == cleaned, UserRecord.is_active.is_(True))
+            .where(RoleRecord.name == cleaned, UserRecord.is_active == True)
         ).all()
         return len(rows)
 

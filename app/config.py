@@ -1,9 +1,27 @@
 from __future__ import annotations
 
+import os
+
 from .services import state
 
 
+def parse_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    return text in {"1", "true", "yes", "on"}
+
+
 class BaseConfig:
+    APP_ENV = os.getenv("APP_ENV") or os.getenv("FLASK_ENV") or "development"
+    AUTO_SCHEMA_MANAGEMENT = parse_bool(
+        os.getenv("AUTO_SCHEMA_MANAGEMENT"),
+        str(APP_ENV).strip().lower() != "production",
+    )
     SECRET_KEY = state.SECRET_KEY
     BASE_DIR = state.BASE_DIR
     OUT_ROOT = state.OUT_ROOT
@@ -75,6 +93,8 @@ class BaseConfig:
 
 
 class TestingConfig(BaseConfig):
+    APP_ENV = "testing"
+    AUTO_SCHEMA_MANAGEMENT = True
     TESTING = True
     AUTH_ENABLED = False
     AUTH_REQUIRE_LOCAL_USER = False
@@ -82,8 +102,21 @@ class TestingConfig(BaseConfig):
     OWNER_ACCESS_ENABLED = True
 
 
+class DevelopmentConfig(BaseConfig):
+    APP_ENV = "development"
+    AUTO_SCHEMA_MANAGEMENT = parse_bool(os.getenv("AUTO_SCHEMA_MANAGEMENT"), True)
+
+
+class ProductionConfig(BaseConfig):
+    APP_ENV = "production"
+    AUTO_SCHEMA_MANAGEMENT = parse_bool(os.getenv("AUTO_SCHEMA_MANAGEMENT"), False)
+    SESSION_COOKIE_SECURE = parse_bool(os.getenv("SESSION_COOKIE_SECURE"), True)
+
+
 CONFIG_BY_NAME = {
     None: BaseConfig,
     "default": BaseConfig,
+    "development": DevelopmentConfig,
+    "production": ProductionConfig,
     "testing": TestingConfig,
 }

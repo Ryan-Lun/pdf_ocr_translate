@@ -1,0 +1,11 @@
+[Unit]
+Description=Gunicorn instance to serve uo regulations pdf translate system
+After=network.target
+
+[Service]
+User={{APP_USER}}
+Group=www-data
+WorkingDirectory={{APP_ROOT}}
+Environment="PATH={{APP_ROOT}}/.venv/bin:/usr/bin"
+EnvironmentFile={{ENV_FILE}}
+ExecStart={{APP_ROOT}}/.venv/bin/gunicorn --workers {{WEB_WORKERS}} --worker-class gthread --threads 4 --timeout 300 --bind {{WEB_BIND}} --user {{APP_USER}} --group www-data -m 007 --error-logfile - wsgi:app

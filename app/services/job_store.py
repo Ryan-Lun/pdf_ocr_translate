@@ -100,8 +100,10 @@ def init_app(app) -> None:
         raise RuntimeError("Only SQL Server DATABASE_URL values are supported.")
     _engine = create_engine(database_url, future=True, pool_pre_ping=True)
     _session_factory = sessionmaker(bind=_engine, future=True, expire_on_commit=False)
-    _ensure_compatible_columns()
-    _assert_required_tables()
+    if bool(app.config.get("AUTO_SCHEMA_MANAGEMENT", True)):
+        Base.metadata.create_all(bind=_engine, checkfirst=True)
+        _ensure_compatible_columns()
+        _assert_required_tables()
 
 
 def _ensure_compatible_columns() -> None:
@@ -155,6 +157,10 @@ def _assert_required_tables() -> None:
             "Missing required SQL Server column: document_templates.payload_json. "
             "Update the database schema before starting the app."
         )
+
+
+def assert_required_schema() -> None:
+    _assert_required_tables()
 
 
 def session_scope() -> contextlib.AbstractContextManager[Session]:
