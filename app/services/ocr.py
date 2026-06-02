@@ -11,7 +11,7 @@ from typing import Any
 import fitz
 import requests
 
-from . import state
+from . import job_store, state
 from ocr_pipeline.pipeline import filter_ppstructure_data_by_score
 
 try:
@@ -893,4 +893,5 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
     out_path = job_dir / "edited.pdf"
     doc.save(out_path.as_posix())
     doc.close()
+    job_store.register_artifact(job_id, "edited_pdf", "edited.pdf")
     return out_path

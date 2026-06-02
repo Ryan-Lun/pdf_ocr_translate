@@ -813,6 +813,7 @@ def _run_word_job(
             completed_at=now_done,
             extra_meta={"translate_completed_at": now_done, "avg_quality": round(last_quality, 2)},
         )
+        jobs.job_store.register_artifact(job_id, "docx", "output/output.docx")
     except Exception as exc:
         if isinstance(exc, WordTranslationCancelled):
             jobs.set_job_state(
@@ -899,8 +900,13 @@ def enqueue_word_job_from_upload(
             "source_lang": source_lang,
             "target_lang": target_lang,
             "creator_name": creator_name,
+            "owner_work_id": str(owner_work_id or "").strip(),
             "retain_terms": retain_terms,
+            "source_filename": safe_name,
+            "processing_started_at": now_ts,
+            "avg_quality": 0.0,
         },
     )
+    jobs.job_store.register_artifact(job_id, "source_docx", safe_name)
     jobs.notify_jobs_update()
     return job_id

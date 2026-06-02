@@ -45,21 +45,42 @@
           <div>
             <p class="eyebrow">Templates</p>
             <h2>模板列表</h2>
+            <div id="templatesFilterCount" class="job-muted"></div>
           </div>
           <div class="jobs-actions">
             <button id="templatesRefresh" class="ghost" type="button">重新整理</button>
           </div>
+        </div>
+        <div class="jobs-filterbar jobs-filterbar--compact">
+          <label>
+            <span>搜尋</span>
+            <input id="templatesSearch" type="text" placeholder="模板名稱、來源文件、模板 ID" />
+          </label>
+          <label>
+            <span>狀態</span>
+            <select id="templatesStatusFilter">
+              <option value="all">全部狀態</option>
+              <option value="completed">已保存</option>
+              <option value="draft">草稿</option>
+            </select>
+          </label>
+          <button id="templatesFiltersReset" class="ghost" type="button">重設</button>
         </div>
         <div id="templatesEmpty" class="hint">尚未建立模板。</div>
         <div id="templatesList" class="jobs-list"></div>
       </section>
     </main>
 
+    <script src="{{ url_for('static', filename='job_filters.js') }}"></script>
     <script>
       const templatesList = document.getElementById("templatesList");
       const templatesEmpty = document.getElementById("templatesEmpty");
       const templatesRefresh = document.getElementById("templatesRefresh");
+      const templatesFilterCount = document.getElementById("templatesFilterCount");
+      const templatesSearch = document.getElementById("templatesSearch");
+      const templatesStatusFilter = document.getElementById("templatesStatusFilter");
       let jobMap = new Map();
+      let allTemplates = [];
       let templatesSource = null;
 
       function formatDate(ts) {
@@ -89,6 +110,16 @@
             triggerBtn.disabled = false;
           }
         }
+      }
+
+      function templateFilterItems(items) {
+        return (items || []).map((template) => ({
+          ...template,
+          job_status: template.status === "saved" ? "saved" : "draft",
+          job_id: template.id,
+          job_name: template.name || template.display_name || "",
+          creator_name: template.display_name || "",
+        }));
       }
 
       function renderTemplates(items) {
@@ -167,6 +198,18 @@
         });
       }
 
+      function applyTemplateFilters() {
+        const filtered = JobFilters.apply(templateFilterItems(allTemplates), {
+          query: templatesSearch?.value,
+          status: templatesStatusFilter?.value,
+          fields: ["id", "name", "display_name", "source_job_id", "job_name", "creator_name"],
+        });
+        if (templatesFilterCount) {
+          templatesFilterCount.textContent = `顯示 ${filtered.length} / ${allTemplates.length} 個模板`;
+        }
+        renderTemplates(filtered);
+      }
+
       async function loadTemplates() {
         templatesList.innerHTML = '<div class="hint">Loading...</div>';
         try {
@@ -179,13 +222,16 @@
           }
           const res = await fetch("/api/document-templates");
           if (!res.ok) {
-            renderTemplates([]);
+            allTemplates = [];
+            applyTemplateFilters();
             return;
           }
           const payload = await res.json();
-          renderTemplates(payload.templates || []);
+          allTemplates = payload.templates || [];
+          applyTemplateFilters();
         } catch (error) {
-          renderTemplates([]);
+          allTemplates = [];
+          applyTemplateFilters();
         }
       }
 
@@ -194,13 +240,16 @@
         try {
           const res = await fetch("/api/document-templates");
           if (!res.ok) {
-            renderTemplates([]);
+            allTemplates = [];
+            applyTemplateFilters();
             return;
           }
           const payload = await res.json();
-          renderTemplates(payload.templates || []);
+          allTemplates = payload.templates || [];
+          applyTemplateFilters();
         } catch (error) {
-          renderTemplates([]);
+          allTemplates = [];
+          applyTemplateFilters();
         }
       }
 
@@ -224,6 +273,12 @@
       }
 
       templatesRefresh?.addEventListener("click", loadTemplates);
+      JobFilters.bind({
+        searchId: "templatesSearch",
+        statusId: "templatesStatusFilter",
+        resetId: "templatesFiltersReset",
+        onChange: applyTemplateFilters,
+      });
       loadTemplates();
       connectTemplatesStream();
     </script>

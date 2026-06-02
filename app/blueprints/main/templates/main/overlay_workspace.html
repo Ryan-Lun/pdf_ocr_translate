@@ -109,6 +109,7 @@
           <div>
             <p class="eyebrow">Manage</p>
             <h2>任務列表</h2>
+            <div id="jobsFilterCount" class="job-muted"></div>
           </div>
           <div class="jobs-actions">
             <button id="jobsSelectAll" class="ghost" type="button">全部勾選</button>
@@ -118,11 +119,40 @@
             <button id="jobsRefresh" class="ghost" type="button">重新整理</button>
           </div>
         </div>
+        <div class="jobs-filterbar">
+          <label>
+            <span>搜尋</span>
+            <input id="jobsSearch" type="text" placeholder="文件名稱、建立者、任務 ID" />
+          </label>
+          <label>
+            <span>狀態</span>
+            <select id="jobsStatusFilter">
+              <option value="all">全部狀態</option>
+              <option value="active">處理中</option>
+              <option value="completed">完成</option>
+              <option value="failed">失敗</option>
+              <option value="cancelled">已取消</option>
+            </select>
+          </label>
+          <label>
+            <span>文件模式</span>
+            <select id="jobsModeFilter">
+              <option value="all">全部模式</option>
+              <option value="form">表單文件</option>
+              <option value="general">一般文件</option>
+              <option value="general_force">一般文件（中文必翻）</option>
+              <option value="scanned">掃描文件</option>
+              <option value="other">其他文件</option>
+            </select>
+          </label>
+          <button id="jobsFiltersReset" class="ghost" type="button">重設</button>
+        </div>
         <div id="jobsEmpty" class="hint">No processed files yet.</div>
         <div id="jobsList" class="jobs-list"></div>
       </section>
     </main>
     <script src="{{ url_for('static', filename='upload_files.js') }}"></script>
+    <script src="{{ url_for('static', filename='job_filters.js') }}"></script>
     <script>
       const jobsList = document.getElementById("jobsList");
       const jobsEmpty = document.getElementById("jobsEmpty");
@@ -136,9 +166,14 @@
       const overlayStartPageInput = document.getElementById("overlayStartPageInput");
       const overlayEndPageInput = document.getElementById("overlayEndPageInput");
       const overlayPageRangeHint = document.getElementById("overlayPageRangeHint");
+      const jobsFilterCount = document.getElementById("jobsFilterCount");
+      const jobsSearch = document.getElementById("jobsSearch");
+      const jobsStatusFilter = document.getElementById("jobsStatusFilter");
+      const jobsModeFilter = document.getElementById("jobsModeFilter");
       let translateModeSelect = document.getElementById("translateModeSelect");
       const translateModelSelect = document.getElementById("translateModelSelect");
       const selectedJobs = new Set();
+      let allJobs = [];
       let jobsLoading = false;
       let jobsSource = null;
 
@@ -426,8 +461,20 @@
           jobsList.appendChild(card);
         });
         Array.from(selectedJobs).forEach((jobId) => {
-          if (!available.has(jobId)) selectedJobs.delete(jobId);
+          if (!allJobs.some((job) => job.job_id === jobId)) selectedJobs.delete(jobId);
         });
+      }
+
+      function applyJobsFilters() {
+        const filtered = JobFilters.apply(allJobs, {
+          query: jobsSearch?.value,
+          status: jobsStatusFilter?.value,
+          mode: jobsModeFilter?.value,
+        });
+        if (jobsFilterCount) {
+          jobsFilterCount.textContent = `顯示 ${filtered.length} / ${allJobs.length} 個任務`;
+        }
+        renderJobs(filtered);
       }
 
       async function loadJobs() {
@@ -436,11 +483,16 @@
         jobsList.innerHTML = '<div class="hint">Loading...</div>';
         try {
           const res = await fetch("/api/jobs");
-          if (!res.ok) return renderJobs([]);
+          if (!res.ok) {
+            allJobs = [];
+            return applyJobsFilters();
+          }
           const data = await res.json();
-          renderJobs(data.jobs || []);
+          allJobs = data.jobs || [];
+          applyJobsFilters();
         } catch (error) {
-          renderJobs([]);
+          allJobs = [];
+          applyJobsFilters();
         } finally {
           jobsLoading = false;
         }
@@ -452,7 +504,8 @@
         jobsSource = new EventSource("/api/jobs/stream");
         jobsSource.addEventListener("jobs", (event) => {
           try {
-            renderJobs((JSON.parse(event.data) || {}).jobs || []);
+            allJobs = (JSON.parse(event.data) || {}).jobs || [];
+            applyJobsFilters();
           } catch (error) {}
         });
         jobsSource.onerror = () => {
@@ -548,6 +601,13 @@
       jobsSelectAll.addEventListener("click", () => setAllSelections(true));
       jobsSelectNone.addEventListener("click", () => setAllSelections(false));
       jobsDeleteSelected.addEventListener("click", deleteSelectedJobs);
+      JobFilters.bind({
+        searchId: "jobsSearch",
+        statusId: "jobsStatusFilter",
+        modeId: "jobsModeFilter",
+        resetId: "jobsFiltersReset",
+        onChange: applyJobsFilters,
+      });
       ensureTranslateModeControl();
       translateModeSelect?.addEventListener("change", syncTranslateModelSelection);
       documentModeSelect?.addEventListener("change", syncSourceLangControl);

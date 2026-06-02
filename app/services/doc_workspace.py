@@ -62,6 +62,7 @@ def run_doc_workspace_job(
         jobs.set_job_state(job_dir, status="running", stage="extract")
         write_doc_status(job_dir, "structure_running", target_lang=target_lang)
         markdown_path, _ = pp_structure.extract_pdf_to_markdown(pdf_path, structure_dir)
+        jobs.job_store.register_artifact(job_id, "structure_md", "structure/doc.md")
 
         _raise_if_cancel_requested(job_id)
         write_doc_status(job_dir, "structure_completed", markdown_path=str(markdown_path.name))
@@ -70,6 +71,7 @@ def run_doc_workspace_job(
         write_doc_status(job_dir, "html_running")
         structure_html_path = structure_dir / "doc.html"
         docx_export.export_markdown_to_html(markdown_path, structure_html_path)
+        jobs.job_store.register_artifact(job_id, "structure_html", "structure/doc.html")
 
         _raise_if_cancel_requested(job_id)
         jobs.set_job_state(
@@ -91,6 +93,7 @@ def run_doc_workspace_job(
             target_lang=target_lang,
             debug_job_dir=job_dir,
         )
+        jobs.job_store.register_artifact(job_id, "translated_html", "translated/doc.translated.html")
 
         _raise_if_cancel_requested(job_id)
         write_doc_status(
@@ -108,6 +111,7 @@ def run_doc_workspace_job(
         write_doc_status(job_dir, "docx_running", html_path=str(translated_html_path.name))
         docx_path = output_dir / "output.docx"
         docx_export.export_html_to_docx(translated_html_path, docx_path)
+        jobs.job_store.register_artifact(job_id, "docx", "output/output.docx")
 
         _raise_if_cancel_requested(job_id)
         now_ts = time.time()
@@ -168,6 +172,7 @@ def enqueue_doc_job_from_upload(
             "target_lang": target_lang,
             "creator_name": creator_name,
             "owner_work_id": str(owner_work_id or "").strip(),
+            "processing_started_at": now_ts,
         },
     )
     jobs.job_store.create_job(
@@ -177,12 +182,18 @@ def enqueue_doc_job_from_upload(
         job_name=display_name,
         owner_work_id=str(owner_work_id or "").strip() or None,
         target_lang=target_lang,
-        payload={"source_lang": source_lang, "target_lang": target_lang},
+        payload={
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            "creator_name": creator_name,
+            "owner_work_id": str(owner_work_id or "").strip(),
+        },
     )
 
     pdf_path = job_dir / "source.pdf"
     if source_pdf.exists():
         shutil.copy2(source_pdf, pdf_path)
+        jobs.job_store.register_artifact(job_id, "source_pdf", "source.pdf")
     else:
         raise FileNotFoundError(f"Missing PDF: {source_pdf}")
 

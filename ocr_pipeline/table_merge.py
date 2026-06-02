@@ -119,6 +119,13 @@ def normalize_box_to_bbox(box):
 def extract_cells_with_img2table(pdf_path: str, page_index: int, scale_factor: float) -> list[list[float]]:
     if Img2TablePDF is None:
         return []
+    try:
+        import cv2
+
+        if not hasattr(getattr(cv2, "ximgproc", None), "niBlackThreshold"):
+            return []
+    except Exception:
+        return []
     pdf = Img2TablePDF(
         src=pdf_path,
         pages=[page_index],

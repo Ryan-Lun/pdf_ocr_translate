@@ -150,14 +150,23 @@ def _get_layout_block_class():
         return _LAYOUT_BLOCK
     if _LAYOUT_BLOCK_ERROR is not None:
         raise _LAYOUT_BLOCK_ERROR
+    errors: list[Exception] = []
+    try:
+        from paddlex.inference.pipelines.layout_parsing.layout_objects import LayoutBlock
+
+        _LAYOUT_BLOCK = LayoutBlock
+        return _LAYOUT_BLOCK
+    except Exception as exc:
+        errors.append(exc)
     try:
         from PaddleX.paddlex.inference.pipelines.layout_parsing.layout_objects import LayoutBlock
 
         _LAYOUT_BLOCK = LayoutBlock
         return _LAYOUT_BLOCK
     except Exception as exc:
+        errors.append(exc)
         _LAYOUT_BLOCK_ERROR = exc
-        raise
+        raise errors[0]
 
 
 def merge_keep_original_json(data: dict[str, Any]) -> dict[str, Any]:

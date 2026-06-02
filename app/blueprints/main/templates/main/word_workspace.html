@@ -67,6 +67,7 @@
           <div>
             <p class="eyebrow">Manage</p>
             <h2>任務列表</h2>
+            <div id="wordJobsFilterCount" class="job-muted"></div>
           </div>
           <div class="jobs-actions">
             <button id="wordJobsSelectAll" class="ghost" type="button">全部勾選</button>
@@ -76,11 +77,29 @@
             <button id="wordJobsRefresh" class="ghost" type="button">重新整理</button>
           </div>
         </div>
+        <div class="jobs-filterbar jobs-filterbar--compact">
+          <label>
+            <span>搜尋</span>
+            <input id="wordJobsSearch" type="text" placeholder="文件名稱、建立者、任務 ID" />
+          </label>
+          <label>
+            <span>狀態</span>
+            <select id="wordJobsStatusFilter">
+              <option value="all">全部狀態</option>
+              <option value="active">處理中</option>
+              <option value="completed">完成</option>
+              <option value="failed">失敗</option>
+              <option value="cancelled">已取消</option>
+            </select>
+          </label>
+          <button id="wordJobsFiltersReset" class="ghost" type="button">重設</button>
+        </div>
         <div id="wordJobsEmpty" class="hint">No Word jobs yet.</div>
         <div id="wordJobsList" class="jobs-list"></div>
       </section>
     </main>
     <script src="{{ url_for('static', filename='upload_files.js') }}"></script>
+    <script src="{{ url_for('static', filename='job_filters.js') }}"></script>
     <script>
       const wordJobsList = document.getElementById("wordJobsList");
       const wordJobsEmpty = document.getElementById("wordJobsEmpty");
@@ -89,7 +108,11 @@
       const wordJobsSelectNone = document.getElementById("wordJobsSelectNone");
       const wordJobsDeleteSelected = document.getElementById("wordJobsDeleteSelected");
       const wordJobsDownload = document.getElementById("wordJobsDownload");
+      const wordJobsFilterCount = document.getElementById("wordJobsFilterCount");
+      const wordJobsSearch = document.getElementById("wordJobsSearch");
+      const wordJobsStatusFilter = document.getElementById("wordJobsStatusFilter");
       const selectedWordJobs = new Set();
+      let allWordJobs = [];
       let wordJobsLoading = false;
       let wordJobsSource = null;
 
@@ -277,8 +300,19 @@
           wordJobsList.appendChild(card);
         });
         Array.from(selectedWordJobs).forEach((jobId) => {
-          if (!available.has(jobId)) selectedWordJobs.delete(jobId);
+          if (!allWordJobs.some((job) => job.job_id === jobId)) selectedWordJobs.delete(jobId);
         });
+      }
+
+      function applyWordJobsFilters() {
+        const filtered = JobFilters.apply(allWordJobs, {
+          query: wordJobsSearch?.value,
+          status: wordJobsStatusFilter?.value,
+        });
+        if (wordJobsFilterCount) {
+          wordJobsFilterCount.textContent = `顯示 ${filtered.length} / ${allWordJobs.length} 個任務`;
+        }
+        renderWordJobs(filtered);
       }
 
       function setAllWordSelections(checked) {
@@ -364,11 +398,16 @@
         wordJobsList.innerHTML = '<div class="hint">Loading...</div>';
         try {
           const res = await fetch("/api/word-jobs");
-          if (!res.ok) return renderWordJobs([]);
+          if (!res.ok) {
+            allWordJobs = [];
+            return applyWordJobsFilters();
+          }
           const data = await res.json();
-          renderWordJobs(data.jobs || []);
+          allWordJobs = data.jobs || [];
+          applyWordJobsFilters();
         } catch (error) {
-          renderWordJobs([]);
+          allWordJobs = [];
+          applyWordJobsFilters();
         } finally {
           wordJobsLoading = false;
         }
@@ -380,7 +419,8 @@
         wordJobsSource = new EventSource("/api/word-jobs/stream");
         wordJobsSource.addEventListener("jobs", (event) => {
           try {
-            renderWordJobs((JSON.parse(event.data) || {}).jobs || []);
+            allWordJobs = (JSON.parse(event.data) || {}).jobs || [];
+            applyWordJobsFilters();
           } catch (error) {}
         });
         wordJobsSource.onerror = () => {
@@ -397,6 +437,12 @@
       wordJobsSelectNone.addEventListener("click", () => setAllWordSelections(false));
       wordJobsDeleteSelected.addEventListener("click", deleteSelectedWordJobs);
       wordJobsDownload.addEventListener("click", downloadSelectedWordJobs);
+      JobFilters.bind({
+        searchId: "wordJobsSearch",
+        statusId: "wordJobsStatusFilter",
+        resetId: "wordJobsFiltersReset",
+        onChange: applyWordJobsFilters,
+      });
       bindUploadFiles({
         inputId: "wordUploadInput",
         summaryId: "wordUploadFilesSummary",

@@ -63,6 +63,7 @@
           <div>
             <p class="eyebrow">Manage</p>
             <h2>任務列表</h2>
+            <div id="docJobsFilterCount" class="job-muted"></div>
           </div>
           <div class="jobs-actions">
             <button id="docJobsSelectAll" class="ghost" type="button">全部勾選</button>
@@ -72,11 +73,29 @@
             <button id="docJobsRefresh" class="ghost" type="button">重新整理</button>
           </div>
         </div>
+        <div class="jobs-filterbar jobs-filterbar--compact">
+          <label>
+            <span>搜尋</span>
+            <input id="docJobsSearch" type="text" placeholder="文件名稱、建立者、任務 ID" />
+          </label>
+          <label>
+            <span>狀態</span>
+            <select id="docJobsStatusFilter">
+              <option value="all">全部狀態</option>
+              <option value="active">處理中</option>
+              <option value="completed">完成</option>
+              <option value="failed">失敗</option>
+              <option value="cancelled">已取消</option>
+            </select>
+          </label>
+          <button id="docJobsFiltersReset" class="ghost" type="button">重設</button>
+        </div>
         <div id="docJobsEmpty" class="hint">No document jobs yet.</div>
         <div id="docJobsList" class="jobs-list"></div>
       </section>
     </main>
     <script src="{{ url_for('static', filename='upload_files.js') }}"></script>
+    <script src="{{ url_for('static', filename='job_filters.js') }}"></script>
     <script>
       const docJobsList = document.getElementById("docJobsList");
       const docJobsEmpty = document.getElementById("docJobsEmpty");
@@ -85,7 +104,11 @@
       const docJobsSelectNone = document.getElementById("docJobsSelectNone");
       const docJobsDeleteSelected = document.getElementById("docJobsDeleteSelected");
       const docJobsDownload = document.getElementById("docJobsDownload");
+      const docJobsFilterCount = document.getElementById("docJobsFilterCount");
+      const docJobsSearch = document.getElementById("docJobsSearch");
+      const docJobsStatusFilter = document.getElementById("docJobsStatusFilter");
       const selectedDocJobs = new Set();
+      let allDocJobs = [];
       let docJobsLoading = false;
       let docJobsSource = null;
 
@@ -291,8 +314,19 @@
           docJobsList.appendChild(card);
         });
         Array.from(selectedDocJobs).forEach((jobId) => {
-          if (!available.has(jobId)) selectedDocJobs.delete(jobId);
+          if (!allDocJobs.some((job) => job.job_id === jobId)) selectedDocJobs.delete(jobId);
         });
+      }
+
+      function applyDocJobsFilters() {
+        const filtered = JobFilters.apply(allDocJobs, {
+          query: docJobsSearch?.value,
+          status: docJobsStatusFilter?.value,
+        });
+        if (docJobsFilterCount) {
+          docJobsFilterCount.textContent = `顯示 ${filtered.length} / ${allDocJobs.length} 個任務`;
+        }
+        renderDocJobs(filtered);
       }
 
       function setAllDocSelections(checked) {
@@ -378,11 +412,16 @@
         docJobsList.innerHTML = '<div class="hint">Loading...</div>';
         try {
           const res = await fetch("/api/doc-jobs");
-          if (!res.ok) return renderDocJobs([]);
+          if (!res.ok) {
+            allDocJobs = [];
+            return applyDocJobsFilters();
+          }
           const data = await res.json();
-          renderDocJobs(data.jobs || []);
+          allDocJobs = data.jobs || [];
+          applyDocJobsFilters();
         } catch (error) {
-          renderDocJobs([]);
+          allDocJobs = [];
+          applyDocJobsFilters();
         } finally {
           docJobsLoading = false;
         }
@@ -394,7 +433,8 @@
         docJobsSource = new EventSource("/api/doc-jobs/stream");
         docJobsSource.addEventListener("jobs", (event) => {
           try {
-            renderDocJobs((JSON.parse(event.data) || {}).jobs || []);
+            allDocJobs = (JSON.parse(event.data) || {}).jobs || [];
+            applyDocJobsFilters();
           } catch (error) {}
         });
         docJobsSource.onerror = () => {
@@ -411,6 +451,12 @@
       docJobsSelectNone.addEventListener("click", () => setAllDocSelections(false));
       docJobsDeleteSelected.addEventListener("click", deleteSelectedDocJobs);
       docJobsDownload.addEventListener("click", downloadSelectedDocJobs);
+      JobFilters.bind({
+        searchId: "docJobsSearch",
+        statusId: "docJobsStatusFilter",
+        resetId: "docJobsFiltersReset",
+        onChange: applyDocJobsFilters,
+      });
       bindUploadFiles({
         inputId: "docUploadInput",
         summaryId: "docUploadFilesSummary",

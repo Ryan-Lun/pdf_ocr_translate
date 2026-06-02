@@ -758,6 +758,25 @@ body.has-global-nav:not(.home-hub) .shell {
   flex-wrap: wrap;
 }
 
+.jobs-filterbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(140px, 0.7fr) minmax(150px, 0.8fr) auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.jobs-filterbar--compact {
+  grid-template-columns: minmax(220px, 1.4fr) minmax(140px, 0.7fr) auto;
+}
+
+.jobs-filterbar label {
+  min-width: 0;
+}
+
+.jobs-filterbar .ghost {
+  min-height: 2.45rem;
+}
+
 .jobs-header h2 {
   margin: 0.3rem 0 0;
   font-size: 1.4rem;
@@ -872,6 +891,11 @@ body.has-global-nav:not(.home-hub) .shell {
 }
 
 @media (max-width: 720px) {
+  .jobs-filterbar,
+  .jobs-filterbar--compact {
+    grid-template-columns: 1fr;
+  }
+
   .job-header {
     flex-direction: column;
     align-items: stretch;

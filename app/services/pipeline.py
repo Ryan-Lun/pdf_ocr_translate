@@ -80,6 +80,7 @@ def run_ocr_pipeline_job(
         jobs.clear_active_upload(job_id)
 
     logger.info("OCR pipeline completed job_id=%s", job_id)
+    jobs.job_store.register_artifact(job_id, "debug_pdf", "overlay_debug.pdf")
     if normalized_document_mode != "general_force":
         ocr.update_pp_json_should_translate(job_dir)
     if not enable_translate:
@@ -185,6 +186,10 @@ def enqueue_job_from_upload(
             "keep_lang": keep_lang,
             "enable_translate": enable_translate,
             "document_mode": normalized_document_mode,
+            "creator_name": creator_name,
+            "owner_work_id": str(owner_work_id or "").strip(),
+            "processing_started_at": now_ts,
+            "ocr_started_at": now_ts,
         },
     )
 
@@ -192,6 +197,7 @@ def enqueue_job_from_upload(
     pdf_path = job_dir / pdf_filename
     if source_pdf.exists():
         shutil.copy2(source_pdf, pdf_path)
+        jobs.job_store.register_artifact(job_id, "source_pdf", pdf_filename)
     else:
         raise FileNotFoundError(f"Missing PDF: {source_pdf}")
 

@@ -73,6 +73,14 @@ def datetime_from_timestamp(value: Any) -> datetime | None:
         return None
 
 
+def timestamp_from_datetime(value: datetime | None) -> float | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()
+
+
 def normalize_job_name(value: Any) -> str | None:
     if isinstance(value, str):
         cleaned = sanitize_unicode_filename(value, fallback="")
@@ -228,19 +236,27 @@ def set_job_state(
     job_meta_path(job_dir_path).write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    _safe_update_job_store(
-        job_id,
-        job_type=job_type,
-        status=status,
-        stage=stage,
-        progress=float(progress) if progress is not None else float(meta.get("progress") or 0.0),
-        error_message=error_message,
-        started_at=datetime_from_timestamp(started_at or meta.get("processing_started_at")),
-        completed_at=datetime_from_timestamp(completed_at or meta.get("processing_completed_at")),
-        job_name=normalize_job_name(meta.get("job_name")),
-        target_lang=str(meta.get("target_lang") or "") or None,
-        document_mode=str(meta.get("document_mode") or "") or None,
-    )
+    store_updates: dict[str, Any] = {
+        "job_type": job_type,
+        "status": status,
+        "stage": stage,
+        "progress": float(progress) if progress is not None else float(meta.get("progress") or 0.0),
+        "error_message": error_message,
+        "started_at": datetime_from_timestamp(started_at or meta.get("processing_started_at")),
+        "completed_at": datetime_from_timestamp(completed_at or meta.get("processing_completed_at")),
+        "job_name": normalize_job_name(meta.get("job_name")),
+        "target_lang": str(meta.get("target_lang") or "") or None,
+        "document_mode": str(meta.get("document_mode") or "") or None,
+    }
+    if extra_meta:
+        try:
+            record = job_store.get_job(job_id)
+            payload = job_store.deserialize_payload(record)
+            payload.update({k: v for k, v in extra_meta.items() if v is not None})
+            store_updates["payload_json"] = json.dumps(payload, ensure_ascii=False)
+        except Exception:
+            pass
+    _safe_update_job_store(job_id, **store_updates)
     notify_jobs_update()
 
 
@@ -307,79 +323,44 @@ def build_jobs_list(
     owner_work_id: str | None = None,
     include_all: bool = False,
 ) -> list[dict[str, Any]]:
-    state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
-    state.TEMPLATE_JOB_ROOT.mkdir(parents=True, exist_ok=True)
     jobs = []
     normalized_owner = " ".join(str(owner_work_id or "").split()).strip()
     if not include_all and not normalized_owner:
         return jobs
     records = job_store.list_jobs(job_type)
+    artifacts_by_job_id = job_store.list_artifacts([record.job_id for record in records])
+
+    def _artifact_url(job_id: str, artifacts: dict[str, Any], artifact_type: str) -> str | None:
+        artifact = artifacts.get(artifact_type)
+        if artifact is None:
+            return None
+        file_path = str(getattr(artifact, "file_path", "") or "").replace("\\", "/").lstrip("/")
+        if not file_path:
+            return None
+        return url_for("jobs.job_file", job_id=job_id, filename=file_path)
 
     for record in records:
-        job_dir_path = job_dir(record.job_id)
         current_job_type = record.job_type
         job_id = record.job_id
-        job_meta = load_job_meta(job_dir_path) or {}
-        record_owner_work_id = str(record.owner_work_id or job_meta.get("owner_work_id") or "").strip()
+        payload = job_store.deserialize_payload(record)
+        artifacts = artifacts_by_job_id.get(job_id, {})
+        record_owner_work_id = str(record.owner_work_id or payload.get("owner_work_id") or "").strip()
         if not include_all and record_owner_work_id != normalized_owner:
             continue
         is_template_source = current_job_type == "template_source"
 
-        pdf_path = job_dir_path / f"{job_id}.pdf"
-        debug_pdf_path = job_dir_path / "overlay_debug.pdf"
-        edited_pdf_path = job_dir_path / "edited.pdf"
-        source_pdf_path = job_dir_path / "source.pdf"
-        structure_md_path = job_dir_path / "structure" / "doc.md"
-        structure_html_path = job_dir_path / "structure" / "doc.html"
-        translated_html_path = job_dir_path / "translated" / "doc.translated.html"
-        docx_path = job_dir_path / "output" / "output.docx"
-        source_docx_path = None
-        word_source_name = ""
-
-        created_at = (
-            job_timestamp(pdf_path)
-            or job_timestamp(source_pdf_path)
-            or job_timestamp(job_dir_path)
-        )
-        debug_ts = job_timestamp(debug_pdf_path)
-        edited_ts = job_timestamp(edited_pdf_path)
-        structure_ts = job_timestamp(structure_md_path)
-        structure_html_ts = job_timestamp(structure_html_path)
-        translated_html_ts = job_timestamp(translated_html_path)
-        docx_ts = job_timestamp(docx_path)
-        updated_at = max(
-            debug_ts,
-            edited_ts,
-            structure_ts,
-            structure_html_ts,
-            translated_html_ts,
-            docx_ts,
-            created_at,
-        )
-        word_source_name = str(job_meta.get("source_filename") or "").strip()
-        if word_source_name:
-            source_docx_path = job_dir_path / word_source_name
-            created_at = job_timestamp(source_docx_path) or created_at
-            updated_at = max(updated_at, job_timestamp(source_docx_path))
-        started_at = job_meta.get("processing_started_at") or created_at
-        completed_at = job_meta.get("processing_completed_at")
-        job_name = normalize_job_name(job_meta.get("job_name"))
-        if not isinstance(completed_at, (int, float)):
-            if current_job_type == "doc_workspace":
-                completed_at = docx_ts or translated_html_ts or structure_html_ts or structure_ts or None
-            elif current_job_type == "word_translate":
-                completed_at = docx_ts or None
-            else:
-                if debug_ts:
-                    completed_at = debug_ts
-                elif edited_ts:
-                    completed_at = edited_ts
-        if isinstance(completed_at, (int, float)) and isinstance(started_at, (int, float)):
-            duration_seconds = max(0.0, float(completed_at) - float(started_at))
-        elif isinstance(started_at, (int, float)):
-            duration_seconds = max(0.0, time.time() - float(started_at))
+        created_at = timestamp_from_datetime(record.created_at) or 0.0
+        updated_at = timestamp_from_datetime(record.updated_at) or created_at
+        started_at = timestamp_from_datetime(record.started_at) or created_at
+        completed_at = timestamp_from_datetime(record.completed_at)
+        if completed_at is not None:
+            duration_seconds = max(0.0, completed_at - started_at)
+        elif record.status in {"queued"}:
+            duration_seconds = 0.0
         else:
-            duration_seconds = max(0.0, updated_at - created_at)
+            duration_seconds = max(0.0, time.time() - started_at)
+        job_name = normalize_job_name(record.job_name)
+        creator_name = str(payload.get("creator_name") or "").strip() or None
 
         if current_job_type == "doc_workspace":
             status_code, status_label = map_status_display(
@@ -400,34 +381,14 @@ def build_jobs_list(
                     "status_label": status_label,
                     "status": status_label,
                     "job_name": job_name,
-                    "creator_name": str(job_meta.get("creator_name") or "").strip() or None,
-                    "owner_work_id": str(record.owner_work_id or job_meta.get("owner_work_id") or "").strip() or None,
+                    "creator_name": creator_name,
+                    "owner_work_id": record_owner_work_id or None,
                     "download_name": build_docx_name(job_id, job_name),
-                    "source_pdf_url": url_for(
-                        "jobs.job_file", job_id=job_id, filename="source.pdf"
-                    )
-                    if source_pdf_path.exists()
-                    else None,
-                    "structure_md_url": url_for(
-                        "jobs.job_file", job_id=job_id, filename="structure/doc.md"
-                    )
-                    if structure_md_path.exists()
-                    else None,
-                    "structure_html_url": url_for(
-                        "jobs.job_file", job_id=job_id, filename="structure/doc.html"
-                    )
-                    if structure_html_path.exists()
-                    else None,
-                    "translated_html_url": url_for(
-                        "jobs.job_file", job_id=job_id, filename="translated/doc.translated.html"
-                    )
-                    if translated_html_path.exists()
-                    else None,
-                    "docx_url": url_for(
-                        "jobs.job_file", job_id=job_id, filename="output/output.docx"
-                    )
-                    if docx_path.exists()
-                    else None,
+                    "source_pdf_url": _artifact_url(job_id, artifacts, "source_pdf"),
+                    "structure_md_url": _artifact_url(job_id, artifacts, "structure_md"),
+                    "structure_html_url": _artifact_url(job_id, artifacts, "structure_html"),
+                    "translated_html_url": _artifact_url(job_id, artifacts, "translated_html"),
+                    "docx_url": _artifact_url(job_id, artifacts, "docx"),
                 }
             )
             continue
@@ -451,41 +412,32 @@ def build_jobs_list(
                     "status_label": status_label,
                     "status": status_label,
                     "job_name": job_name,
-                    "creator_name": str(job_meta.get("creator_name") or "").strip() or None,
-                    "owner_work_id": str(record.owner_work_id or job_meta.get("owner_work_id") or "").strip() or None,
-                    "progress": float(job_meta.get("progress") or record.progress or 0.0),
-                    "avg_quality": float(job_meta.get("avg_quality") or 0.0),
-                    "target_lang": record.target_lang or job_meta.get("target_lang"),
+                    "creator_name": creator_name,
+                    "owner_work_id": record_owner_work_id or None,
+                    "progress": float(record.progress or 0.0),
+                    "avg_quality": float(payload.get("avg_quality") or 0.0),
+                    "target_lang": record.target_lang or payload.get("target_lang"),
                     "download_name": build_docx_name(job_id, job_name),
-                    "source_docx_url": url_for(
-                        "jobs.job_file", job_id=job_id, filename=word_source_name
-                    )
-                    if source_docx_path and source_docx_path.exists()
-                    else None,
-                    "docx_url": url_for(
-                        "jobs.job_file", job_id=job_id, filename="output/output.docx"
-                    )
-                    if docx_path.exists()
-                    else None,
+                    "source_docx_url": _artifact_url(job_id, artifacts, "source_docx"),
+                    "docx_url": _artifact_url(job_id, artifacts, "docx"),
                 }
             )
             continue
 
-        ocr_started_at = job_meta.get("ocr_started_at") or created_at
-        ocr_completed_at = job_meta.get("ocr_completed_at") or debug_ts or None
+        ocr_started_at = payload.get("ocr_started_at") or created_at
+        ocr_completed_at = payload.get("ocr_completed_at")
         if isinstance(ocr_completed_at, (int, float)) and isinstance(ocr_started_at, (int, float)):
             ocr_duration_seconds = max(0.0, float(ocr_completed_at) - float(ocr_started_at))
         else:
             ocr_duration_seconds = None
-        translate_started_at = job_meta.get("translate_started_at")
-        translate_completed_at = job_meta.get("translate_completed_at") or edited_ts or None
+        translate_started_at = payload.get("translate_started_at")
+        translate_completed_at = payload.get("translate_completed_at")
         if isinstance(translate_completed_at, (int, float)) and isinstance(translate_started_at, (int, float)):
             translate_duration_seconds = max(0.0, float(translate_completed_at) - float(translate_started_at))
         else:
             translate_duration_seconds = None
 
         download_name = build_download_name(job_id, job_name)
-        debug_ready = debug_pdf_path.exists()
         status_code, status_label = map_status_display(
             current_job_type, record.status, record.stage or "queued"
         )
@@ -506,27 +458,18 @@ def build_jobs_list(
                 "status": status_label,
                 "job_name": job_name,
                 "template_source": is_template_source,
-                "creator_name": str(job_meta.get("creator_name") or "").strip() or None,
-                "owner_work_id": str(record.owner_work_id or job_meta.get("owner_work_id") or "").strip() or None,
+                "creator_name": creator_name,
+                "owner_work_id": record_owner_work_id or None,
                 "document_mode": normalize_document_mode(
-                    record.document_mode or job_meta.get("document_mode")
+                    record.document_mode or payload.get("document_mode")
                 ),
                 "translate_mode": normalize_translate_mode(
-                    (load_batch_config(job_dir_path) or {}).get("translate_mode")
-                    or job_meta.get("translate_mode")
+                    payload.get("translate_mode")
                 ),
                 "download_name": download_name,
                 "editor_url": url_for("editor.editor", job_id=job_id),
-                "debug_pdf_url": url_for(
-                    "jobs.job_file", job_id=job_id, filename="overlay_debug.pdf"
-                )
-                if debug_ready
-                else None,
-                "edited_pdf_url": url_for(
-                    "jobs.job_file", job_id=job_id, filename="edited.pdf"
-                )
-                if edited_pdf_path.exists()
-                else None,
+                "debug_pdf_url": _artifact_url(job_id, artifacts, "debug_pdf"),
+                "edited_pdf_url": _artifact_url(job_id, artifacts, "edited_pdf"),
                 }
             )
     jobs.sort(key=lambda item: item["updated_at"], reverse=True)

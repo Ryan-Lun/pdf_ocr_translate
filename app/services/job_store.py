@@ -253,6 +253,22 @@ def list_jobs(job_type: str | None = None) -> list[JobRecord]:
         return list(session.scalars(stmt).all())
 
 
+def list_artifacts(job_ids: list[str] | tuple[str, ...] | set[str]) -> dict[str, dict[str, JobArtifactRecord]]:
+    normalized_ids = [str(job_id) for job_id in job_ids if job_id]
+    if not normalized_ids:
+        return {}
+    with session_scope() as session:
+        stmt = (
+            select(JobArtifactRecord)
+            .where(JobArtifactRecord.job_id.in_(normalized_ids))
+            .order_by(JobArtifactRecord.created_at.asc(), JobArtifactRecord.id.asc())
+        )
+        artifacts: dict[str, dict[str, JobArtifactRecord]] = {}
+        for artifact in session.scalars(stmt).all():
+            artifacts.setdefault(artifact.job_id, {})[artifact.artifact_type] = artifact
+        return artifacts
+
+
 def update_job(job_id: str, **updates: Any) -> None:
     with session_scope() as session:
         record = session.get(JobRecord, job_id)
