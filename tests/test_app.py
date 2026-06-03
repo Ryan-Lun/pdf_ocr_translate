@@ -23,6 +23,52 @@ def test_overlay_templates_page_ok(client):
     assert "text/html" in resp.content_type
 
 
+def test_job_roots_are_separated_by_feature(tmp_path, monkeypatch):
+    legacy_root = tmp_path / "jobs"
+    monkeypatch.setattr(state, "DEFAULT_JOB_ROOT", legacy_root)
+    monkeypatch.setattr(state, "JOB_ROOT", legacy_root)
+    monkeypatch.setattr(state, "PDF_OVERLAY_JOB_ROOT", tmp_path / "pdf_overlay")
+    monkeypatch.setattr(state, "DOC_WORKSPACE_JOB_ROOT", tmp_path / "pdf_rebuild")
+    monkeypatch.setattr(state, "WORD_TRANSLATE_JOB_ROOT", tmp_path / "word_overlay")
+    monkeypatch.setattr(state, "TEMPLATE_JOB_ROOT", tmp_path / "templates")
+
+    assert jobs.job_root_for_type("ocr_overlay") == tmp_path / "pdf_overlay"
+    assert jobs.job_root_for_type("doc_workspace") == tmp_path / "pdf_rebuild"
+    assert jobs.job_root_for_type("word_translate") == tmp_path / "word_overlay"
+
+
+def test_job_root_for_type_respects_custom_legacy_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "DEFAULT_JOB_ROOT", tmp_path / "default")
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "custom")
+
+    assert jobs.job_root_for_type("ocr_overlay") == tmp_path / "custom"
+    assert jobs.job_root_for_type("doc_workspace") == tmp_path / "custom"
+    assert jobs.job_root_for_type("word_translate") == tmp_path / "custom"
+
+
+def test_iter_job_dirs_includes_feature_and_legacy_roots(tmp_path, monkeypatch):
+    legacy_root = tmp_path / "jobs"
+    pdf_root = tmp_path / "pdf_overlay"
+    monkeypatch.setattr(state, "DEFAULT_JOB_ROOT", legacy_root)
+    monkeypatch.setattr(state, "JOB_ROOT", legacy_root)
+    monkeypatch.setattr(state, "PDF_OVERLAY_JOB_ROOT", pdf_root)
+    monkeypatch.setattr(state, "DOC_WORKSPACE_JOB_ROOT", tmp_path / "pdf_rebuild")
+    monkeypatch.setattr(state, "WORD_TRANSLATE_JOB_ROOT", tmp_path / "word_overlay")
+    monkeypatch.setattr(state, "TEMPLATE_JOB_ROOT", tmp_path / "templates")
+
+    new_job_id = "a" * 32
+    old_job_id = "b" * 32
+    for root, job_id in ((pdf_root, new_job_id), (legacy_root, old_job_id)):
+        job_dir = root / job_id
+        job_dir.mkdir(parents=True)
+        jobs.write_job_meta(job_dir, {"job_type": "ocr_overlay"})
+
+    assert [job_dir.name for job_dir in jobs.iter_job_dirs("ocr_overlay")] == [
+        new_job_id,
+        old_job_id,
+    ]
+
+
 def test_upload_template_source_creates_draft(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "TEMPLATE_JOB_ROOT", tmp_path / "templates" / "jobs")
@@ -296,6 +342,65 @@ def test_upload_pdf_overlay_accepts_explicit_page_numbers(client, tmp_path, monk
             "page_numbers": [1, 3, 5, 6, 7],
         }
     ]
+
+
+def test_upload_pdf_overlay_uses_defaults_for_blank_page_fields(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    captured: list[dict[str, object]] = []
+
+    def fake_enqueue(
+        source_pdf,
+        display_name,
+        dpi,
+        start_page,
+        end_page,
+        translate_source_lang,
+        translate_target_lang,
+        translate_model,
+        translate_mode,
+        keep_lang,
+        enable_translate,
+        document_mode,
+        creator_name="",
+        **kwargs,
+    ):
+        captured.append({"start_page": start_page, "end_page": end_page})
+        return "e" * 32
+
+    monkeypatch.setattr(
+        "app.blueprints.main.routes.pipeline.enqueue_job_from_upload",
+        fake_enqueue,
+    )
+
+    resp = client.post(
+        "/upload",
+        data={
+            "start": "",
+            "end": "",
+            "pdf": (io.BytesIO(b"%PDF-1.4"), "sample.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 302
+    assert captured == [{"start_page": 1, "end_page": None}]
+
+
+def test_upload_pdf_overlay_rejects_non_numeric_page_selection(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+
+    resp = client.post(
+        "/upload",
+        data={
+            "pages": "1,a",
+            "pdf": (io.BytesIO(b"%PDF-1.4"), "sample.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 400
 
 
 def test_upload_pdf_overlay_accepts_realtime_mode(client, tmp_path, monkeypatch):
@@ -660,7 +765,11 @@ def test_word_jobs_download_docx_requires_selected_jobs(client):
 
 
 def test_doc_jobs_stream_returns_sse(client, monkeypatch):
-    monkeypatch.setattr(jobs, "build_jobs_list", lambda job_type=None: [{"job_id": "a" * 32, "job_type": job_type}])
+    monkeypatch.setattr(
+        jobs,
+        "build_jobs_list",
+        lambda job_type=None, **kwargs: [{"job_id": "a" * 32, "job_type": job_type}],
+    )
 
     resp = client.get("/api/doc-jobs/stream", buffered=False)
 
@@ -673,7 +782,11 @@ def test_doc_jobs_stream_returns_sse(client, monkeypatch):
 
 
 def test_word_jobs_stream_returns_sse(client, monkeypatch):
-    monkeypatch.setattr(jobs, "build_jobs_list", lambda job_type=None: [{"job_id": "b" * 32, "job_type": job_type}])
+    monkeypatch.setattr(
+        jobs,
+        "build_jobs_list",
+        lambda job_type=None, **kwargs: [{"job_id": "b" * 32, "job_type": job_type}],
+    )
 
     resp = client.get("/api/word-jobs/stream", buffered=False)
 
@@ -996,7 +1109,15 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
     captured: list[dict[str, str]] = []
 
-    def fake_enqueue(source_path, display_name, source_lang, target_lang, creator_name="", retain_terms_raw=None):
+    def fake_enqueue(
+        source_path,
+        display_name,
+        source_lang,
+        target_lang,
+        creator_name="",
+        retain_terms_raw=None,
+        **kwargs,
+    ):
         captured.append(
             {
                 "source_name": Path(source_path).name,
@@ -1004,6 +1125,7 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
                 "source_lang": source_lang,
                 "target_lang": target_lang,
                 "creator_name": creator_name,
+                "system_prompt": kwargs.get("system_prompt", ""),
             }
         )
         return "b" * 32
@@ -1018,7 +1140,7 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
         data={
             "source_lang": "auto",
             "target_lang": "en",
-            "creator_name": "alice",
+            "system_prompt": "Use concise legal wording.",
             "docx": (io.BytesIO(b"legacy doc"), "legacy.doc"),
         },
         content_type="multipart/form-data",
@@ -1030,7 +1152,8 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
     assert captured[0]["display_name"] == "legacy"
     assert captured[0]["source_lang"] == "auto"
     assert captured[0]["target_lang"] == "en"
-    assert captured[0]["creator_name"] == "alice"
+    assert captured[0]["creator_name"] == ""
+    assert captured[0]["system_prompt"] == "Use concise legal wording."
 
 
 def test_upload_word_workspace_preserves_chinese_display_name(client, tmp_path, monkeypatch):
@@ -1038,7 +1161,15 @@ def test_upload_word_workspace_preserves_chinese_display_name(client, tmp_path, 
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
     captured: list[dict[str, str]] = []
 
-    def fake_enqueue(source_path, display_name, source_lang, target_lang, creator_name="", retain_terms_raw=None):
+    def fake_enqueue(
+        source_path,
+        display_name,
+        source_lang,
+        target_lang,
+        creator_name="",
+        retain_terms_raw=None,
+        **kwargs,
+    ):
         captured.append(
             {
                 "source_name": Path(source_path).name,

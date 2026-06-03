@@ -98,6 +98,7 @@ def process_job(job_id: str) -> None:
             source_lang=str(payload.get("source_lang") or "auto"),
             target_lang=str(payload.get("target_lang") or record.target_lang or "en"),
             retain_terms=list(payload.get("retain_terms") or []),
+            system_prompt=str(payload.get("system_prompt") or ""),
         )
         return
 

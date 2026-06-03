@@ -40,7 +40,11 @@ def normalize_database_url(database_url: str) -> str:
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 OUT_ROOT = BASE_DIR / "out"
-JOB_ROOT = OUT_ROOT / "jobs"
+DEFAULT_JOB_ROOT = OUT_ROOT / "jobs"
+JOB_ROOT = DEFAULT_JOB_ROOT
+PDF_OVERLAY_JOB_ROOT = OUT_ROOT / "pdf_overlay"
+DOC_WORKSPACE_JOB_ROOT = OUT_ROOT / "pdf_rebuild"
+WORD_TRANSLATE_JOB_ROOT = OUT_ROOT / "word_overlay"
 TEMPLATE_ROOT = OUT_ROOT / "templates"
 TEMPLATE_JOB_ROOT = TEMPLATE_ROOT / "jobs"
 UPLOAD_ROOT = OUT_ROOT / "uploads"
@@ -206,7 +210,7 @@ ALLOWED_GROUP_DN = os.getenv("ALLOWED_GROUP_DN", "").strip()
 
 PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY = _env_bool(
     "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY",
-    True,
+    False,
 )
 
 TRANSLATION_MEMORY_PATH = Path(

@@ -163,16 +163,76 @@ def build_docx_name(job_id: str, job_name: str | None) -> str:
     return build_download_name(job_id, job_name, ext="docx", suffix="translated")
 
 
+def _custom_job_root_active() -> bool:
+    return Path(state.JOB_ROOT) != Path(getattr(state, "DEFAULT_JOB_ROOT", state.JOB_ROOT))
+
+
+def job_root_for_type(job_type: str | None) -> Path:
+    if _custom_job_root_active():
+        return state.JOB_ROOT
+    normalized = str(job_type or "").strip().lower()
+    if normalized == "doc_workspace":
+        return state.DOC_WORKSPACE_JOB_ROOT
+    if normalized == "word_translate":
+        return state.WORD_TRANSLATE_JOB_ROOT
+    if normalized == "template_source":
+        return state.TEMPLATE_JOB_ROOT
+    return state.PDF_OVERLAY_JOB_ROOT
+
+
+def iter_job_roots() -> list[Path]:
+    roots = [
+        state.PDF_OVERLAY_JOB_ROOT,
+        state.DOC_WORKSPACE_JOB_ROOT,
+        state.WORD_TRANSLATE_JOB_ROOT,
+        state.JOB_ROOT,
+        state.TEMPLATE_JOB_ROOT,
+    ]
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for root in roots:
+        resolved = Path(root)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        result.append(resolved)
+    return result
+
+
+def iter_job_dirs(job_type: str | None = None, include_templates: bool = False) -> list[Path]:
+    if job_type:
+        roots = [job_root_for_type(job_type)]
+        if state.JOB_ROOT not in roots:
+            roots.append(state.JOB_ROOT)
+    else:
+        roots = iter_job_roots()
+    if include_templates and state.TEMPLATE_JOB_ROOT not in roots:
+        roots.append(state.TEMPLATE_JOB_ROOT)
+    dirs: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root.exists():
+            continue
+        for job_dir_path in sorted(root.iterdir()):
+            if not job_dir_path.is_dir() or not safe_job_id(job_dir_path.name):
+                continue
+            if job_dir_path.name in seen:
+                continue
+            if job_type and get_job_type(job_dir_path) != job_type:
+                continue
+            seen.add(job_dir_path.name)
+            dirs.append(job_dir_path)
+    return dirs
+
+
 def job_dir(job_id: str, *, job_root: Path | None = None) -> Path:
     if job_root is not None:
         return job_root / job_id
-    primary = state.JOB_ROOT / job_id
-    if primary.exists():
-        return primary
-    template = state.TEMPLATE_JOB_ROOT / job_id
-    if template.exists():
-        return template
-    return primary
+    for root in iter_job_roots():
+        candidate = root / job_id
+        if candidate.exists():
+            return candidate
+    return job_root_for_type(None) / job_id
 
 
 def job_timestamp(path: Path) -> float:
@@ -796,18 +856,14 @@ def load_edits_map(job_dir_path: Path) -> dict[int, list[dict[str, Any]]]:
 
 
 def build_translated_zip(job_ids: set[str] | None) -> tuple[io.BytesIO, int]:
-    state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    job_root_for_type("ocr_overlay").mkdir(parents=True, exist_ok=True)
     buf = io.BytesIO()
     names: set[str] = set()
     base_counts: dict[str, int] = {}
     count = 0
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for job_dir_path in sorted(state.JOB_ROOT.iterdir()):
-            if not job_dir_path.is_dir():
-                continue
+        for job_dir_path in iter_job_dirs("ocr_overlay"):
             job_id = job_dir_path.name
-            if not safe_job_id(job_id):
-                continue
             if job_ids is not None and job_id not in job_ids:
                 continue
             edited_path = job_dir_path / "edited.pdf"
@@ -828,7 +884,7 @@ def build_translated_zip(job_ids: set[str] | None) -> tuple[io.BytesIO, int]:
 
 
 def build_docx_zip(job_ids: set[str], job_type: str) -> tuple[io.BytesIO, int]:
-    state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    job_root_for_type(job_type).mkdir(parents=True, exist_ok=True)
     buf = io.BytesIO()
     names: set[str] = set()
     base_counts: dict[str, int] = {}
@@ -859,7 +915,8 @@ def build_docx_zip(job_ids: set[str], job_type: str) -> tuple[io.BytesIO, int]:
 def delete_job_dir(job_id: str) -> tuple[bool, str | None]:
     removed = False
     errors: list[str] = []
-    for job_dir_path in (state.JOB_ROOT / job_id, state.TEMPLATE_JOB_ROOT / job_id):
+    for root in iter_job_roots():
+        job_dir_path = root / job_id
         if not job_dir_path.exists():
             continue
         try:

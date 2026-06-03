@@ -22,7 +22,7 @@
         </div>
       </header>
       <section class="upload-card upload-card-doc">
-        <form method="post" enctype="multipart/form-data" action="{{ url_for('.upload_word_workspace') }}">
+        <form id="wordUploadForm" method="post" enctype="multipart/form-data" action="{{ url_for('.upload_word_workspace') }}">
           <label class="file-input">
             <span>選擇 Word（.doc / .docx，可多選）</span>
             <input id="wordUploadInput" type="file" name="docx" accept=".doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple />
@@ -51,6 +51,10 @@
               </select>
             </label>
           </div>
+          <label>
+            <span>翻譯提示詞調整</span>
+            <textarea name="system_prompt" rows="5" placeholder="系統會套用內建翻譯規則；這裡只填額外偏好，例如：用詞更正式、採法規語氣、特定術語譯法。留空則完全使用預設規則。"></textarea>
+          </label>
           <div class="form-note">
             <h4><i class="bi bi-info-circle"></i> 注意事項</h4>
             <p>Word 原版面翻譯會盡量保留原始 Word 文件的段落、表格、樣式與版面配置，翻譯完成後請檢查輸出結果。</p>
@@ -94,7 +98,7 @@
           </label>
           <button id="wordJobsFiltersReset" class="ghost" type="button">重設</button>
         </div>
-        <div id="wordJobsEmpty" class="hint">No Word jobs yet.</div>
+        <div id="wordJobsEmpty" class="hint">目前沒有任務</div>
         <div id="wordJobsList" class="jobs-list"></div>
         <div id="wordJobsPagination" class="jobs-pagination"></div>
       </section>

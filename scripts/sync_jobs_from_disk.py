@@ -202,7 +202,7 @@ def main() -> int:
 
     actions = {"created": 0, "updated": 0}
     scanned = 0
-    for root in (state.JOB_ROOT, state.TEMPLATE_JOB_ROOT):
+    for root in jobs.iter_job_roots():
         if not root.exists():
             continue
         for job_dir in sorted(root.iterdir()):

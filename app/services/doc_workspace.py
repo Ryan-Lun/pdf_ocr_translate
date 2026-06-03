@@ -158,7 +158,7 @@ def enqueue_doc_job_from_upload(
     owner_work_id: str = "",
 ) -> str:
     job_id = uuid.uuid4().hex
-    job_dir = jobs.job_dir(job_id)
+    job_dir = jobs.job_dir(job_id, job_root=jobs.job_root_for_type("doc_workspace"))
     job_dir.mkdir(parents=True, exist_ok=True)
     now_ts = time.time()
     jobs.write_job_meta(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -54,7 +55,10 @@ def _current_owner_work_id() -> str:
 def _parse_page_numbers(value: str) -> list[int]:
     page_numbers: list[int] = []
     seen: set[int] = set()
-    for part in str(value or "").replace("，", ",").split(","):
+    normalized = str(value or "").replace("，", ",")
+    if not re.fullmatch(r"[\d,\-\s]*", normalized):
+        raise ValueError("Invalid page selection.")
+    for part in normalized.split(","):
         token = part.strip()
         if not token:
             continue
@@ -77,6 +81,19 @@ def _parse_page_numbers(value: str) -> list[int]:
                 page_numbers.append(page)
                 seen.add(page)
     return page_numbers
+
+
+def _parse_positive_int_field(name: str, default: int | None = None) -> int | None:
+    raw = str(request.form.get(name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        abort(400, f"Invalid {name} value.")
+    if value < 1:
+        abort(400, f"Invalid {name} value.")
+    return value
 
 
 def _enforce_submit_quota(creator_name: str = "") -> None:
@@ -160,13 +177,12 @@ def upload() -> str:
         abort(400, "Missing PDF file.")
     upload_files = [f for f in files if f and f.filename]
 
-    state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    jobs.job_root_for_type("ocr_overlay").mkdir(parents=True, exist_ok=True)
     state.UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
     dpi = 200
-    start_page = int(request.form.get("start", 1))
-    end_page_raw = request.form.get("end", "").strip()
-    end_page = int(end_page_raw) if end_page_raw else None
+    start_page = _parse_positive_int_field("start", 1) or 1
+    end_page = _parse_positive_int_field("end")
     pages_raw = request.form.get("pages", "").strip()
     try:
         page_numbers = _parse_page_numbers(pages_raw) if pages_raw else []
@@ -306,7 +322,7 @@ def upload_doc_workspace() -> str:
     if not files or all(f.filename == "" for f in files):
         abort(400, "Missing PDF file.")
 
-    state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    jobs.job_root_for_type("doc_workspace").mkdir(parents=True, exist_ok=True)
     state.UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
     source_lang = request.form.get("source_lang", "auto").strip() or "auto"
@@ -347,12 +363,13 @@ def upload_word_workspace() -> str:
     if not files or all(f.filename == "" for f in files):
         abort(400, "Missing Word file.")
 
-    state.JOB_ROOT.mkdir(parents=True, exist_ok=True)
+    jobs.job_root_for_type("word_translate").mkdir(parents=True, exist_ok=True)
     state.UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
     source_lang = request.form.get("source_lang", "auto").strip() or "auto"
     target_lang = request.form.get("target_lang", "en").strip() or "en"
     retain_terms = request.form.get("retain_terms", "")
+    system_prompt = request.form.get("system_prompt", "").strip()
     creator_name = _current_creator_name()
     owner_work_id = _current_owner_work_id()
     _enforce_submit_quota(creator_name)
@@ -374,6 +391,7 @@ def upload_word_workspace() -> str:
             creator_name=creator_name,
             owner_work_id=owner_work_id,
             retain_terms_raw=retain_terms,
+            system_prompt=system_prompt,
         )
         try:
             tmp_path.unlink(missing_ok=True)

@@ -46,7 +46,7 @@
             </label>
             <label>
               <span>指定頁面</span>
-              <input id="overlayPagesInput" type="text" name="pages" placeholder="例如 1,3,5-7" />
+              <input id="overlayPagesInput" type="text" name="pages" placeholder="例如 1,3,5-7" inputmode="numeric" pattern="[0-9,\\-，\\s]*" />
             </label>
           </div>
           <div class="form-grid">
@@ -152,7 +152,7 @@
           </label>
           <button id="jobsFiltersReset" class="ghost" type="button">重設</button>
         </div>
-        <div id="jobsEmpty" class="hint">No processed files yet.</div>
+        <div id="jobsEmpty" class="hint">目前沒有任務</div>
         <div id="jobsList" class="jobs-list"></div>
         <div id="jobsPagination" class="jobs-pagination"></div>
       </section>
@@ -167,11 +167,12 @@
       const jobsSelectAll = document.getElementById("jobsSelectAll");
       const jobsSelectNone = document.getElementById("jobsSelectNone");
       const jobsDeleteSelected = document.getElementById("jobsDeleteSelected");
+      const overlayUploadInput = document.getElementById("overlayUploadInput");
       const documentModeSelect = document.getElementById("documentModeSelect");
       const sourceLangSelect = document.getElementById("sourceLangSelect");
       const overlayStartPageInput = document.getElementById("overlayStartPageInput");
       const overlayEndPageInput = document.getElementById("overlayEndPageInput");
-      const overlayPageRangeHint = document.getElementById("overlayPageRangeHint");
+      const overlayPagesInput = document.getElementById("overlayPagesInput");
       const jobsFilterCount = document.getElementById("jobsFilterCount");
       const jobsSearch = document.getElementById("jobsSearch");
       const jobsStatusFilter = document.getElementById("jobsStatusFilter");
@@ -256,19 +257,29 @@
       }
 
       function syncPageRangeInputs(files) {
-        if (!overlayStartPageInput || !overlayEndPageInput) return;
+        if (!overlayStartPageInput || !overlayEndPageInput || !overlayPagesInput) return;
         const allowRange = (files?.length || 0) <= 1;
-        overlayStartPageInput.disabled = !allowRange;
-        overlayEndPageInput.disabled = !allowRange;
+        const hasExplicitPages = !!overlayPagesInput.value.trim();
+        overlayStartPageInput.disabled = !allowRange || hasExplicitPages;
+        overlayEndPageInput.disabled = !allowRange || hasExplicitPages;
+        overlayPagesInput.disabled = !allowRange;
         if (!allowRange) {
           overlayStartPageInput.value = "1";
           overlayEndPageInput.value = "";
+          overlayPagesInput.value = "";
+        } else if (hasExplicitPages) {
+          overlayStartPageInput.value = "";
+          overlayEndPageInput.value = "";
+        } else if (!overlayStartPageInput.value.trim()) {
+          overlayStartPageInput.value = "1";
         }
-        if (overlayPageRangeHint) {
-          overlayPageRangeHint.textContent = allowRange
-            ? "單一文件可指定開始與結束頁；多個文件會自動翻譯整份文件。"
-            : "已選擇多個文件：系統會自動翻譯每一份文件的全部頁面。";
-        }
+      }
+
+      function normalizePagesInput() {
+        if (!overlayPagesInput) return;
+        overlayPagesInput.value = overlayPagesInput.value
+          .replace(/[^\d,\-，\s]/g, "")
+          .replace(/，/g, ",");
       }
 
       function syncTranslateModelSelection() {
@@ -624,6 +635,10 @@
       ensureTranslateModeControl();
       translateModeSelect?.addEventListener("change", syncTranslateModelSelection);
       documentModeSelect?.addEventListener("change", syncSourceLangControl);
+      overlayPagesInput?.addEventListener("input", () => {
+        normalizePagesInput();
+        syncPageRangeInputs(overlayUploadInput?.files || []);
+      });
       syncTranslateModelSelection();
       syncSourceLangControl();
       bindUploadFiles({
