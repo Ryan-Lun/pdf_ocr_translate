@@ -11,8 +11,58 @@ from typing import Any
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, func, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
+from . import state
+
 logger = logging.getLogger(__name__)
 _LOCAL_WORKER_ID_RE = re.compile(r"^worker-(\d+)$")
+_DATABASE_SCHEMA = state.DATABASE_SCHEMA
+
+
+def _metadata_schema(schema_name: str | None = None) -> str | None:
+    schema = state.normalize_database_schema(schema_name or _DATABASE_SCHEMA)
+    return None if schema.lower() == "dbo" else schema
+
+
+def configure_database_schema(schema_name: str | None = None) -> str:
+    global _DATABASE_SCHEMA
+    _DATABASE_SCHEMA = state.normalize_database_schema(schema_name or state.DATABASE_SCHEMA)
+    table_schema = _metadata_schema(_DATABASE_SCHEMA)
+    for table in Base.metadata.tables.values():
+        table.schema = table_schema
+    return _DATABASE_SCHEMA
+
+
+def current_database_schema() -> str:
+    return _DATABASE_SCHEMA
+
+
+def inspection_schema(engine) -> str | None:
+    if getattr(engine.dialect, "name", "") == "mssql":
+        return _DATABASE_SCHEMA
+    return _metadata_schema(_DATABASE_SCHEMA)
+
+
+def _quote_identifier(identifier: str) -> str:
+    return "[" + identifier.replace("]", "]]") + "]"
+
+
+def qualified_table_name(table_name: str, engine=None) -> str:
+    schema = _DATABASE_SCHEMA if engine is None or getattr(engine.dialect, "name", "") == "mssql" else _metadata_schema(_DATABASE_SCHEMA)
+    if schema:
+        return f"{_quote_identifier(schema)}.{_quote_identifier(table_name)}"
+    return _quote_identifier(table_name)
+
+
+def ensure_database_schema(engine) -> None:
+    if getattr(engine.dialect, "name", "") != "mssql":
+        return
+    schema = _DATABASE_SCHEMA
+    if schema.lower() == "dbo":
+        return
+    schema_literal = schema.replace("'", "''")
+    schema_identifier = _quote_identifier(schema)
+    with engine.begin() as conn:
+        conn.execute(text(f"IF SCHEMA_ID(N'{schema_literal}') IS NULL EXEC(N'CREATE SCHEMA {schema_identifier}');"))
 
 
 class Base(DeclarativeBase):
@@ -105,6 +155,7 @@ def _int_env(name: str, default: int) -> int:
 def init_app(app) -> None:
     global _engine, _session_factory
     database_url = app.config["DATABASE_URL"]
+    configure_database_schema(app.config.get("DATABASE_SCHEMA") or state.DATABASE_SCHEMA)
     if not database_url:
         raise RuntimeError("DATABASE_URL is required and must point to SQL Server.")
     if not database_url.lower().startswith("mssql"):
@@ -121,6 +172,7 @@ def init_app(app) -> None:
     )
     _session_factory = sessionmaker(bind=_engine, future=True, expire_on_commit=False)
     if bool(app.config.get("AUTO_SCHEMA_MANAGEMENT", True)):
+        ensure_database_schema(_engine)
         Base.metadata.create_all(bind=_engine, checkfirst=True)
         _ensure_compatible_columns()
         _assert_required_tables()
@@ -130,16 +182,17 @@ def _ensure_compatible_columns() -> None:
     if _engine is None:
         raise RuntimeError("Database engine not initialized.")
     inspector = inspect(_engine)
-    table_names = {name.lower() for name in inspector.get_table_names()}
+    schema = inspection_schema(_engine)
+    table_names = {name.lower() for name in inspector.get_table_names(schema=schema)}
     with _engine.begin() as conn:
         if "jobs" in table_names:
-            job_columns = {col["name"].lower() for col in inspector.get_columns("jobs")}
+            job_columns = {col["name"].lower() for col in inspector.get_columns("jobs", schema=schema)}
             if "owner_work_id" not in job_columns:
-                conn.execute(text("ALTER TABLE jobs ADD owner_work_id NVARCHAR(100) NULL;"))
+                conn.execute(text(f"ALTER TABLE {qualified_table_name('jobs', _engine)} ADD owner_work_id NVARCHAR(100) NULL;"))
         if "document_templates" in table_names:
-            template_columns = {col["name"].lower() for col in inspector.get_columns("document_templates")}
+            template_columns = {col["name"].lower() for col in inspector.get_columns("document_templates", schema=schema)}
             if "owner_work_id" not in template_columns:
-                conn.execute(text("ALTER TABLE document_templates ADD owner_work_id NVARCHAR(100) NULL;"))
+                conn.execute(text(f"ALTER TABLE {qualified_table_name('document_templates', _engine)} ADD owner_work_id NVARCHAR(100) NULL;"))
 
 
 def _assert_required_tables() -> None:
@@ -149,7 +202,7 @@ def _assert_required_tables() -> None:
         """
         SELECT TABLE_NAME, COLUMN_NAME
         FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA = 'dbo'
+        WHERE TABLE_SCHEMA = :schema_name
           AND TABLE_NAME IN (
             'jobs',
             'job_artifacts',
@@ -159,13 +212,13 @@ def _assert_required_tables() -> None:
         """
     )
     with _engine.connect() as conn:
-        rows = conn.execute(query).fetchall()
+        rows = conn.execute(query, {"schema_name": current_database_schema()}).fetchall()
     existing = {str(row[0]).lower() for row in rows}
     missing = [name for name in REQUIRED_TABLES if name.lower() not in existing]
     if missing:
         names = ", ".join(missing)
         raise RuntimeError(
-            f"Missing required SQL Server tables: {names}. Run scripts/init_sqlserver_schema.sql first."
+            f"Missing required SQL Server tables in schema {current_database_schema()}: {names}. Run scripts/init_sqlserver_schema.sql first."
         )
     template_columns = {
         str(row[1]).lower()
@@ -174,7 +227,7 @@ def _assert_required_tables() -> None:
     }
     if "payload_json" not in template_columns:
         raise RuntimeError(
-            "Missing required SQL Server column: document_templates.payload_json. "
+            f"Missing required SQL Server column: {current_database_schema()}.document_templates.payload_json. "
             "Update the database schema before starting the app."
         )
 

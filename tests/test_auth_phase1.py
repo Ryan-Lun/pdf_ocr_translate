@@ -11,8 +11,16 @@ from app.services import job_store, state
 @pytest.fixture
 def auth_app(monkeypatch):
     engine = create_engine(state.DATABASE_URL, future=True, pool_pre_ping=True)
+    job_store.configure_database_schema(state.DATABASE_SCHEMA)
+    job_store.ensure_database_schema(engine)
+    schema = job_store.current_database_schema()
     with engine.begin() as conn:
-        conn.execute(text("IF OBJECT_ID(N'dbo.document_templates', N'U') IS NOT NULL DROP TABLE dbo.document_templates;"))
+        conn.execute(
+            text(
+                f"IF OBJECT_ID(N'{schema}.document_templates', N'U') IS NOT NULL "
+                f"DROP TABLE {job_store.qualified_table_name('document_templates', engine)};"
+            )
+        )
     job_store.Base.metadata.create_all(
         engine,
         tables=[job_store.DocumentTemplateRecord.__table__],

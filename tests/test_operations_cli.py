@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import pytest
 from flask import Flask
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from app.services import job_store, operations_service
+from app.services import auth_store, job_store, operations_service
 from app.services.operations_service import register_operations_cli
 
 
 @pytest.fixture
 def ops_app(monkeypatch):
+    job_store.configure_database_schema("translation")
     engine = create_engine("sqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS translation"))
     job_store.Base.metadata.create_all(bind=engine, checkfirst=True)
     monkeypatch.setattr(job_store, "_engine", engine)
     monkeypatch.setattr(
@@ -60,3 +63,24 @@ def test_seed_bootstrap_populates_auth_defaults(ops_app):
     assert "auth=1" in result.output
     assert "roles=2" in result.output
     assert "admins=1" in result.output
+
+
+def test_configure_database_schema_updates_metadata_schema():
+    original_schema = job_store.current_database_schema()
+    try:
+        schema = job_store.configure_database_schema("translation")
+
+        assert schema == "translation"
+        assert job_store.JobRecord.__table__.schema == "translation"
+        assert auth_store.UserRecord.__table__.schema == "translation"
+        assert job_store.qualified_table_name("jobs") == "[translation].[jobs]"
+    finally:
+        job_store.configure_database_schema(original_schema)
+
+
+def test_schema_preflight_reports_current_schema(ops_app):
+    runner = ops_app.test_cli_runner()
+    result = runner.invoke(args=["schema-preflight"])
+
+    assert result.exit_code == 0
+    assert "schema=translation" in result.output

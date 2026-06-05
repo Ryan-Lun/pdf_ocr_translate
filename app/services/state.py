@@ -38,6 +38,13 @@ def normalize_database_url(database_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(pairs), parsed.fragment))
 
 
+def normalize_database_schema(database_schema: str) -> str:
+    cleaned = (database_schema or "dbo").strip() or "dbo"
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", cleaned):
+        raise ValueError("DATABASE_SCHEMA must be a simple SQL identifier.")
+    return cleaned
+
+
 BASE_DIR = Path(__file__).resolve().parents[2]
 OUT_ROOT = BASE_DIR / "out"
 DEFAULT_JOB_ROOT = OUT_ROOT / "jobs"
@@ -123,6 +130,7 @@ DOC_TRANSLATE_SYSTEM_PROMPT = os.getenv(
 ).strip()
 
 DATABASE_URL = normalize_database_url(os.getenv("DATABASE_URL", "").strip())
+DATABASE_SCHEMA = normalize_database_schema(os.getenv("DATABASE_SCHEMA", "dbo"))
 WORKER_POLL_SECONDS = float(os.getenv("WORKER_POLL_SECONDS", "3"))
 WORKER_ID = os.getenv("WORKER_ID", f"{os.getenv('COMPUTERNAME', 'worker')}-{os.getpid()}")
 WORKER_OCR_MAX_RUNNING = int(os.getenv("WORKER_OCR_MAX_RUNNING", "1"))

@@ -18,6 +18,7 @@ def run_schema_preflight(app) -> dict[str, object]:
             "groups": groups,
             "missing": missing_tables,
             "missing_columns": missing_table_columns,
+            "database_schema": job_store.current_database_schema(),
         }
 
 
@@ -71,7 +72,7 @@ def register_operations_cli(app) -> None:
             raise click.ClickException("Missing required schema: " + "; ".join(parts))
         click.echo(
             "schema_preflight "
-            f"ok=1 groups={len(result['groups'])} "
+            f"ok=1 schema={result['database_schema']} groups={len(result['groups'])} "
             f"auto_schema_management={'1' if current_app.config.get('AUTO_SCHEMA_MANAGEMENT') else '0'}"
         )
 

@@ -35,8 +35,8 @@ class RoleRecord(job_store.Base):
 class UserRoleRecord(job_store.Base):
     __tablename__ = "user_roles"
 
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    role_id: Mapped[int] = mapped_column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey(UserRecord.__table__.c.id, ondelete="CASCADE"), primary_key=True)
+    role_id: Mapped[int] = mapped_column(Integer, ForeignKey(RoleRecord.__table__.c.id, ondelete="CASCADE"), primary_key=True)
 
     __table_args__ = (UniqueConstraint("user_id", name="uq_user_roles_user_id"),)
 
@@ -83,26 +83,29 @@ def _engine():
 
 def ensure_auth_schema() -> None:
     engine = _engine()
+    job_store.ensure_database_schema(engine)
     job_store.Base.metadata.create_all(bind=engine, tables=_AUTH_TABLES, checkfirst=True)
 
     inspector = inspect(engine)
-    existing_tables = {name.lower() for name in inspector.get_table_names()}
+    schema = job_store.inspection_schema(engine)
+    existing_tables = {name.lower() for name in inspector.get_table_names(schema=schema)}
     if 'users' not in existing_tables:
         return
-    existing_columns = {col['name'].lower() for col in inspector.get_columns('users')}
+    existing_columns = {col['name'].lower() for col in inspector.get_columns('users', schema=schema)}
     dialect_name = engine.dialect.name
+    users_table = job_store.qualified_table_name('users', engine)
     with engine.begin() as conn:
         if 'display_name' not in existing_columns:
-            conn.execute(text('ALTER TABLE users ADD display_name NVARCHAR(200) NULL;'))
+            conn.execute(text(f'ALTER TABLE {users_table} ADD display_name NVARCHAR(200) NULL;'))
         if 'email' not in existing_columns:
-            conn.execute(text('ALTER TABLE users ADD email NVARCHAR(200) NULL;'))
+            conn.execute(text(f'ALTER TABLE {users_table} ADD email NVARCHAR(200) NULL;'))
         if 'last_login_at' not in existing_columns:
-            conn.execute(text('ALTER TABLE users ADD last_login_at DATETIME2 NULL;'))
+            conn.execute(text(f'ALTER TABLE {users_table} ADD last_login_at DATETIME2 NULL;'))
         if 'is_active' not in existing_columns:
             if dialect_name == 'mssql':
-                conn.execute(text("ALTER TABLE users ADD is_active BIT NOT NULL CONSTRAINT DF_users_is_active DEFAULT(1);"))
+                conn.execute(text(f"ALTER TABLE {users_table} ADD is_active BIT NOT NULL CONSTRAINT DF_users_is_active DEFAULT(1);"))
             else:
-                conn.execute(text('ALTER TABLE users ADD is_active BOOLEAN NOT NULL DEFAULT 1;'))
+                conn.execute(text(f'ALTER TABLE {users_table} ADD is_active BOOLEAN NOT NULL DEFAULT 1;'))
 
 
 def seed_roles() -> None:

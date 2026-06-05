@@ -198,7 +198,7 @@ def _upsert_job(job_dir: Path) -> str:
 def main() -> int:
     if not state.DATABASE_URL:
         raise RuntimeError("DATABASE_URL is empty.")
-    job_store.init_app(SimpleNamespace(config={"DATABASE_URL": state.DATABASE_URL}))
+    job_store.init_app(SimpleNamespace(config={"DATABASE_URL": state.DATABASE_URL, "DATABASE_SCHEMA": state.DATABASE_SCHEMA}))
 
     actions = {"created": 0, "updated": 0}
     scanned = 0

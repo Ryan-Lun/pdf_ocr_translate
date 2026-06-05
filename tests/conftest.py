@@ -9,10 +9,17 @@ from sqlalchemy import delete
 @pytest.fixture
 def app():
     engine = create_engine(state.DATABASE_URL, future=True, pool_pre_ping=True)
+    job_store.configure_database_schema(state.DATABASE_SCHEMA)
+    job_store.ensure_database_schema(engine)
+    schema = job_store.current_database_schema()
     with engine.begin() as conn:
-        conn.execute(text("IF OBJECT_ID(N'dbo.document_template_boxes', N'U') IS NOT NULL DROP TABLE dbo.document_template_boxes;"))
-        conn.execute(text("IF OBJECT_ID(N'dbo.document_template_pages', N'U') IS NOT NULL DROP TABLE dbo.document_template_pages;"))
-        conn.execute(text("IF OBJECT_ID(N'dbo.document_templates', N'U') IS NOT NULL DROP TABLE dbo.document_templates;"))
+        for table_name in ("document_template_boxes", "document_template_pages", "document_templates"):
+            conn.execute(
+                text(
+                    f"IF OBJECT_ID(N'{schema}.{table_name}', N'U') IS NOT NULL "
+                    f"DROP TABLE {job_store.qualified_table_name(table_name, engine)};"
+                )
+            )
     job_store.Base.metadata.create_all(
         engine,
         tables=[

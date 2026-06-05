@@ -63,8 +63,9 @@ def _engine():
 
 
 def existing_tables() -> set[str]:
-    inspector = inspect(_engine())
-    return {name.lower() for name in inspector.get_table_names()}
+    engine = _engine()
+    inspector = inspect(engine)
+    return {name.lower() for name in inspector.get_table_names(schema=job_store.inspection_schema(engine))}
 
 
 def tables_exist(*table_names: str) -> bool:
@@ -92,14 +93,16 @@ def missing_schema_groups(app, table_groups: Mapping[str, tuple[str, ...]] | Non
 
 def missing_columns(table_groups: Mapping[str, tuple[str, ...]] | None = None) -> dict[str, list[str]]:
     groups = dict(table_groups or SCHEMA_GROUPS)
-    inspector = inspect(_engine())
+    engine = _engine()
+    inspector = inspect(engine)
+    schema = job_store.inspection_schema(engine)
     tables = existing_tables()
     missing: dict[str, list[str]] = {}
     for required_tables in groups.values():
         for table in required_tables:
             if table.lower() not in tables:
                 continue
-            existing = {col["name"].lower() for col in inspector.get_columns(table)}
+            existing = {col["name"].lower() for col in inspector.get_columns(table, schema=schema)}
             absent = [column for column in REQUIRED_COLUMNS.get(table, ()) if column.lower() not in existing]
             if absent:
                 missing[table] = absent
@@ -110,5 +113,6 @@ def ensure_auto_schema(app) -> None:
     if not auto_schema_management_enabled(app):
         return
     engine = _engine()
+    job_store.ensure_database_schema(engine)
     job_store.Base.metadata.create_all(bind=engine, checkfirst=True)
     auth_store.ensure_auth_schema()
