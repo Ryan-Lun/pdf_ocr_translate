@@ -10,7 +10,7 @@ from pathlib import Path
 
 from werkzeug.utils import secure_filename
 
-from pipeline_ocr_overlay import PipelineCancelled, run_pipeline
+from ocr_pipeline.pipeline import PipelineCancelled, run_pipeline
 
 from . import batch, jobs, ocr, state
 

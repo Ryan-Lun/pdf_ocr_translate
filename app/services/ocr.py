@@ -84,21 +84,17 @@ def update_pp_json_should_translate(job_dir: Path) -> None:
     if not pp_dir.exists():
         return
     try:
-        import paragraph_extract  # type: ignore
+        from ocr_pipeline.paragraph_align import align_and_update_json
     except Exception as exc:
-        logger.warning("paragraph_extract import failed: %s", exc)
-        return
-    align_fn = getattr(paragraph_extract, "align_and_update_json", None)
-    if not callable(align_fn):
-        logger.warning("paragraph_extract.align_and_update_json unavailable")
+        logger.warning("ocr_pipeline.paragraph_align import failed: %s", exc)
         return
     for path in sorted(pp_dir.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            updated = align_fn(data)
+            updated = align_and_update_json(data)
             path.write_text(json.dumps(updated, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as exc:
-            logger.warning("paragraph_extract update failed for %s: %s", path.name, exc)
+            logger.warning("paragraph alignment update failed for %s: %s", path.name, exc)
 
 
 def bbox_to_poly(
@@ -786,7 +782,7 @@ def load_page_transforms(job_dir: Path) -> dict[int, dict[str, Any]]:
 
 
 def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Path:
-    from pipeline_ocr_overlay import px_point_to_pdf_pt
+    from ocr_pipeline.pipeline import px_point_to_pdf_pt
 
     pdf_path = job_dir / f"{job_id}.pdf"
     if not pdf_path.exists():

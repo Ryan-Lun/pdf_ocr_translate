@@ -393,19 +393,3 @@ def add_merged_cells_field(
         merged_cells.sort(key=lambda x: (round(x["cell_box"][1], 1), round(x["cell_box"][0], 1)))
         table["merged_cells"] = merged_cells
     return data
-
-
-if __name__ == "__main__":
-    input_path = Path(
-        "out/jobs/f8663368c9b7476683c44ac7cb399ea3/pp_json/f8663368c9b7476683c44ac7cb399ea3_p0002.json"
-    )
-    output_path = Path("table_merged.json")
-
-    data = json.loads(input_path.read_text(encoding="utf-8"))
-    new_data = add_merged_cells_field(data, verbose=True)
-
-    output_path.write_text(
-        json.dumps(new_data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-    print("\nDone -> table_merged.json")
