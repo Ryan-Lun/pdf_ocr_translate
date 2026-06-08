@@ -531,7 +531,8 @@ def export_system_glossary_excel() -> bytes:
 def apply_glossary(text: str, entries: list[tuple[str, str]] | None = None) -> str:
     if not text:
         return text
-    entries = entries or load_glossary_entries()
+    if entries is None:
+        entries = load_glossary_entries()
     if not entries:
         return text
     out = text
@@ -553,7 +554,8 @@ def apply_glossary_with_protection(
 ) -> str:
     if not text:
         return text
-    entries = entries or load_glossary_entries()
+    if entries is None:
+        entries = load_glossary_entries()
     if not entries:
         return text
 

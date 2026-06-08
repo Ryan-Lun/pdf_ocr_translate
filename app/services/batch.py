@@ -100,7 +100,7 @@ def _contains_english(text: str) -> bool:
 
 def _lang_family(lang: str) -> str:
     normalized = normalize_lang_code(lang)
-    if normalized == "zh":
+    if normalized in {"zh", "zh-cn"}:
         return "cjk"
     if normalized == "en":
         return "latin"
@@ -109,7 +109,7 @@ def _lang_family(lang: str) -> str:
 
 def _text_matches_lang(text: str, lang: str) -> bool:
     normalized = normalize_lang_code(lang)
-    if normalized == "zh":
+    if normalized in {"zh", "zh-cn"}:
         return _contains_cjk(text)
     if normalized == "en":
         return _contains_english(text)
@@ -458,14 +458,11 @@ def translate_texts_for_region(
         if not normalized_source:
             outputs.append("")
             continue
-        if source_lang == "auto":
-            should_translate = _legacy_should_translate_cjk_text(normalized_source)
-        else:
-            should_translate = should_translate_text(
-                normalized_source,
-                source_lang=source_lang,
-                target_lang=target_lang,
-            )
+        should_translate = should_translate_text(
+            normalized_source,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
         if not should_translate:
             outputs.append(source_text)
             continue
@@ -576,14 +573,11 @@ def build_batch_items(
         normalized_source = normalize_for_translation(source_text)
         if not normalized_source:
             return
-        if use_explicit_source_lang:
-            should_translate = should_translate_text(
-                normalized_source,
-                source_lang=source_lang,
-                target_lang=target_lang,
-            )
-        else:
-            should_translate = _legacy_should_translate_cjk_text(normalized_source)
+        should_translate = should_translate_text(
+            normalized_source,
+            source_lang=source_lang if use_explicit_source_lang else "auto",
+            target_lang=target_lang,
+        )
         if not should_translate:
             return
         matched_term = document_terms.lookup_document_term(source_text, document_term_map)

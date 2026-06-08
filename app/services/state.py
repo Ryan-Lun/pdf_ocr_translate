@@ -175,6 +175,7 @@ ALLOWED_EXTENSIONS = {".pdf"}
 
 FONT_CANDIDATES = [
     str(BASE_DIR / "assets" / "fonts" / "NotoSansTC-Regular.ttf"),
+    str(BASE_DIR / "assets" / "fonts" / "NotoSansCJKsc-Regular.otf"),
     r"C:\\Windows\\Fonts\\msjh.ttf",
     r"C:\\Windows\\Fonts\\msjhbd.ttf",
     r"C:\\Windows\\Fonts\\msjhl.ttf",

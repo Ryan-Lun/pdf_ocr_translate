@@ -1264,6 +1264,13 @@ def test_zh_target_prompt_requires_traditional_chinese():
     assert "Never use Simplified Chinese characters" in prompt
 
 
+def test_zh_cn_target_prompt_requires_simplified_chinese():
+    prompt = resolve_batch_prompt("zh-cn")
+    assert "Simplified Chinese" in prompt
+    assert "Use Simplified Chinese characters only" in prompt
+    assert "Never use Traditional Chinese characters" in prompt
+
+
 def test_general_mode_chart_blocks_fall_back_to_ocr_lines_for_batch_items():
     ocr_pages = [
         {
@@ -1664,3 +1671,33 @@ def test_translate_texts_for_region_adds_glossary_and_protected_token_instructio
     assert "品質系統規範 -> Quality System Regulation" in captured["instructions"]
     assert "[[[GLOSSARY_TERM_0001::TERM]]]" in captured["instructions"]
     assert "[[[GLOSSARY_TERM_" in captured["input"]
+
+
+def test_translate_texts_for_region_auto_source_uses_english_for_simplified_chinese_target(monkeypatch):
+    captured: dict[str, str] = {}
+
+    class FakeResponse:
+        output_text = "检查项目"
+
+    class FakeResponses:
+        @staticmethod
+        def create(*, model, instructions, input):
+            captured["input"] = input
+            return FakeResponse()
+
+    class FakeClient:
+        responses = FakeResponses()
+
+    monkeypatch.setattr("app.services.batch.get_azure_client", lambda: FakeClient())
+
+    outputs = translate_texts_for_region(
+        ["Inspection item"],
+        target_lang="zh-cn",
+        source_lang="auto",
+        model_name="fake-model",
+        system_prompt="",
+        glossary_entries=[],
+    )
+
+    assert outputs == ["检查项目"]
+    assert captured["input"] == "Inspection item"

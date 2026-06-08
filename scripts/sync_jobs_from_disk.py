@@ -111,6 +111,8 @@ def _build_payload(job_dir: Path, job_type: str, meta: dict[str, Any]) -> dict[s
             "document_mode": jobs.normalize_document_mode(
                 batch_config.get("document_mode") or meta.get("document_mode")
             ),
+            "creator_name": str(meta.get("creator_name") or "").strip(),
+            "owner_work_id": str(meta.get("owner_work_id") or "").strip(),
         }
         if payload["translate_model"]:
             return payload
@@ -121,6 +123,8 @@ def _build_payload(job_dir: Path, job_type: str, meta: dict[str, Any]) -> dict[s
         return {
             "source_lang": str(meta.get("source_lang") or "auto"),
             "target_lang": str(meta.get("target_lang") or "en"),
+            "creator_name": str(meta.get("creator_name") or "").strip(),
+            "owner_work_id": str(meta.get("owner_work_id") or "").strip(),
         }
 
     if job_type == "word_translate":
@@ -131,9 +135,41 @@ def _build_payload(job_dir: Path, job_type: str, meta: dict[str, Any]) -> dict[s
             "source_lang": str(meta.get("source_lang") or "auto"),
             "target_lang": str(meta.get("target_lang") or "en"),
             "retain_terms": [str(item) for item in retain_terms if str(item).strip()],
+            "creator_name": str(meta.get("creator_name") or "").strip(),
+            "owner_work_id": str(meta.get("owner_work_id") or "").strip(),
         }
 
     return None
+
+
+def _collect_artifacts(job_dir: Path, job_type: str, meta: dict[str, Any]) -> dict[str, str]:
+    artifacts: dict[str, str] = {}
+
+    def add_if_exists(artifact_type: str, rel_path: str) -> None:
+        if (job_dir / rel_path).exists():
+            artifacts[artifact_type] = rel_path
+
+    if job_type in {"ocr_overlay", "template_source"}:
+        source_name = str(meta.get("source_filename") or "").strip()
+        if source_name:
+            add_if_exists("source_pdf", source_name)
+        add_if_exists("source_pdf", "source.pdf")
+        add_if_exists("source_pdf", f"{job_dir.name}.pdf")
+        add_if_exists("debug_pdf", "overlay_debug.pdf")
+        add_if_exists("edited_pdf", "edited.pdf")
+    elif job_type == "doc_workspace":
+        add_if_exists("source_pdf", "source.pdf")
+        add_if_exists("structure_md", "structure/doc.md")
+        add_if_exists("structure_html", "structure/doc.html")
+        add_if_exists("translated_html", "translated/doc.translated.html")
+        add_if_exists("docx", "output/output.docx")
+    elif job_type == "word_translate":
+        source_name = str(meta.get("source_filename") or "").strip()
+        if source_name:
+            add_if_exists("source_docx", source_name)
+        add_if_exists("docx", "output/output.docx")
+
+    return artifacts
 
 
 def _upsert_job(job_dir: Path) -> str:
@@ -166,6 +202,7 @@ def _upsert_job(job_dir: Path) -> str:
             status=status,
             progress=progress,
             job_name=jobs.normalize_job_name(meta.get("job_name")),
+            owner_work_id=str(meta.get("owner_work_id") or "").strip() or None,
             target_lang=target_lang,
             document_mode=document_mode,
             payload=payload,
@@ -183,6 +220,7 @@ def _upsert_job(job_dir: Path) -> str:
         stage=stage,
         progress=progress,
         job_name=jobs.normalize_job_name(meta.get("job_name")),
+        owner_work_id=str(meta.get("owner_work_id") or "").strip() or None,
         target_lang=target_lang,
         document_mode=document_mode,
         payload_json=json.dumps(payload, ensure_ascii=False) if payload is not None else None,
@@ -192,6 +230,7 @@ def _upsert_job(job_dir: Path) -> str:
         created_at=created_at,
         updated_at=updated_at,
     )
+    job_store.replace_artifacts(job_id, _collect_artifacts(job_dir, job_type, meta))
     return action
 
 

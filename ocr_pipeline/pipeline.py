@@ -14,13 +14,16 @@ import base64
 import fitz  # PyMuPDF
 from PIL import Image
 import requests
-from lang_utils import describe_target_language, traditional_chinese_instruction
+from lang_utils import describe_target_language, normalize_lang_code, traditional_chinese_instruction
 
 # -----------------------------
 # Font (Windows CJK default)
 # -----------------------------
 DEFAULT_FONTFILE = str(
     (Path(__file__).resolve().parents[1] / "assets" / "fonts" / "NotoSansTC-Regular.ttf")
+)
+DEFAULT_SC_FONTFILE = str(
+    (Path(__file__).resolve().parents[1] / "assets" / "fonts" / "NotoSansCJKsc-Regular.otf")
 )
 
 try:
@@ -34,6 +37,21 @@ try:
 except Exception as exc:
     add_merged_cells_field = None
     print(f"[WARN] add_merged_cells_field unavailable: {exc}")
+
+
+def resolve_overlay_fontfile(target_lang: str, fontfile: str | None = DEFAULT_FONTFILE) -> str | None:
+    requested = Path(fontfile) if fontfile else None
+    if normalize_lang_code(target_lang) == "zh-cn":
+        sc_font = Path(DEFAULT_SC_FONTFILE)
+        if sc_font.exists() and (
+            requested is None
+            or requested == Path(DEFAULT_FONTFILE)
+            or not requested.exists()
+        ):
+            return str(sc_font)
+    if requested is not None and requested.exists():
+        return str(requested)
+    return None
 
 
 # -----------------------------
@@ -1128,7 +1146,7 @@ def overlay_one_page(
                 page=page,
                 rect=rect,
                 text=text,
-                fontfile=None,
+                fontfile=fontfile,
                 max_fs=fs_max,
                 min_fs=4.0,
                 align=0,
@@ -1247,10 +1265,9 @@ def run_pipeline(
     if use_per_image_ocr:
         pass
 
-    fontfile_path = Path(fontfile) if fontfile else None
-    if fontfile_path is not None and not fontfile_path.exists():
-        print(f"[WARN] fontfile not found, fallback to built-in font: {fontfile_path}")
-        fontfile_path = None
+    resolved_fontfile = resolve_overlay_fontfile(translate_target_lang, fontfile)
+    if fontfile and not resolved_fontfile:
+        print(f"[WARN] fontfile not found, fallback to built-in font: {fontfile}")
 
     png_paths = pdf_to_pngs(
         pdf_path,
@@ -1370,7 +1387,7 @@ def run_pipeline(
         pp_json_paths=pp_json_paths,
         images_dir=img_dir,
         out_pdf_path=debug_pdf,
-        fontfile=str(fontfile_path) if fontfile_path else None,
+        fontfile=resolved_fontfile,
         draw_boxes=draw_boxes,
         draw_text=draw_text,
         paragraph_min_fs=paragraph_min_fs,

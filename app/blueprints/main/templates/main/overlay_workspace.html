@@ -85,6 +85,7 @@
               <select name="target_lang">
                 <option value="en" selected>English (en)</option>
                 <option value="zh">繁體中文 (zh)</option>
+                <option value="zh-cn">簡體中文 (zh-cn)</option>
               </select>
             </label>
             <label>
@@ -416,7 +417,7 @@
           } else {
             const pendingEdit = document.createElement("span");
             pendingEdit.className = "job-muted";
-            pendingEdit.textContent = "Processing...";
+            pendingEdit.textContent = isActiveJob(job) ? "Processing..." : "無可用檔案";
             actions.appendChild(pendingEdit);
           }
 

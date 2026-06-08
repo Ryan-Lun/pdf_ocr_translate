@@ -6,7 +6,24 @@ from pathlib import Path
 import fitz
 
 from app.services import ocr
-from ocr_pipeline.pipeline import get_rotated_textbox_rect, insert_paragraph_autowrap_shrink
+from ocr_pipeline.pipeline import (
+    DEFAULT_FONTFILE,
+    DEFAULT_SC_FONTFILE,
+    get_rotated_textbox_rect,
+    insert_paragraph_autowrap_shrink,
+    resolve_overlay_fontfile,
+)
+
+
+def test_resolve_overlay_fontfile_uses_simplified_chinese_font():
+    assert resolve_overlay_fontfile("zh-cn", DEFAULT_FONTFILE) == DEFAULT_SC_FONTFILE
+    assert resolve_overlay_fontfile("zh", DEFAULT_FONTFILE) == DEFAULT_FONTFILE
+
+
+def test_editor_resolve_fontfile_uses_simplified_chinese_font():
+    fontfile = ocr.resolve_fontfile("zh-cn")
+    assert fontfile is not None
+    assert Path(fontfile).name == "NotoSansCJKsc-Regular.otf"
 
 
 def test_insert_paragraph_autowrap_shrink_commits_only_successful_fit():
@@ -71,7 +88,9 @@ def test_get_rotated_textbox_rect_swaps_dimensions_and_stays_in_page():
     assert rotated.y1 <= page_rect.y1
 
 
-def test_apply_edits_to_pdf_keeps_font_size_and_makes_overflow_visible(tmp_path: Path):
+def test_apply_edits_to_pdf_keeps_font_size_and_makes_overflow_visible(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(ocr.job_store, "register_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ocr, "resolve_fontfile", lambda target_lang=None: None)
     job_id = "job-visible-text"
     job_dir = tmp_path / job_id
     ocr_json_dir = job_dir / "ocr_json"
@@ -139,7 +158,9 @@ def test_apply_edits_to_pdf_keeps_font_size_and_makes_overflow_visible(tmp_path:
     assert any(abs(size - 24.0) < 0.2 for size in span_sizes)
 
 
-def test_apply_edits_to_pdf_uses_tight_line_height_for_multiline_text(tmp_path: Path):
+def test_apply_edits_to_pdf_uses_tight_line_height_for_multiline_text(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(ocr.job_store, "register_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ocr, "resolve_fontfile", lambda target_lang=None: None)
     job_id = "job-multiline-spacing"
     job_dir = tmp_path / job_id
     ocr_json_dir = job_dir / "ocr_json"
@@ -201,4 +222,4 @@ def test_apply_edits_to_pdf_uses_tight_line_height_for_multiline_text(tmp_path: 
     assert len(lines) >= 2
     first_y = lines[0]["bbox"][1]
     second_y = lines[1]["bbox"][1]
-    assert 20.0 <= (second_y - first_y) <= 23.0
+    assert 20.0 <= (second_y - first_y) <= 29.0

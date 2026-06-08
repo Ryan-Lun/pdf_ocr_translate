@@ -186,6 +186,16 @@ def test_word_zh_prompt_requires_traditional_chinese():
     assert "leaving unnecessary source-language text mixed into the output" in quality_prompt
 
 
+def test_word_zh_cn_prompt_requires_simplified_chinese():
+    system_prompt = build_word_system_prompt("zh-cn")
+    quality_prompt = build_word_quality_prompt("source", "translated", "zh-cn")
+
+    assert "Simplified Chinese" in system_prompt
+    assert "Use Simplified Chinese characters only" in system_prompt
+    assert "Never use Traditional Chinese characters" in system_prompt
+    assert "Simplified Chinese" in quality_prompt
+
+
 def test_word_prompt_can_include_explicit_source_language():
     system_prompt = build_word_system_prompt_with_source("en", "zh")
     assert "Source language: English." in system_prompt

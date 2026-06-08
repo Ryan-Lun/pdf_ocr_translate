@@ -444,6 +444,28 @@ def register_artifact(job_id: str, artifact_type: str, file_path: str) -> None:
         )
 
 
+def replace_artifacts(job_id: str, artifacts: dict[str, str]) -> None:
+    with session_scope() as session:
+        for artifact in session.scalars(
+            select(JobArtifactRecord).where(JobArtifactRecord.job_id == job_id)
+        ).all():
+            session.delete(artifact)
+        now = utcnow()
+        for artifact_type, file_path in artifacts.items():
+            cleaned_type = str(artifact_type or "").strip()
+            cleaned_path = str(file_path or "").strip().replace("\\", "/").lstrip("/")
+            if not cleaned_type or not cleaned_path:
+                continue
+            session.add(
+                JobArtifactRecord(
+                    job_id=job_id,
+                    artifact_type=cleaned_type,
+                    file_path=cleaned_path,
+                    created_at=now,
+                )
+            )
+
+
 def claim_next_job(
     worker_id: str,
     concurrency_limits: dict[str, int] | None = None,

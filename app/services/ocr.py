@@ -13,6 +13,7 @@ import requests
 
 from . import job_store, state
 from ocr_pipeline.pipeline import filter_ppstructure_data_by_score
+from lang_utils import normalize_lang_code
 
 try:
     import cv2
@@ -317,10 +318,27 @@ def hex_to_rgb(
         return default
 
 
-def resolve_fontfile() -> str | None:
+def resolve_fontfile(target_lang: str | None = None) -> str | None:
+    if normalize_lang_code(target_lang) == "zh-cn":
+        sc_font = state.BASE_DIR / "assets" / "fonts" / "NotoSansCJKsc-Regular.otf"
+        if sc_font.exists():
+            return str(sc_font)
     for candidate in state.FONT_CANDIDATES:
         if Path(candidate).exists():
             return candidate
+    return None
+
+
+def infer_edits_target_lang(edits: dict[str, Any]) -> str | None:
+    for page in edits.get("pages", []) or []:
+        if not isinstance(page, dict):
+            continue
+        for box in page.get("boxes", []) or []:
+            if not isinstance(box, dict):
+                continue
+            target_lang = str(box.get("tm_target_lang") or "").strip()
+            if target_lang:
+                return target_lang
     return None
 
 # 換行
@@ -798,7 +816,7 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
         if isinstance(p, dict)
     }
 
-    fontfile = resolve_fontfile()
+    fontfile = resolve_fontfile(infer_edits_target_lang(edits))
     if not fontfile:
         logger.warning("No CJK font file found for edited PDF output; falling back to helv.")
     debug_boxes = os.getenv("DEBUG_EDIT_BOXES") == "1"
@@ -823,8 +841,9 @@ def apply_edits_to_pdf(job_id: str, job_dir: Path, edits: dict[str, Any]) -> Pat
         page_fontname: str | None = None
         if fontfile:
             try:
-                page.insert_font(fontname="NotoSansTC", fontfile=fontfile)
-                page_fontname = "NotoSansTC"
+                font_alias = "NotoSansSC" if Path(fontfile).name == "NotoSansCJKsc-Regular.otf" else "NotoSansTC"
+                page.insert_font(fontname=font_alias, fontfile=fontfile)
+                page_fontname = font_alias
             except RuntimeError as exc:
                 logger.warning("Failed to register PDF edit font %s: %s", fontfile, exc)
                 page_fontname = None
