@@ -327,6 +327,7 @@ def upload_doc_workspace() -> str:
 
     source_lang = request.form.get("source_lang", "auto").strip() or "auto"
     target_lang = request.form.get("target_lang", "en").strip() or "en"
+    system_prompt = request.form.get("system_prompt", "").strip()
     creator_name = _current_creator_name()
     owner_work_id = _current_owner_work_id()
     _enforce_submit_quota(creator_name)
@@ -347,6 +348,7 @@ def upload_doc_workspace() -> str:
             target_lang,
             creator_name,
             owner_work_id,
+            system_prompt=system_prompt,
         )
         try:
             tmp_path.unlink(missing_ok=True)

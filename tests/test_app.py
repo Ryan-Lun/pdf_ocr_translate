@@ -8,7 +8,7 @@ from pathlib import Path
 
 import fitz
 
-from app.services import jobs, pipeline, state, translation_memory
+from app.services import doc_workspace, jobs, pipeline, state, translation_memory
 
 
 def test_index_ok(client):
@@ -1210,7 +1210,15 @@ def test_upload_doc_workspace_passes_source_language(client, tmp_path, monkeypat
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
     captured: list[dict[str, str]] = []
 
-    def fake_enqueue(source_path, display_name, source_lang, target_lang, creator_name=""):
+    def fake_enqueue(
+        source_path,
+        display_name,
+        source_lang,
+        target_lang,
+        creator_name="",
+        owner_work_id="",
+        system_prompt="",
+    ):
         captured.append(
             {
                 "source_name": Path(source_path).name,
@@ -1218,6 +1226,7 @@ def test_upload_doc_workspace_passes_source_language(client, tmp_path, monkeypat
                 "source_lang": source_lang,
                 "target_lang": target_lang,
                 "creator_name": creator_name,
+                "system_prompt": system_prompt,
             }
         )
         return "c" * 32
@@ -1233,6 +1242,7 @@ def test_upload_doc_workspace_passes_source_language(client, tmp_path, monkeypat
             "source_lang": "en",
             "target_lang": "zh",
             "creator_name": "bob",
+            "system_prompt": "Use concise legal wording.",
             "pdf": (io.BytesIO(b"%PDF-1.4"), "source.pdf"),
         },
         content_type="multipart/form-data",
@@ -1245,9 +1255,39 @@ def test_upload_doc_workspace_passes_source_language(client, tmp_path, monkeypat
             "display_name": "source",
             "source_lang": "en",
             "target_lang": "zh",
-            "creator_name": "bob",
+            "creator_name": "",
+            "system_prompt": "Use concise legal wording.",
         }
     ]
+
+
+def test_enqueue_doc_job_from_upload_stores_system_prompt(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "DOC_WORKSPACE_JOB_ROOT", tmp_path / "doc_jobs")
+    captured: dict[str, object] = {}
+
+    def fake_create_job(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("app.services.doc_workspace.jobs.job_store.create_job", fake_create_job)
+    monkeypatch.setattr("app.services.doc_workspace.jobs.job_store.register_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.doc_workspace.jobs.notify_jobs_update", lambda: None)
+
+    source_path = tmp_path / "source.pdf"
+    source_path.write_bytes(b"%PDF-1.4")
+
+    job_id = doc_workspace.enqueue_doc_job_from_upload(
+        source_path,
+        "sample",
+        "auto",
+        "en",
+        system_prompt="Use concise legal wording.",
+    )
+
+    meta = jobs.load_job_meta(jobs.job_root_for_type("doc_workspace") / job_id)
+    assert meta is not None
+    assert meta["system_prompt"] == "Use concise legal wording."
+    assert captured["payload"]["system_prompt"] == "Use concise legal wording."
 
 
 def test_build_download_name_preserves_chinese_job_name():

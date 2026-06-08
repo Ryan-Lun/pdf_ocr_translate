@@ -53,6 +53,7 @@ def run_doc_workspace_job(
     pdf_path: Path,
     source_lang: str,
     target_lang: str,
+    system_prompt: str = "",
 ) -> None:
     structure_dir = job_dir / "structure"
     translated_dir = job_dir / "translated"
@@ -91,6 +92,7 @@ def run_doc_workspace_job(
             translated_html_path,
             source_lang=source_lang,
             target_lang=target_lang,
+            system_prompt=system_prompt,
             debug_job_dir=job_dir,
         )
         jobs.job_store.register_artifact(job_id, "translated_html", "translated/doc.translated.html")
@@ -156,11 +158,13 @@ def enqueue_doc_job_from_upload(
     target_lang: str,
     creator_name: str = "",
     owner_work_id: str = "",
+    system_prompt: str | None = None,
 ) -> str:
     job_id = uuid.uuid4().hex
     job_dir = jobs.job_dir(job_id, job_root=jobs.job_root_for_type("doc_workspace"))
     job_dir.mkdir(parents=True, exist_ok=True)
     now_ts = time.time()
+    custom_system_prompt = str(system_prompt or "").strip()
     jobs.write_job_meta(
         job_dir,
         {
@@ -170,6 +174,7 @@ def enqueue_doc_job_from_upload(
             "doc_stage": "uploaded",
             "source_lang": source_lang,
             "target_lang": target_lang,
+            "system_prompt": custom_system_prompt,
             "creator_name": creator_name,
             "owner_work_id": str(owner_work_id or "").strip(),
             "processing_started_at": now_ts,
@@ -185,6 +190,7 @@ def enqueue_doc_job_from_upload(
         payload={
             "source_lang": source_lang,
             "target_lang": target_lang,
+            "system_prompt": custom_system_prompt,
             "creator_name": creator_name,
             "owner_work_id": str(owner_work_id or "").strip(),
         },

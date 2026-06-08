@@ -77,6 +77,7 @@ def process_job(job_id: str) -> None:
             pdf_path=job_dir / "source.pdf",
             source_lang=str(payload.get("source_lang") or "auto"),
             target_lang=str(payload.get("target_lang") or record.target_lang or "en"),
+            system_prompt=str(payload.get("system_prompt") or ""),
         )
         return
 
