@@ -16,6 +16,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = job_store.Base.metadata
+ALEMBIC_VERSION_TABLE = os.environ.get("ALEMBIC_VERSION_TABLE", "uo_regulations_translate_alembic_version")
 
 
 def _resolve_config_class():
@@ -43,6 +44,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         compare_type=True,
+        version_table=ALEMBIC_VERSION_TABLE,
     )
 
     with context.begin_transaction():
@@ -62,6 +64,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            version_table=ALEMBIC_VERSION_TABLE,
         )
 
         with context.begin_transaction():

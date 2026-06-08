@@ -28,6 +28,6 @@ def test_alembic_upgrade_head_creates_baseline_schema(monkeypatch, tmp_path):
     assert required_tables.issubset(tables)
 
     with engine.connect() as conn:
-        revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        revision = conn.execute(text("SELECT version_num FROM uo_regulations_translate_alembic_version")).scalar_one()
 
     assert revision == "0001_baseline_schema"
