@@ -3,22 +3,27 @@ set -euo pipefail
 
 APP_NAME="uo_regulations_translate"
 WORKER_SERVICE="uo_regulations_translate_worker"
-APP_DIR="/home/NE025/pdf_ocr_translate"
-ENV_FILE="$APP_DIR/.env"
-APP_ROOT="$APP_DIR"
+WORKER_SERVICES=("$WORKER_SERVICE")
+APP_DIR="${APP_DIR:-/home/NE025/pdf_ocr_translate}"
+APP_ROOT="${APP_ROOT:-$APP_DIR}"
+ENV_FILE="${ENV_FILE:-$APP_ROOT/.env}"
+APP_USER="${APP_USER:-}"
 BRANCH="${DEPLOY_BRANCH:-main}"
 RUN_GIT_PULL="${RUN_GIT_PULL:-0}"
-RUN_DB_BACKUP="${RUN_DB_BACKUP:-0}"
 INSTALL_SYSTEMD_UNITS="${INSTALL_SYSTEMD_UNITS:-1}"
+MANAGE_SYSTEMD_SERVICES="${MANAGE_SYSTEMD_SERVICES:-auto}"
 WEB_WORKERS="${WEB_WORKERS:-2}"
 WEB_BIND="${WEB_BIND:-unix:$APP_ROOT/uo_regulations_translate.sock}"
-NGINX_FILE="${NGINX_FILE:-$APP_DIR/deploy/nginx.conf}"
+NGINX_TEMPLATE="${NGINX_TEMPLATE:-$APP_ROOT/deploy/nginx-site.conf.template}"
 NGINX_SITE_NAME="${NGINX_SITE_NAME:-$APP_NAME}"
+NGINX_LISTEN_PORT="${NGINX_LISTEN_PORT:-81}"
+NGINX_FILE="${NGINX_FILE:-$APP_ROOT/build/nginx/$NGINX_SITE_NAME}"
 ENABLE_NGINX="${ENABLE_NGINX:-0}"
-VENV_PYTHON="$APP_DIR/.venv/bin/python"
-ALEMBIC_BIN="$APP_DIR/.venv/bin/alembic"
-FLASK_BIN="$APP_DIR/.venv/bin/flask"
 UV_BIN="${UV_BIN:-uv}"
+UV_SYNC_ARGS="${UV_SYNC_ARGS:---frozen}"
+VENV_PYTHON="$APP_ROOT/.venv/bin/python"
+ALEMBIC_BIN="$APP_ROOT/.venv/bin/alembic"
+FLASK_BIN="$APP_ROOT/.venv/bin/flask"
 
 log() {
   printf '\n[%s] %s\n' "$(date '+%F %T')" "$1"
@@ -40,11 +45,35 @@ require_cmd() {
   fi
 }
 
+systemd_available() {
+  command -v systemctl >/dev/null 2>&1 \
+    && [[ "$(ps -p 1 -o comm= 2>/dev/null | tr -d '[:space:]')" == "systemd" ]] \
+    && [[ -d /run/systemd/system ]]
+}
+
+should_manage_systemd() {
+  case "$MANAGE_SYSTEMD_SERVICES" in
+    1|true|yes)
+      return 0
+      ;;
+    0|false|no)
+      return 1
+      ;;
+    auto)
+      systemd_available
+      ;;
+    *)
+      echo "Invalid MANAGE_SYSTEMD_SERVICES value: $MANAGE_SYSTEMD_SERVICES" >&2
+      echo "Use auto, 1, or 0." >&2
+      exit 64
+      ;;
+  esac
+}
+
 log "進入專案目錄"
-cd "$APP_DIR"
+cd "$APP_ROOT"
 
 require_file "$ENV_FILE"
-require_file "$VENV_PYTHON"
 
 log "載入正式環境變數"
 set -a
@@ -54,7 +83,7 @@ set +a
 export FLASK_APP=app.py
 export APP_ENV="${APP_ENV:-production}"
 export ALEMBIC_CONFIG_NAME="${ALEMBIC_CONFIG_NAME:-production}"
-export ALEMBIC_DATABASE_URL="${DATABASE_URL:-}"
+export ALEMBIC_DATABASE_URL="${ALEMBIC_DATABASE_URL:-${DATABASE_URL:-}}"
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "DATABASE_URL is empty after loading $ENV_FILE" >&2
@@ -72,39 +101,59 @@ if [[ "$RUN_GIT_PULL" == "1" ]]; then
   git pull origin "$BRANCH"
 fi
 
-log "同步 Python 套件"
+log "建立或同步 Python uv 虛擬環境"
 require_cmd "$UV_BIN"
-"$UV_BIN" sync --python "$VENV_PYTHON"
+"$UV_BIN" sync $UV_SYNC_ARGS
+
+require_file "$VENV_PYTHON"
 require_file "$ALEMBIC_BIN"
 require_file "$FLASK_BIN"
 
-if [[ "$RUN_DB_BACKUP" == "1" ]]; then
-  log "執行部署前資料庫備份"
-  bash "$APP_DIR/scripts/backup_mssql_full.sh"
+if should_manage_systemd; then
+  SYSTEMD_ENABLED=1
+else
+  SYSTEMD_ENABLED=0
+  log "未偵測到可用的 systemd，略過 systemd unit 安裝與服務啟停"
 fi
 
-log "停止應用服務"
-sudo systemctl stop "$WORKER_SERVICE" || true
-sudo systemctl stop "$APP_NAME" || true
+if [[ "$SYSTEMD_ENABLED" == "1" ]]; then
+  log "停止應用服務"
+  for service in "${WORKER_SERVICES[@]}"; do
+    sudo systemctl stop "$service" || true
+  done
+  sudo systemctl stop "$APP_NAME" || true
+fi
 
-if [[ "$INSTALL_SYSTEMD_UNITS" == "1" ]]; then
+if [[ "$INSTALL_SYSTEMD_UNITS" == "1" && "$SYSTEMD_ENABLED" == "1" ]]; then
   log "安裝或更新 systemd units"
-  sudo bash "$APP_DIR/scripts/install_systemd_units.sh" \
-    --install \
-    --app-root "$APP_ROOT" \
-    --env-file "$ENV_FILE" \
-    --web-bind "$WEB_BIND" \
+  systemd_args=(
+    --install
+    --app-root "$APP_ROOT"
+    --env-file "$ENV_FILE"
+    --web-bind "$WEB_BIND"
     --web-workers "$WEB_WORKERS"
+  )
+  if [[ -n "$APP_USER" ]]; then
+    systemd_args+=(--app-user "$APP_USER")
+  fi
+  sudo bash "$APP_ROOT/scripts/install_systemd_units.sh" \
+    "${systemd_args[@]}"
+elif [[ "$INSTALL_SYSTEMD_UNITS" == "1" ]]; then
+  log "略過 systemd units 安裝；目前環境無可用 systemd"
 fi
 
 if [[ "$ENABLE_NGINX" == "1" ]]; then
-  require_cmd nginx
-  require_file "$NGINX_FILE"
-  log "複製 Nginx 設定"
-  sudo cp "$NGINX_FILE" "/etc/nginx/sites-available/$NGINX_SITE_NAME"
-  sudo ln -sf "/etc/nginx/sites-available/$NGINX_SITE_NAME" "/etc/nginx/sites-enabled/$NGINX_SITE_NAME"
-  log "測試 Nginx 設定"
-  sudo nginx -t
+  require_file "$NGINX_TEMPLATE"
+  log "安裝或更新 Nginx 站台設定"
+  sudo bash "$APP_ROOT/scripts/install_nginx_site.sh" \
+    --install \
+    --app-root "$APP_ROOT" \
+    --template "$NGINX_TEMPLATE" \
+    --site-name "$NGINX_SITE_NAME" \
+    --listen-port "$NGINX_LISTEN_PORT" \
+    --output-file "$NGINX_FILE"
+else
+  log "未啟用 Nginx 設定同步；如需更新站台設定，請用 ENABLE_NGINX=1 bash deploy.sh"
 fi
 
 log "執行資料庫 migration"
@@ -116,19 +165,22 @@ log "驗證 schema"
 log "初始化預設資料"
 "$FLASK_BIN" --app app.py seed-bootstrap
 
-log "啟動 Web service"
-sudo systemctl restart "$APP_NAME"
+if [[ "$SYSTEMD_ENABLED" == "1" ]]; then
+  log "啟動 Web service"
+  sudo systemctl restart "$APP_NAME"
 
-log "啟動 Worker service"
-sudo systemctl restart "$WORKER_SERVICE"
+  log "啟動 Worker services"
+  for service in "${WORKER_SERVICES[@]}"; do
+    sudo systemctl restart "$service"
+  done
 
-if [[ "$ENABLE_NGINX" == "1" ]]; then
-  log "重新載入 Nginx"
-  sudo systemctl reload nginx
+  log "查看服務狀態"
+  sudo systemctl status "$APP_NAME" --no-pager
+  for service in "${WORKER_SERVICES[@]}"; do
+    sudo systemctl status "$service" --no-pager
+  done
+else
+  log "略過服務啟動與狀態檢查；請在容器內手動執行 gunicorn/flask worker，或用外部 process manager 管理程序"
 fi
-
-log "查看服務狀態"
-sudo systemctl status "$APP_NAME" --no-pager
-sudo systemctl status "$WORKER_SERVICE" --no-pager
 
 log "部署完成"

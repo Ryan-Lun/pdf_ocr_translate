@@ -7,9 +7,11 @@ TEMPLATE_DIR="$APP_ROOT/deploy/systemd"
 OUTPUT_DIR=""
 INSTALL_MODE=0
 UNIT_TARGET_DIR="/etc/systemd/system"
-APP_USER="$(stat -c '%U' "$APP_ROOT")"
+APP_USER="${APP_USER:-}"
+APP_USER_EXPLICIT=0
 ENV_FILE="$APP_ROOT/.env"
-WEB_BIND="unix:uo_regulations_translate.sock"
+ENV_FILE_EXPLICIT=0
+WEB_BIND="${WEB_BIND:-}"
 WEB_WORKERS="4"
 SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 
@@ -25,9 +27,13 @@ Options:
   --app-root PATH        Application root. Default: repo root
   --app-user USER        systemd User=. Default: owner of app root
   --env-file PATH        EnvironmentFile=. Default: <app-root>/.env
-  --web-bind TARGET      Gunicorn bind. Default: unix:uo_regulations_translate.sock
-  --web-workers COUNT    Gunicorn worker count. Default: 4
+  --web-bind TARGET      Gunicorn bind. Default: unix:<app-root>/uo_regulations_translate.sock
+  --web-workers N        Gunicorn worker count. Default: 4
   --help                 Show this help
+
+Examples:
+  bash scripts/install_systemd_units.sh --output-dir /tmp/translate-systemd
+  sudo bash scripts/install_systemd_units.sh --install --app-root /home/NE025/pdf_ocr_translate
 EOF
 }
 
@@ -51,10 +57,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --app-user)
       APP_USER="$2"
+      APP_USER_EXPLICIT=1
       shift 2
       ;;
     --env-file)
       ENV_FILE="$2"
+      ENV_FILE_EXPLICIT=1
       shift 2
       ;;
     --web-bind)
@@ -77,6 +85,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+TEMPLATE_DIR="$APP_ROOT/deploy/systemd"
+
+if [[ "$APP_USER_EXPLICIT" -eq 0 && -z "$APP_USER" ]]; then
+  APP_USER="$(stat -c '%U' "$APP_ROOT")"
+fi
+
+if [[ "$ENV_FILE_EXPLICIT" -eq 0 ]]; then
+  ENV_FILE="$APP_ROOT/.env"
+fi
+
+if [[ -z "$WEB_BIND" ]]; then
+  WEB_BIND="unix:$APP_ROOT/uo_regulations_translate.sock"
+fi
+
 if [[ -z "$OUTPUT_DIR" ]]; then
   OUTPUT_DIR="$APP_ROOT/build/systemd"
 fi
@@ -92,6 +114,7 @@ require_path() {
 
 require_path "$TEMPLATE_DIR" "Template directory"
 require_path "$APP_ROOT/.venv/bin/gunicorn" "Gunicorn executable"
+require_path "$APP_ROOT/.venv/bin/flask" "Flask executable"
 require_path "$APP_ROOT/.venv/bin/python" "Python executable"
 require_path "$ENV_FILE" "Environment file"
 
@@ -99,7 +122,7 @@ mkdir -p "$OUTPUT_DIR"
 
 export APP_ROOT APP_USER ENV_FILE WEB_BIND WEB_WORKERS TEMPLATE_DIR OUTPUT_DIR
 
-python3 - <<'PY'
+python3 - <<'PY_RENDER'
 from __future__ import annotations
 
 import os
@@ -122,7 +145,7 @@ for template_path in sorted(template_dir.glob("*.template")):
     target_name = template_path.name.removesuffix(".template")
     (output_dir / target_name).write_text(content, encoding="utf-8")
     print(output_dir / target_name)
-PY
+PY_RENDER
 
 if [[ "$INSTALL_MODE" -eq 1 ]]; then
   mkdir -p "$UNIT_TARGET_DIR"
@@ -130,8 +153,15 @@ if [[ "$INSTALL_MODE" -eq 1 ]]; then
   install -m 0644 "$OUTPUT_DIR"/uo_regulations_translate_worker.service "$UNIT_TARGET_DIR"/uo_regulations_translate_worker.service
   "$SYSTEMCTL_BIN" daemon-reload
   echo "Installed unit files into $UNIT_TARGET_DIR"
+  echo "Rendered with:"
+  echo "  APP_ROOT=$APP_ROOT"
+  echo "  APP_USER=$APP_USER"
+  echo "  ENV_FILE=$ENV_FILE"
+  echo "Installed units:"
+  echo "  uo_regulations_translate.service"
+  echo "  uo_regulations_translate_worker.service"
   echo "Next:"
-  echo "  sudo systemctl enable uo_regulations_translate_worker"
+  echo "  sudo systemctl enable uo_regulations_translate uo_regulations_translate_worker"
   echo "  sudo systemctl start uo_regulations_translate uo_regulations_translate_worker"
 else
   echo "Rendered unit files into $OUTPUT_DIR"

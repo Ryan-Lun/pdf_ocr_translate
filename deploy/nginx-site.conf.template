@@ -1,0 +1,22 @@
+server {
+    listen {{NGINX_LISTEN_PORT}};
+    server_name _;
+
+    client_max_body_size 200M;
+
+    location /static/ {
+        alias {{APP_ROOT}}/static/;
+        access_log off;
+        expires 7d;
+        add_header Cache-Control "public";
+    }
+
+    location / {
+        include proxy_params;
+        proxy_pass http://unix:{{APP_ROOT}}/uo_regulations_translate.sock;
+
+        proxy_connect_timeout 30s;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}
