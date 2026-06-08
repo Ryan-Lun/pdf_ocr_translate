@@ -33,7 +33,7 @@ Options:
 
 Examples:
   bash scripts/install_systemd_units.sh --output-dir /tmp/translate-systemd
-  sudo bash scripts/install_systemd_units.sh --install --app-root /home/NE025/pdf_ocr_translate
+  sudo bash scripts/install_systemd_units.sh --install --app-root /path/to/pdf_ocr_translate
 EOF
 }
 

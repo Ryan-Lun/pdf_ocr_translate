@@ -30,7 +30,7 @@ Options:
 
 Examples:
   bash scripts/install_nginx_site.sh --output-file /tmp/uo_regulations_translate
-  sudo bash scripts/install_nginx_site.sh --install --app-root /home/NE025/pdf_ocr_translate
+  sudo bash scripts/install_nginx_site.sh --install --app-root /path/to/pdf_ocr_translate
 EOF
 }
 

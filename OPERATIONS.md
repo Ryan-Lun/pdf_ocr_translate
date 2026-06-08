@@ -16,14 +16,14 @@
 ```bash
 APP_ENV=production
 AUTO_SCHEMA_MANAGEMENT=0
-APP_DIR=/home/NE025/pdf_ocr_translate
-ENV_FILE=/home/NE025/pdf_ocr_translate/.env
+APP_DIR=/path/to/pdf_ocr_translate
+ENV_FILE=/path/to/pdf_ocr_translate/.env
 RUN_GIT_PULL=0
 INSTALL_SYSTEMD_UNITS=1
 MANAGE_SYSTEMD_SERVICES=auto
 UV_SYNC_ARGS=--frozen
 WEB_WORKERS=4
-WEB_BIND=unix:/home/NE025/pdf_ocr_translate/uo_regulations_translate.sock
+WEB_BIND=unix:/path/to/pdf_ocr_translate/uo_regulations_translate.sock
 ENABLE_NGINX=0
 NGINX_LISTEN_PORT=81
 ```

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 APP_NAME="uo_regulations_translate"
 WORKER_SERVICE="uo_regulations_translate_worker"
 WORKER_SERVICES=("$WORKER_SERVICE")
-APP_DIR="${APP_DIR:-/home/NE025/pdf_ocr_translate}"
+APP_DIR="${APP_DIR:-$SCRIPT_DIR}"
 APP_ROOT="${APP_ROOT:-$APP_DIR}"
 ENV_FILE="${ENV_FILE:-$APP_ROOT/.env}"
 APP_USER="${APP_USER:-}"
