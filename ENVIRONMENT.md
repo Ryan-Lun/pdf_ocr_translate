@@ -111,36 +111,30 @@
 | `TEMPLATE_BACKUP_ROOT` | 模板備份檔輸出目錄。 |
 | `TEMPLATE_BACKUP_RETENTION_DAYS` | 模板備份保留天數，備份腳本會刪除更舊的 `.tar.gz` 與 `.sha256`。 |
 
-## 部署與維護腳本
+## Calendar 排程格式
 
-以下參數不一定需要寫在 `.env`，通常是在執行 `deploy.sh`、備份、還原或測試時臨時指定。
+`CLEANUP_ON_CALENDAR` 與 `TEMPLATE_BACKUP_ON_CALENDAR` 都會被 render 到 systemd timer 的 `OnCalendar=`。
 
-| 參數 | 功能 |
+常用範例：
+
+| 設定值 | 說明 |
 | --- | --- |
-| `APP_ROOT` | 應用程式根目錄。`deploy.sh`、systemd installer、備份還原腳本都會用它定位專案路徑。預設 `/home/NE025/pdf_ocr_translate`。 |
-| `APP_DIR` | `deploy.sh` 的舊式根目錄變數；若未指定 `APP_ROOT`，會以 `APP_DIR` 作為預設值。 |
-| `ENV_FILE` | 要載入的環境變數檔案。預設 `<APP_ROOT>/.env`。 |
-| `DEPLOY_BRANCH` | `RUN_GIT_PULL=1` 時要 pull 的 Git branch。預設 `main`。 |
-| `RUN_GIT_PULL` | 部署前是否執行 `git pull origin <DEPLOY_BRANCH>`。 |
-| `INSTALL_SYSTEMD_UNITS` | 是否安裝或更新 systemd unit。`0` 時不會覆蓋 `/etc/systemd/system` 內的 unit。 |
-| `ENABLE_SYSTEMD_UNITS` | 是否執行 `systemctl enable`，讓服務與 timer 開機自動啟動。 |
-| `MANAGE_SYSTEMD_SERVICES` | 是否由 `deploy.sh` 操作 systemd。可用 `auto`、`1`、`0`。 |
-| `APP_USER` | systemd `User=` 使用者。未指定時會用 `APP_ROOT` 目錄 owner。 |
-| `WEB_WORKERS` | Gunicorn worker 數量。 |
-| `WEB_BIND` | Gunicorn bind 位置，預設 Unix socket。 |
-| `ENABLE_NGINX` | 是否安裝或更新 Nginx site 設定。 |
-| `NGINX_LISTEN_PORT` | Nginx site listen port。預設 `81`。 |
-| `NGINX_TEMPLATE` | Nginx site template 路徑。 |
-| `NGINX_SITE_NAME` | Nginx site 名稱。 |
-| `NGINX_FILE` | Render 後的 Nginx site config 輸出路徑。 |
-| `UV_BIN` | `uv` 指令路徑。 |
-| `UV_SYNC_ARGS` | `uv sync` 額外參數。預設 `--frozen`。 |
-| `ALEMBIC_DATABASE_URL` | Alembic 使用的 DB URL。未指定時會使用 `DATABASE_URL`。 |
-| `ALEMBIC_CONFIG_NAME` | Alembic 執行環境名稱。部署預設 `production`。 |
-| `SKIP_PRE_RESTORE_BACKUP` | 還原模板前是否略過自動建立目前狀態備份。`1` 代表略過。 |
-| `RESTORE_ARCHIVE` | `restore_templates.sh` 使用的備份 tar.gz 路徑；也可直接用第一個命令列參數傳入。 |
-| `TEST_DATABASE_URL` | pytest 使用的測試 DB URL。未指定時使用 `DATABASE_URL`。 |
-| `TEST_DATABASE_SCHEMA` | pytest 使用的測試 schema。必須是獨立 schema，且名稱需以 `_test` 結尾，例如 `translation_test`。 |
+| `*-*-* 02:30:00` | 每天 02:30 執行。 |
+| `*-*-* 03:30:00` | 每天 03:30 執行。 |
+| `Mon..Fri 03:00:00` | 週一到週五 03:00 執行。 |
+| `Sun *-*-* 02:00:00` | 每週日 02:00 執行。 |
+| `*-*-01 02:00:00` | 每月 1 號 02:00 執行。 |
+| `hourly` | 每小時執行。 |
+| `daily` | 每天執行一次，時間由 systemd 決定。 |
+
+修改排程後要重新 render 並 restart timer：
+
+```bash
+bash deploy.sh
+systemctl cat uo_regulations_translate_log_cleanup.timer
+systemctl cat uo_regulations_translate_template_backup.timer
+systemctl list-timers | grep uo_regulations_translate
+```
 
 ## 補充
 
