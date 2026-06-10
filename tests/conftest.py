@@ -1,16 +1,15 @@
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
 from app import create_app
 from app.services import job_store, state
 from sqlalchemy import delete
+from tests.db_safety import configure_test_database
 
 
 @pytest.fixture
-def app():
-    engine = create_engine(state.DATABASE_URL, future=True, pool_pre_ping=True)
-    job_store.configure_database_schema(state.DATABASE_SCHEMA)
-    job_store.ensure_database_schema(engine)
+def app(monkeypatch):
+    engine = configure_test_database(monkeypatch)
     schema = job_store.current_database_schema()
     with engine.begin() as conn:
         for table_name in ("document_template_boxes", "document_template_pages", "document_templates"):

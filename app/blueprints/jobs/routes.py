@@ -3,7 +3,7 @@ from __future__ import annotations
 from flask import Blueprint, abort, request, send_file, send_from_directory
 from flask_login import current_user
 
-from ...services import authz_service, jobs
+from ...services import authz_service, document_templates, jobs
 
 jobs_bp = Blueprint(
     "jobs",
@@ -22,7 +22,8 @@ def job_file(job_id: str, filename: str):
     job_dir = jobs.job_dir(job_id)
     if not job_dir.exists():
         abort(404)
-    if not authz_service.can_access_job(current_user, job_id):
+    is_template_source = document_templates.get_document_template_by_job(job_id, include_all=True) is not None
+    if not is_template_source and not authz_service.can_access_job(current_user, job_id):
         abort(403)
     file_path = job_dir / filename
     if not file_path.exists():

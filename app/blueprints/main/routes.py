@@ -144,13 +144,12 @@ def template_editor_page(job_id: str) -> str:
     job_dir = jobs.job_dir(job_id)
     if not job_dir.exists():
         abort(404)
-    if not authz_service.can_access_job(current_user, job_id):
-        abort(403)
     template_record = document_templates.get_document_template_by_job(
         job_id,
-        owner_work_id=_current_owner_work_id(),
-        include_all=authz_service.user_is_admin(current_user) or not authz_service.owner_access_enabled(),
+        include_all=True,
     )
+    if template_record is None and not authz_service.can_access_job(current_user, job_id):
+        abort(403)
     return render_template(
         "main/template_editor.html",
         job_id=job_id,

@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
 from app import create_app
 from app.config import TestingConfig
-from app.services import auth_service, job_store, state
+from app.services import auth_service, job_store
+from tests.db_safety import configure_test_database
 
 
 @pytest.fixture
 def ldap_app(monkeypatch):
-    engine = create_engine(state.DATABASE_URL, future=True, pool_pre_ping=True)
-    job_store.configure_database_schema(state.DATABASE_SCHEMA)
-    job_store.ensure_database_schema(engine)
+    engine = configure_test_database(monkeypatch)
     schema = job_store.current_database_schema()
     with engine.begin() as conn:
         conn.execute(

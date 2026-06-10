@@ -8,10 +8,10 @@ import time
 from typing import Any
 
 import fitz
-from flask import Blueprint, Response, abort, jsonify, request, send_file, stream_with_context, url_for
+from flask import Blueprint, Response, abort, current_app, jsonify, request, send_file, stream_with_context, url_for
 from flask_login import current_user
 
-from ...services import audit_service, authz_service, batch, doc_workspace, document_templates, glossary, jobs, ocr, state, translation_memory, word_translate
+from ...services import audit_service, auth_store, authz_service, batch, doc_workspace, document_templates, glossary, jobs, ocr, state, translation_memory, word_translate
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +43,95 @@ def _forbidden_json():
 
 
 def _get_accessible_template(template_id: str) -> dict[str, Any] | None:
-    owner_work_id, include_all = _current_access_scope()
     return document_templates.get_document_template(
         template_id,
-        owner_work_id=owner_work_id,
-        include_all=include_all,
+        include_all=True,
     )
 
 
-def _job_access_denied(job_id: str) -> bool:
+def _document_template_source_jobs() -> list[dict[str, Any]]:
+    templates = document_templates.load_document_templates(include_all=True)
+    source_job_ids = {
+        str(template.get("source_job_id") or "").strip()
+        for template in templates
+        if jobs.safe_job_id(str(template.get("source_job_id") or "").strip())
+    }
+    if not source_job_ids:
+        return []
+    items = []
+    for item in jobs.build_jobs_list(job_type="template_source", include_all=True):
+        if item.get("job_id") not in source_job_ids:
+            continue
+        items.append(
+            {
+                "job_id": item.get("job_id"),
+                "status_code": item.get("status_code"),
+                "status_label": item.get("status_label"),
+                "status": item.get("status"),
+                "can_open_editor": True,
+            }
+        )
+    return items
+
+
+def _is_global_template_source_job(job_id: str) -> bool:
+    cleaned_job_id = str(job_id or "").strip()
+    if not jobs.safe_job_id(cleaned_job_id):
+        return False
+    return document_templates.get_document_template_by_job(cleaned_job_id, include_all=True) is not None
+
+
+def _can_edit_template(template: dict[str, Any]) -> bool:
+    return template is not None
+
+
+def _can_delete_template(template: dict[str, Any]) -> bool:
+    if not current_app.config.get("AUTH_ENABLED", False):
+        return True
+    if not authz_service.owner_access_enabled():
+        return True
+    source_job_id = str(template.get("source_job_id") or "").strip()
+    if source_job_id:
+        return not _job_access_denied(source_job_id, allow_global_template_source=False)
+    if authz_service.user_is_admin(current_user):
+        return True
+    owner_work_id = authz_service.normalize_work_id(template.get("owner_work_id"))
+    return bool(owner_work_id and owner_work_id == authz_service.current_work_id(current_user))
+
+
+def _template_creator_payload(template: dict[str, Any]) -> dict[str, str]:
+    owner_work_id = authz_service.normalize_work_id(template.get("owner_work_id"))
+    if not owner_work_id:
+        return {"creator_work_id": "", "creator_label": ""}
+    creator_label = owner_work_id
+    try:
+        snapshot = auth_store.get_local_user_snapshot(owner_work_id)
+    except Exception:
+        snapshot = None
+    if snapshot is not None and getattr(snapshot, "display_name", ""):
+        creator_label = str(snapshot.display_name)
+    return {"creator_work_id": owner_work_id, "creator_label": creator_label}
+
+
+def _template_response_payload(template: dict[str, Any]) -> dict[str, Any]:
+    item = dict(template)
+    item["can_delete"] = _can_delete_template(item)
+    item["can_edit_source"] = _can_edit_template(item)
+    item.update(_template_creator_payload(item))
+    return item
+
+
+def _templates_response_payload(templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_template_response_payload(template) for template in templates]
+
+
+def _job_access_denied(job_id: str, *, allow_global_template_source: bool = True) -> bool:
+    if allow_global_template_source and _is_global_template_source_job(job_id):
+        return False
+    if not current_app.config.get("AUTH_ENABLED", False):
+        return False
+    if not authz_service.owner_access_enabled():
+        return False
     return not authz_service.can_access_job(current_user, job_id)
 
 
@@ -489,14 +569,13 @@ def glossary_system_import_apply():
 
 @api_bp.route("/document-templates", methods=["GET", "POST"], endpoint="document_templates")
 def manage_document_templates():
-    owner_work_id, include_all = _current_access_scope()
+    owner_work_id = _current_owner_work_id()
     if request.method == "GET":
         return jsonify(
             {
                 "ok": True,
-                "templates": document_templates.load_document_templates(
-                    owner_work_id=owner_work_id,
-                    include_all=include_all,
+                "templates": _templates_response_payload(
+                    document_templates.load_document_templates(include_all=True)
                 ),
             }
         )
@@ -504,14 +583,11 @@ def manage_document_templates():
     payload = request.get_json(force=True) or {}
     template_id = str(payload.get("id") or "").strip()
     source_job_id = str(payload.get("source_job_id") or "").strip()
-    if template_id:
-        existing = document_templates.get_document_template(template_id, include_all=True)
-        if existing is not None and not authz_service.can_access_template(current_user, existing):
-            return _forbidden_json()
-    elif source_job_id:
-        existing = document_templates.get_document_template_by_job(source_job_id, include_all=True)
-        if existing is not None and not authz_service.can_access_template(current_user, existing):
-            return _forbidden_json()
+    existing = document_templates.get_document_template(template_id, include_all=True) if template_id else None
+    existing_source_job_id = str((existing or {}).get("source_job_id") or "").strip()
+    if existing is not None and not _can_edit_template(existing):
+        return _forbidden_json()
+    source_job_id = source_job_id or existing_source_job_id
     if source_job_id and _job_access_denied(source_job_id):
         return _forbidden_json()
     try:
@@ -521,7 +597,7 @@ def manage_document_templates():
         )
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
-    return jsonify({"ok": True, "template": template})
+    return jsonify({"ok": True, "template": _template_response_payload(template)})
 
 
 @api_bp.route(
@@ -533,6 +609,8 @@ def delete_document_template(template_id: str):
     template = _get_accessible_template(template_id)
     if template is None:
         return jsonify({"ok": False, "error": "Template not found."}), 404
+    if not _can_delete_template(template):
+        return _forbidden_json()
     source_job_id = str(template.get("source_job_id") or "").strip()
     if source_job_id:
         if _job_access_denied(source_job_id):
@@ -596,7 +674,7 @@ def apply_document_template(template_id: str):
     job_id = str(payload.get("job_id") or "").strip()
     if not jobs.safe_job_id(job_id):
         return jsonify({"ok": False, "error": "Invalid job id."}), 400
-    if _job_access_denied(job_id):
+    if _job_access_denied(job_id, allow_global_template_source=False):
         return _forbidden_json()
     job_dir = jobs.job_dir(job_id)
     if not job_dir.exists():
@@ -724,6 +802,11 @@ def list_template_jobs():
         include_all=include_all,
     )
     return jsonify({"jobs": jobs_list})
+
+
+@api_bp.route("/document-templates/source-jobs", methods=["GET"], endpoint="document_template_source_jobs")
+def document_template_source_jobs():
+    return jsonify({"jobs": _document_template_source_jobs()})
 
 
 @api_bp.route("/doc-jobs", methods=["GET"], endpoint="list_doc_jobs")
@@ -959,6 +1042,26 @@ def _jobs_stream_response(job_type: str):
     return resp
 
 
+def _document_template_source_jobs_stream_response():
+    @stream_with_context
+    def generate():
+        last_payload = None
+        while True:
+            payload = {"jobs": _document_template_source_jobs()}
+            data = json.dumps(payload, ensure_ascii=False)
+            if data != last_payload:
+                last_payload = data
+                yield f"event: jobs\ndata: {data}\n\n"
+            else:
+                yield ": ping\n\n"
+            time.sleep(3)
+
+    resp = Response(generate(), mimetype="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"
+    return resp
+
+
 @api_bp.route("/jobs/stream", methods=["GET"], endpoint="jobs_stream")
 def jobs_stream():
     return _jobs_stream_response("ocr_overlay")
@@ -979,11 +1082,20 @@ def template_jobs_stream():
     return _jobs_stream_response("template_source")
 
 
+@api_bp.route(
+    "/document-templates/source-jobs/stream",
+    methods=["GET"],
+    endpoint="document_template_source_jobs_stream",
+)
+def document_template_source_jobs_stream():
+    return _document_template_source_jobs_stream_response()
+
+
 @api_bp.route("/job/<job_id>", methods=["DELETE"], endpoint="delete_job")
 def delete_job(job_id: str):
     if not jobs.safe_job_id(job_id):
         abort(404)
-    if _job_access_denied(job_id):
+    if _job_access_denied(job_id, allow_global_template_source=False):
         return _forbidden_json()
     job_dir = jobs.job_dir(job_id)
     record = jobs.job_store.get_job(job_id)

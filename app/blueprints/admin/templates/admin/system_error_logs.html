@@ -20,8 +20,8 @@
 
   <section class="upload-card admin-stack">
     <form method="get" class="admin-search-form admin-search-form--logs">
-      <input class="admin-input" type="search" name="q" value="{{ q }}" placeholder="搜尋元件、訊息、例外或內容" />
-      <input class="admin-input admin-input--compact" type="search" name="component" value="{{ component }}" placeholder="元件" />
+      <input class="admin-input" type="search" name="q" value="{{ q }}" placeholder="搜尋位置、訊息、例外或內容" />
+      <input class="admin-input admin-input--compact" type="search" name="component" value="{{ component }}" placeholder="位置" />
       <select class="admin-select admin-input--compact" name="level">
         <option value="" {% if not level %}selected{% endif %}>全部等級</option>
         {% for option in ['WARNING', 'ERROR', 'CRITICAL'] %}
@@ -43,7 +43,7 @@
           <tr>
             <th class="admin-col--log-time">時間</th>
             <th class="admin-col--log-level">等級</th>
-            <th class="admin-col--log-action">元件</th>
+            <th class="admin-col--log-action">位置</th>
             <th class="admin-col--log-job">Job ID</th>
             <th>訊息</th>
           </tr>

@@ -54,7 +54,7 @@
         <div class="jobs-filterbar jobs-filterbar--compact">
           <label>
             <span>搜尋</span>
-            <input id="templatesSearch" type="text" placeholder="模板名稱、來源文件、模板 ID" />
+            <input id="templatesSearch" type="text" placeholder="模板名稱、來源文件、建立者、模板 ID" />
           </label>
           <label>
             <span>狀態</span>
@@ -121,7 +121,7 @@
           job_status: template.status === "saved" ? "saved" : "draft",
           job_id: template.id,
           job_name: template.name || template.display_name || "",
-          creator_name: template.display_name || "",
+          creator_name: template.creator_label || template.creator_work_id || "",
         }));
       }
 
@@ -150,6 +150,11 @@
           const headerMeta = document.createElement("div");
           headerMeta.className = "job-header-meta";
 
+          const ownerTag = document.createElement("div");
+          ownerTag.className = "job-badge";
+          ownerTag.textContent = `建立者：${template.creator_label || template.creator_work_id || "未填寫"}`;
+          headerMeta.appendChild(ownerTag);
+
           const idTag = document.createElement("div");
           idTag.className = "job-badge";
           idTag.textContent = template.id.slice(0, 8);
@@ -172,12 +177,17 @@
           const actions = document.createElement("div");
           actions.className = "job-actions";
 
-          if (template.source_job_id && sourceJob && ["completed", "done"].includes((sourceJob.status_code || "").toLowerCase())) {
+          if (template.source_job_id && sourceJob && ["completed", "done"].includes((sourceJob.status_code || "").toLowerCase()) && sourceJob.can_open_editor) {
             const editLink = document.createElement("a");
             editLink.className = "ghost";
             editLink.href = `/workspace/pdf-overlay/templates/${template.source_job_id}`;
             editLink.textContent = "編輯";
             actions.appendChild(editLink);
+          } else if (template.source_job_id && sourceJob && ["completed", "done"].includes((sourceJob.status_code || "").toLowerCase())) {
+            const completedLabel = document.createElement("span");
+            completedLabel.className = "job-muted";
+            completedLabel.textContent = "OCR 已完成";
+            actions.appendChild(completedLabel);
           } else {
             const pendingLabel = document.createElement("span");
             pendingLabel.className = "job-muted";
@@ -185,14 +195,16 @@
             actions.appendChild(pendingLabel);
           }
 
-          const deleteBtn = document.createElement("button");
-          deleteBtn.type = "button";
-          deleteBtn.className = "danger job-delete";
-          deleteBtn.textContent = "刪除";
-          deleteBtn.addEventListener("click", () => {
-            deleteTemplate(template.id, deleteBtn);
-          });
-          actions.appendChild(deleteBtn);
+          if (template.can_delete) {
+            const deleteBtn = document.createElement("button");
+            deleteBtn.type = "button";
+            deleteBtn.className = "danger job-delete";
+            deleteBtn.textContent = "刪除";
+            deleteBtn.addEventListener("click", () => {
+              deleteTemplate(template.id, deleteBtn);
+            });
+            actions.appendChild(deleteBtn);
+          }
 
           card.appendChild(header);
           card.appendChild(meta);
@@ -205,7 +217,7 @@
         const filtered = JobFilters.apply(templateFilterItems(allTemplates), {
           query: templatesSearch?.value,
           status: templatesStatusFilter?.value,
-          fields: ["id", "name", "display_name", "source_job_id", "job_name", "creator_name"],
+          fields: ["id", "name", "display_name", "source_job_id", "job_name", "creator_name", "creator_work_id", "creator_label"],
         });
         if (templatesFilterCount) {
           templatesFilterCount.textContent = `顯示 ${filtered.length} / ${allTemplates.length} 個模板`;
@@ -218,7 +230,7 @@
       async function loadTemplates() {
         templatesList.innerHTML = '<div class="hint">Loading...</div>';
         try {
-          const jobsRes = await fetch("/api/template-jobs");
+          const jobsRes = await fetch("/api/document-templates/source-jobs");
           if (jobsRes.ok) {
             const jobsPayload = await jobsRes.json();
             jobMap = new Map((jobsPayload.jobs || []).map((item) => [item.job_id, item]));
@@ -261,7 +273,7 @@
       function connectTemplatesStream() {
         if (!window.EventSource) return;
         if (templatesSource) templatesSource.close();
-        templatesSource = new EventSource("/api/template-jobs/stream");
+        templatesSource = new EventSource("/api/document-templates/source-jobs/stream");
         templatesSource.addEventListener("jobs", async (event) => {
           try {
             const payload = JSON.parse(event.data) || {};

@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from . import job_store, state
+from . import job_store, jobs, state
 
 
 def _clamp_ratio(value: Any) -> float:
@@ -247,9 +247,6 @@ def _upsert_template(normalized: dict[str, Any]) -> dict[str, Any]:
 
 def load_document_templates(*, owner_work_id: str | None = None, include_all: bool = False) -> list[dict[str, Any]]:
     _seed_from_legacy_if_needed()
-    normalized_owner = str(owner_work_id or "").strip()
-    if not include_all and not normalized_owner:
-        return []
     with job_store.session_scope() as session:
         records = list(
             session.scalars(
@@ -262,8 +259,6 @@ def load_document_templates(*, owner_work_id: str | None = None, include_all: bo
         templates: list[dict[str, Any]] = []
         for record in records:
             resolved_owner = _resolve_template_owner_work_id(record)
-            if not include_all and resolved_owner != normalized_owner:
-                continue
             template = _record_to_template(record)
             template["owner_work_id"] = resolved_owner
             templates.append(template)
@@ -285,8 +280,6 @@ def get_document_template(
         if record is None:
             return None
         resolved_owner = _resolve_template_owner_work_id(record)
-        if not include_all and resolved_owner != str(owner_work_id or "").strip():
-            return None
         template = _record_to_template(record)
         template["owner_work_id"] = resolved_owner
         return template
@@ -311,8 +304,6 @@ def get_document_template_by_job(
         if record is None:
             return None
         resolved_owner = _resolve_template_owner_work_id(record)
-        if not include_all and resolved_owner != str(owner_work_id or "").strip():
-            return None
         template = _record_to_template(record)
         template["owner_work_id"] = resolved_owner
         return template

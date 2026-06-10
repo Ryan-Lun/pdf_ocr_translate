@@ -3,18 +3,17 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import create_engine, delete
+from sqlalchemy import delete
 
 from app import create_app
 from app.config import TestingConfig
-from app.services import audit_service, job_store, state
+from app.services import audit_service, job_store
+from tests.db_safety import configure_test_database
 
 
 @pytest.fixture
 def audit_app(monkeypatch):
-    engine = create_engine(state.DATABASE_URL, future=True, pool_pre_ping=True)
-    job_store.configure_database_schema(state.DATABASE_SCHEMA)
-    job_store.ensure_database_schema(engine)
+    configure_test_database(monkeypatch)
     monkeypatch.setattr(TestingConfig, "AUTH_ENABLED", True)
     monkeypatch.setattr(TestingConfig, "AUTH_STUB_ENABLED", True)
     monkeypatch.setattr(TestingConfig, "SECRET_KEY", "test-secret")

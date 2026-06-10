@@ -5,10 +5,11 @@ import json
 import threading
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import fitz
 
-from app.services import doc_workspace, jobs, pipeline, state, translation_memory
+from app.services import doc_workspace, document_templates, job_store, jobs, pipeline, state, translation_memory
 
 
 def test_index_ok(client):
@@ -178,6 +179,12 @@ def test_template_editor_page_ok(client, tmp_path, monkeypatch):
     job_dir = tmp_path / "jobs" / job_id
     job_dir.mkdir(parents=True)
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    with client.application.app_context():
+        document_templates.create_template_draft(
+            source_job_id=job_id,
+            display_name="template-source",
+            owner_work_id="owner-a",
+        )
 
     resp = client.get(f"/workspace/pdf-overlay/templates/{job_id}")
     assert resp.status_code == 200
@@ -190,6 +197,42 @@ def test_template_editor_page_ok(client, tmp_path, monkeypatch):
     assert "batchTranslateBtn" not in body
     assert "contextRetranslateBtn" not in body
     assert "translateSelectedBoxesBtn" in body
+
+
+def test_template_editor_page_allows_global_template_source(client, tmp_path, monkeypatch):
+    job_id = "2" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr("app.blueprints.main.routes.authz_service.can_access_job", lambda user, target_job_id: False)
+
+    with client.application.app_context():
+        document_templates.save_document_template(
+            {
+                "name": "全域可編輯模板",
+                "source_job_id": job_id,
+                "pages": [
+                    {
+                        "page_index_0based": 0,
+                        "boxes": [
+                            {
+                                "x_ratio": 0.1,
+                                "y_ratio": 0.2,
+                                "w_ratio": 0.3,
+                                "h_ratio": 0.04,
+                                "text": "Template Text",
+                            }
+                        ],
+                    }
+                ],
+            },
+            owner_work_id="owner-a",
+        )
+
+    resp = client.get(f"/workspace/pdf-overlay/templates/{job_id}")
+
+    assert resp.status_code == 200
+    assert "template-editor-page" in resp.get_data(as_text=True)
 
 
 def test_editor_page_shows_template_entry(client, tmp_path, monkeypatch):
@@ -925,6 +968,130 @@ def test_document_templates_crud(client, tmp_path, monkeypatch):
 
     final_resp = client.get("/api/document-templates")
     assert final_resp.get_json()["templates"] == []
+
+
+def test_document_templates_are_global_when_owner_access_enabled(app):
+    with app.app_context():
+        created = document_templates.save_document_template(
+            {
+                "name": "全域模板",
+                "pages": [
+                    {
+                        "page_index_0based": 0,
+                        "boxes": [
+                            {
+                                "x_ratio": 0.1,
+                                "y_ratio": 0.2,
+                                "w_ratio": 0.3,
+                                "h_ratio": 0.04,
+                                "text": "Template Text",
+                            }
+                        ],
+                    }
+                ],
+            },
+            owner_work_id="owner-a",
+        )
+        all_templates = document_templates.load_document_templates(
+            owner_work_id="owner-b",
+            include_all=False,
+        )
+
+    assert [template["id"] for template in all_templates] == [created["id"]]
+
+
+def test_document_templates_payload_includes_creator(client, app, monkeypatch):
+    with app.app_context():
+        document_templates.save_document_template(
+            {
+                "name": "建立者模板",
+                "pages": [
+                    {
+                        "page_index_0based": 0,
+                        "boxes": [
+                            {
+                                "x_ratio": 0.1,
+                                "y_ratio": 0.2,
+                                "w_ratio": 0.3,
+                                "h_ratio": 0.04,
+                                "text": "Template Text",
+                            }
+                        ],
+                    }
+                ],
+            },
+            owner_work_id="NE025",
+        )
+
+    def fake_snapshot(work_id):
+        if work_id == "NE025":
+            return SimpleNamespace(work_id="NE025", display_name="Ryan Huang")
+        return None
+
+    monkeypatch.setattr("app.blueprints.api.routes.auth_store.get_local_user_snapshot", fake_snapshot)
+
+    resp = client.get("/api/document-templates")
+    payload = resp.get_json()
+
+    assert resp.status_code == 200
+    assert payload["templates"][0]["creator_work_id"] == "NE025"
+    assert payload["templates"][0]["creator_label"] == "Ryan Huang"
+
+
+def test_document_template_source_jobs_are_global_status_only(client, app):
+    source_job_id = "8" * 32
+    with job_store.session_scope() as session:
+        existing = session.get(job_store.JobRecord, source_job_id)
+        if existing is not None:
+            session.delete(existing)
+
+    with app.app_context():
+        job_store.create_job(
+            job_id=source_job_id,
+            job_type="template_source",
+            stage="completed",
+            status="completed",
+            progress=1.0,
+            job_name="來源文件",
+            owner_work_id="owner-a",
+        )
+        document_templates.save_document_template(
+            {
+                "name": "全域模板",
+                "source_job_id": source_job_id,
+                "pages": [
+                    {
+                        "page_index_0based": 0,
+                        "boxes": [
+                            {
+                                "x_ratio": 0.1,
+                                "y_ratio": 0.2,
+                                "w_ratio": 0.3,
+                                "h_ratio": 0.04,
+                                "text": "Template Text",
+                            }
+                        ],
+                    }
+                ],
+            },
+            owner_work_id="owner-a",
+        )
+
+    resp = client.get("/api/document-templates/source-jobs")
+    payload = resp.get_json()
+
+    assert resp.status_code == 200
+    assert payload["jobs"] == [
+        {
+            "job_id": source_job_id,
+            "status_code": "completed",
+            "status_label": "完成",
+            "status": "完成",
+            "can_open_editor": True,
+        }
+    ]
+    assert "owner_work_id" not in payload["jobs"][0]
+    assert "editor_url" not in payload["jobs"][0]
 
 
 def test_delete_document_template_removes_source_job_dir(client, tmp_path, monkeypatch):
