@@ -779,6 +779,55 @@ def test_api_job_data_includes_unprocessed_pdf_pages(client, tmp_path, monkeypat
     assert (job_dir / "images" / "editor_page_0003.png").exists()
 
 
+def test_api_template_source_job_data_only_includes_processed_pages(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TEMPLATE_JOB_ROOT", tmp_path / "templates" / "jobs")
+    monkeypatch.setattr("app.blueprints.api.routes.authz_service.can_access_job", lambda user, job_id: True)
+    job_id = "e" * 32
+    job_dir = tmp_path / "templates" / "jobs" / job_id
+    ocr_dir = job_dir / "ocr_json"
+    ocr_dir.mkdir(parents=True)
+
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_name": "template-source",
+            "job_type": "template_source",
+            "document_mode": "scanned",
+        },
+    )
+    doc = fitz.open()
+    for _ in range(3):
+        doc.new_page(width=200, height=300)
+    doc.save((job_dir / f"{job_id}.pdf").as_posix())
+    doc.close()
+
+    (ocr_dir / "page_0002_res_with_pdf_coords.json").write_text(
+        json.dumps(
+            {
+                "page_index_0based": 1,
+                "input_path": "page2.png",
+                "coord_transform": {"image_size_px": [1000, 1500]},
+                "rec_polys": [[[10, 20], [110, 20], [110, 60], [10, 60]]],
+                "rec_texts": ["template page"],
+                "edit_texts": ["template page"],
+                "rec_scores": [0.99],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    resp = client.get(f"/api/job/{job_id}")
+
+    assert resp.status_code == 200
+    pages = resp.get_json()["pages"]
+    assert [page["page_index_0based"] for page in pages] == [1]
+    assert pages[0]["rec_texts"] == ["template page"]
+    assert not (job_dir / "images" / "editor_page_0001.png").exists()
+    assert not (job_dir / "images" / "editor_page_0003.png").exists()
+
+
 def test_doc_jobs_download_docx_returns_zip(client, monkeypatch):
     captured = {}
 

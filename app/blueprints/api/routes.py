@@ -253,8 +253,11 @@ def job_data(job_id: str):
         pages_by_index[int(page["page_index_0based"])] = page
 
     source_pdf_path = job_dir / f"{job_id}.pdf"
+    job_type = jobs.get_job_type(job_dir)
     page_count = _pdf_page_count(source_pdf_path)
-    if page_count > 0:
+    if job_type == "template_source":
+        pages = [pages_by_index[page_idx] for page_idx in sorted(pages_by_index)]
+    elif page_count > 0:
         pages = []
         images_dir = job_dir / "images"
         for page_idx in range(page_count):
