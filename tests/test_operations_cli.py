@@ -17,6 +17,7 @@ SCHEMA_TABLE_NAMES = (
     "jobs",
     "job_artifacts",
     "job_events",
+    "editor_presence",
     "document_templates",
     "users",
     "roles",

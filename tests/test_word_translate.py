@@ -7,6 +7,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import docx
+import pytest
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
@@ -142,6 +143,7 @@ def test_word_translation_does_not_write_tm_after_model_translation(tmp_path, mo
         debug_job_dir=None,
         debug_custom_id=None,
         cancel_event=None,
+        warning_callback=None,
     ):
         return "table content", 35
 
@@ -440,6 +442,40 @@ def test_word_translation_batches_short_segments(tmp_path, monkeypatch):
     assert plan[0]["ids"] == ["item_0001", "item_0002", "item_0003"]
 
 
+def test_word_translation_timeout_reports_warning(monkeypatch):
+    class _TimeoutCompletions:
+        async def create(self, **kwargs):
+            raise TimeoutError("Request timed out.")
+
+    class _TimeoutChat:
+        completions = _TimeoutCompletions()
+
+    class _TimeoutClient:
+        chat = _TimeoutChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _TimeoutClient(),
+    )
+
+    translator = EnhancedWordTranslator()
+    translator.max_retries = 1
+    warnings: list[str] = []
+
+    with pytest.raises(RuntimeError, match="Word 翻譯請求連續失敗 1 次"):
+        asyncio.run(
+            translator.translate_text_with_quality(
+                "表格內容",
+                "auto",
+                "en",
+                [],
+                warning_callback=warnings.append,
+            )
+        )
+
+    assert warnings == ["第 1 次 Word 翻譯請求失敗：Request timed out."]
+
+
 def test_word_translation_preserves_header_field_code_paragraph(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
     monkeypatch.setattr(
@@ -483,6 +519,7 @@ def test_word_translation_preserves_header_field_code_paragraph(tmp_path, monkey
         debug_job_dir=None,
         debug_custom_id=None,
         cancel_event=None,
+        warning_callback=None,
     ):
         return "table content", 35
 

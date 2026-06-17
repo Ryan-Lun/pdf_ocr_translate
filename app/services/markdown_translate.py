@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 import subprocess
+import time
 from copy import deepcopy
 from html import escape
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from lang_utils import (
     describe_target_language,
@@ -17,6 +19,7 @@ from lang_utils import (
 from . import glossary, openai_config, state, translation_debug
 
 logger = logging.getLogger(__name__)
+DOC_TRANSLATE_MAX_RETRIES = 3
 
 
 def _run_pandoc(text: str, from_format: str, to_format: str) -> str:
@@ -169,6 +172,55 @@ def _extract_message_text(response: Any) -> str:
     return str(content or "").strip()
 
 
+def _doc_translate_request(
+    *,
+    client: Any,
+    model: str,
+    messages: list[dict[str, str]],
+    debug_job_dir: Path | None,
+    debug_custom_id: str | None,
+    empty_error: str,
+    warning_callback: Callable[[str], None] | None = None,
+) -> str:
+    last_error: Exception | None = None
+    for attempt in range(DOC_TRANSLATE_MAX_RETRIES):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+            )
+            translated = _extract_message_text(response)
+            if debug_job_dir is not None and debug_custom_id:
+                translation_debug.record_response(
+                    job_dir=debug_job_dir,
+                    chunk_label=debug_custom_id,
+                    attempt=attempt + 1,
+                    content=translated,
+                )
+            if translated:
+                return translated
+            raise RuntimeError(empty_error)
+        except Exception as exc:
+            last_error = exc
+            if debug_job_dir is not None and debug_custom_id:
+                translation_debug.record_error(
+                    job_dir=debug_job_dir,
+                    chunk_label=debug_custom_id,
+                    attempt=attempt + 1,
+                    error=str(exc),
+                )
+            if warning_callback is not None:
+                warning_callback(f"第 {attempt + 1} 次 PDF 翻譯重建請求失敗：{exc}")
+            if attempt == DOC_TRANSLATE_MAX_RETRIES - 1:
+                raise RuntimeError(
+                    f"PDF 翻譯重建請求連續失敗 {DOC_TRANSLATE_MAX_RETRIES} 次，已中斷任務：{exc}"
+                ) from exc
+            time.sleep((2**attempt) + random.uniform(0, 0.5))
+    raise RuntimeError(
+        f"PDF 翻譯重建請求連續失敗 {DOC_TRANSLATE_MAX_RETRIES} 次，已中斷任務：{last_error}"
+    )
+
+
 def _translate_snippet(
     snippet: str,
     client: Any,
@@ -177,6 +229,7 @@ def _translate_snippet(
     glossary_entries: list[tuple[str, str]] | None = None,
     debug_job_dir: Path | None = None,
     debug_custom_id: str | None = None,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> str:
     if not snippet.strip():
         return snippet
@@ -190,31 +243,18 @@ def _translate_snippet(
             payload=protected_snippet,
             expected_ids=[debug_custom_id],
         )
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": protected_snippet},
-            ],
-        )
-    except Exception as exc:
-        if debug_job_dir is not None and debug_custom_id:
-            translation_debug.record_error(
-                job_dir=debug_job_dir,
-                chunk_label=debug_custom_id,
-                attempt=1,
-                error=str(exc),
-            )
-        raise
-    translated = _extract_message_text(response)
-    if debug_job_dir is not None and debug_custom_id:
-        translation_debug.record_response(
-            job_dir=debug_job_dir,
-            chunk_label=debug_custom_id,
-            attempt=1,
-            content=translated,
-        )
+    translated = _doc_translate_request(
+        client=client,
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": protected_snippet},
+        ],
+        debug_job_dir=debug_job_dir,
+        debug_custom_id=debug_custom_id,
+        empty_error="PDF 翻譯重建回傳空白內容。",
+        warning_callback=warning_callback,
+    )
     restored = glossary.restore_protected_glossary_terms(translated)
     if debug_job_dir is not None and debug_custom_id and restored:
         translation_debug.record_parsed(
@@ -222,7 +262,7 @@ def _translate_snippet(
             chunk_label=debug_custom_id,
             translations={debug_custom_id: restored},
         )
-    return restored or glossary.restore_protected_glossary_terms(snippet)
+    return restored
 
 
 def _translate_text(
@@ -233,6 +273,7 @@ def _translate_text(
     glossary_entries: list[tuple[str, str]] | None = None,
     debug_job_dir: Path | None = None,
     debug_custom_id: str | None = None,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> str:
     if not text.strip():
         return text
@@ -251,31 +292,18 @@ def _translate_text(
             payload=payload,
             expected_ids=[debug_custom_id],
         )
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": payload},
-            ],
-        )
-    except Exception as exc:
-        if debug_job_dir is not None and debug_custom_id:
-            translation_debug.record_error(
-                job_dir=debug_job_dir,
-                chunk_label=debug_custom_id,
-                attempt=1,
-                error=str(exc),
-            )
-        raise
-    translated = _extract_message_text(response)
-    if debug_job_dir is not None and debug_custom_id:
-        translation_debug.record_response(
-            job_dir=debug_job_dir,
-            chunk_label=debug_custom_id,
-            attempt=1,
-            content=translated,
-        )
+    translated = _doc_translate_request(
+        client=client,
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": payload},
+        ],
+        debug_job_dir=debug_job_dir,
+        debug_custom_id=debug_custom_id,
+        empty_error="PDF 翻譯重建回傳空白內容。",
+        warning_callback=warning_callback,
+    )
     restored = glossary.restore_protected_glossary_terms(translated)
     if debug_job_dir is not None and debug_custom_id and restored:
         translation_debug.record_parsed(
@@ -283,7 +311,7 @@ def _translate_text(
             chunk_label=debug_custom_id,
             translations={debug_custom_id: restored},
         )
-    return restored or glossary.restore_protected_glossary_terms(text)
+    return restored
 
 
 def _translate_pandoc_doc(
@@ -295,6 +323,7 @@ def _translate_pandoc_doc(
     snippet_to_text,
     text_to_blocks,
     debug_job_dir: Path | None = None,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     api_version = doc.get("pandoc-api-version", [])
     blocks = doc.get("blocks", []) or []
@@ -329,6 +358,7 @@ def _translate_pandoc_doc(
             glossary_entries=glossary_entries,
             debug_job_dir=debug_job_dir,
             debug_custom_id=chunk_label,
+            warning_callback=warning_callback,
         )
         parsed_blocks = text_to_blocks(translated_snippet)
         translated_blocks.extend(parsed_blocks or pending)
@@ -375,6 +405,7 @@ def translate_markdown_file(
     target_lang: str = "en",
     system_prompt: str | None = None,
     debug_job_dir: Path | None = None,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> Path:
     markdown_text = source_path.read_text(encoding="utf-8")
     doc = markdown_to_doc(markdown_text)
@@ -386,6 +417,7 @@ def translate_markdown_file(
         snippet_to_text=blocks_to_markdown,
         text_to_blocks=markdown_to_blocks,
         debug_job_dir=debug_job_dir,
+        warning_callback=warning_callback,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(doc_to_markdown(translated_doc), encoding="utf-8")
@@ -426,6 +458,7 @@ def _translate_html_text_nodes(
     target_lang: str,
     system_prompt: str | None = None,
     debug_job_dir: Path | None = None,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> str:
     parts = re.split(r"(<[^>]+>)", html_text)
     client, model = _get_translation_client()
@@ -478,6 +511,7 @@ def _translate_html_text_nodes(
                 glossary_entries=glossary_entries,
                 debug_job_dir=debug_job_dir,
                 debug_custom_id=debug_custom_id,
+                warning_callback=warning_callback,
             )
             translated_cache[core] = translated_core
         translated_parts.append(f"{leading}{escape(translated_core, quote=False)}{trailing}")
@@ -494,6 +528,7 @@ def translate_html_file(
     target_lang: str = "en",
     system_prompt: str | None = None,
     debug_job_dir: Path | None = None,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> Path:
     html_text = source_path.read_text(encoding="utf-8")
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -503,6 +538,7 @@ def translate_html_file(
         target_lang=target_lang,
         system_prompt=system_prompt,
         debug_job_dir=debug_job_dir,
+        warning_callback=warning_callback,
     )
     out_path.write_text(_unwrap_html_code_fences(translated_html), encoding="utf-8")
     return out_path

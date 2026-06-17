@@ -235,3 +235,47 @@ def test_translate_html_file_writes_realtime_debug(tmp_path: Path):
     assert request_meta.exists()
     assert parsed.exists()
     assert mirrored.exists()
+
+
+def test_translate_html_file_timeout_fails_after_three_retries(tmp_path: Path):
+    module = _load_module()
+    source = tmp_path / "doc.html"
+    output = tmp_path / "doc.translated.html"
+    source.write_text("<p>Hello</p>", encoding="utf-8")
+
+    attempts = {"count": 0}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            attempts["count"] += 1
+            raise TimeoutError("Request timed out.")
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    module._get_translation_client = lambda: (FakeClient(), "fake-model")
+    module.time.sleep = lambda seconds: None
+    warnings: list[str] = []
+
+    try:
+        module.translate_html_file(
+            source,
+            output,
+            target_lang="fr",
+            warning_callback=warnings.append,
+        )
+    except RuntimeError as exc:
+        assert "PDF 翻譯重建請求連續失敗 3 次" in str(exc)
+        assert "Request timed out." in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+    assert attempts["count"] == 3
+    assert warnings == [
+        "第 1 次 PDF 翻譯重建請求失敗：Request timed out.",
+        "第 2 次 PDF 翻譯重建請求失敗：Request timed out.",
+        "第 3 次 PDF 翻譯重建請求失敗：Request timed out.",
+    ]

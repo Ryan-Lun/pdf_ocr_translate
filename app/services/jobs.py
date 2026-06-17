@@ -320,6 +320,30 @@ def set_job_state(
     notify_jobs_update()
 
 
+def fail_job(
+    job_dir_path: Path,
+    *,
+    stage: str = "failed",
+    error_message: str,
+    completed_at: float | None = None,
+    progress: float | None = None,
+    extra_meta: dict[str, Any] | None = None,
+) -> float:
+    now_ts = completed_at if completed_at is not None else time.time()
+    merged_meta = dict(extra_meta or {})
+    merged_meta.setdefault("failed_at", now_ts)
+    set_job_state(
+        job_dir_path,
+        status="failed",
+        stage=stage,
+        progress=progress,
+        error_message=error_message,
+        completed_at=now_ts,
+        extra_meta=merged_meta,
+    )
+    return now_ts
+
+
 def _safe_update_job_store(job_id: str, **updates: Any) -> None:
     try:
         job_store.update_job(job_id, **updates)
@@ -382,6 +406,7 @@ def build_jobs_list(
     job_type: str | None = None,
     owner_work_id: str | None = None,
     include_all: bool = False,
+    include_active_editors: bool | None = None,
 ) -> list[dict[str, Any]]:
     jobs = []
     normalized_owner = " ".join(str(owner_work_id or "").split()).strip()
@@ -389,6 +414,12 @@ def build_jobs_list(
         return jobs
     records = job_store.list_jobs(job_type)
     artifacts_by_job_id = job_store.list_artifacts([record.job_id for record in records])
+    should_include_active_editors = include_all if include_active_editors is None else bool(include_active_editors)
+    active_editors_by_job_id = (
+        job_store.list_active_editor_presence([record.job_id for record in records])
+        if should_include_active_editors
+        else {}
+    )
 
     def _artifact_url(job_id: str, artifacts: dict[str, Any], artifact_type: str) -> str | None:
         artifact = artifacts.get(artifact_type)
@@ -404,6 +435,7 @@ def build_jobs_list(
         job_id = record.job_id
         payload = job_store.deserialize_payload(record)
         artifacts = artifacts_by_job_id.get(job_id, {})
+        active_editors = active_editors_by_job_id.get(job_id, [])
         record_owner_work_id = str(record.owner_work_id or payload.get("owner_work_id") or "").strip()
         if not include_all and record_owner_work_id != normalized_owner:
             continue
@@ -426,6 +458,8 @@ def build_jobs_list(
             status_code, status_label = map_status_display(
                 current_job_type, record.status, record.stage or "queued"
             )
+            doc_status = load_doc_status(job_dir(job_id)) or {}
+            error_message = record.error_message or payload.get("error") or doc_status.get("error")
             jobs.append(
                 {
                     "job_id": job_id,
@@ -443,6 +477,10 @@ def build_jobs_list(
                     "job_name": job_name,
                     "creator_name": creator_name,
                     "owner_work_id": record_owner_work_id or None,
+                    "active_editors": active_editors,
+                    "last_warning": str(payload.get("last_warning") or "").strip() or None,
+                    "last_warning_at": payload.get("last_warning_at"),
+                    "error": error_message,
                     "download_name": build_docx_name(job_id, job_name),
                     "source_pdf_url": _artifact_url(job_id, artifacts, "source_pdf"),
                     "structure_md_url": _artifact_url(job_id, artifacts, "structure_md"),
@@ -474,8 +512,12 @@ def build_jobs_list(
                     "job_name": job_name,
                     "creator_name": creator_name,
                     "owner_work_id": record_owner_work_id or None,
+                    "active_editors": active_editors,
                     "progress": float(record.progress or 0.0),
                     "avg_quality": float(payload.get("avg_quality") or 0.0),
+                    "last_warning": str(payload.get("last_warning") or "").strip() or None,
+                    "last_warning_at": payload.get("last_warning_at"),
+                    "error": record.error_message or payload.get("error"),
                     "target_lang": record.target_lang or payload.get("target_lang"),
                     "download_name": build_docx_name(job_id, job_name),
                     "source_docx_url": _artifact_url(job_id, artifacts, "source_docx"),
@@ -501,6 +543,8 @@ def build_jobs_list(
         status_code, status_label = map_status_display(
             current_job_type, record.status, record.stage or "queued"
         )
+        batch_status = load_batch_status(job_dir(job_id)) or {}
+        error_message = record.error_message or payload.get("error") or batch_status.get("error")
 
         jobs.append(
             {
@@ -520,12 +564,16 @@ def build_jobs_list(
                 "template_source": is_template_source,
                 "creator_name": creator_name,
                 "owner_work_id": record_owner_work_id or None,
+                "active_editors": active_editors,
                 "document_mode": normalize_document_mode(
                     record.document_mode or payload.get("document_mode")
                 ),
                 "translate_mode": normalize_translate_mode(
                     payload.get("translate_mode")
                 ),
+                "last_warning": str(payload.get("last_warning") or "").strip() or None,
+                "last_warning_at": payload.get("last_warning_at"),
+                "error": error_message,
                 "download_name": download_name,
                 "editor_url": url_for("editor.editor", job_id=job_id),
                 "debug_pdf_url": _artifact_url(job_id, artifacts, "debug_pdf"),
@@ -678,6 +726,20 @@ def write_batch_status(job_dir_path: Path, status: str, **meta: Any) -> None:
 
 def load_batch_status(job_dir_path: Path) -> dict[str, Any] | None:
     path = batch_status_path(job_dir_path)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def doc_status_path(job_dir_path: Path) -> Path:
+    return job_dir_path / state.DOC_STATUS_NAME
+
+
+def load_doc_status(job_dir_path: Path) -> dict[str, Any] | None:
+    path = doc_status_path(job_dir_path)
     if not path.exists():
         return None
     try:

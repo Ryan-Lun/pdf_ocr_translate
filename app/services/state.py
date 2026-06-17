@@ -80,6 +80,7 @@ PP_STRUCTURE_URL = os.getenv(
 OPENAI_BASE_URL = openai_config.get_openai_base_url()
 AZURE_BASE_URL = OPENAI_BASE_URL
 OPENAI_API_KEY = openai_config.get_openai_api_key()
+AZURE_OPENAI_TIMEOUT_SECONDS = openai_config.get_openai_timeout_seconds()
 AZURE_API_KEY_ENV = os.getenv("AZURE_OPENAI_API_KEY_ENV", "OPENAI_API_KEY")
 AZURE_BATCH_MODEL = openai_config.get_batch_translate_deployment()
 AZURE_BATCH_POLL_SECONDS = float(os.getenv("AZURE_BATCH_POLL_SECONDS", "60"))
@@ -111,6 +112,7 @@ AZURE_BATCH_SYSTEM_PROMPT = os.getenv(
             "Translate the text from Chinese to English accurately and literally.",
             "Do NOT summarize, paraphrase, explain, or add content.",
             "Preserve all numbers, codes, references, and formatting.",
+            "Preserve sentence-ending punctuation; never replace punctuation marks such as 。, ., or commas with the digit 0.",
             "If the input is a standalone year, number, code, table number, figure number, symbol, unit, abbreviation, or non-sentence fragment, do not explain it. Return only the translated or preserved text. Examples: 2017年 -> 2017、2018年 -> 2018、N/A -> N/A",
             "CRITICAL FORMATTING RULE 1: You MUST insert a line break strictly before every numbered item (e.g., '2.', '3.', '4.').",
             "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",

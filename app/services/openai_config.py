@@ -6,6 +6,19 @@ from functools import lru_cache
 from openai import AsyncOpenAI, OpenAI
 
 
+DEFAULT_OPENAI_TIMEOUT_SECONDS = 120.0
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def get_openai_api_key() -> str:
     return (
         os.getenv("OPENAI_API_KEY")
@@ -74,6 +87,16 @@ def get_word_quality_deployment() -> str:
     ).strip()
 
 
+def get_openai_timeout_seconds() -> float:
+    return max(
+        0.1,
+        _float_env(
+            "AZURE_OPENAI_TIMEOUT_SECONDS",
+            _float_env("OPENAI_TIMEOUT_SECONDS", DEFAULT_OPENAI_TIMEOUT_SECONDS),
+        ),
+    )
+
+
 @lru_cache(maxsize=1)
 def create_sync_client() -> OpenAI:
     api_key = get_openai_api_key()
@@ -82,7 +105,11 @@ def create_sync_client() -> OpenAI:
         raise RuntimeError("OPENAI_API_KEY is not configured.")
     if not base_url:
         raise RuntimeError("OPENAI_BASE_URL is not configured.")
-    return OpenAI(api_key=api_key, base_url=base_url)
+    return OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=get_openai_timeout_seconds(),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -93,4 +120,8 @@ def create_async_client() -> AsyncOpenAI:
         raise RuntimeError("OPENAI_API_KEY is not configured.")
     if not base_url:
         raise RuntimeError("OPENAI_BASE_URL is not configured.")
-    return AsyncOpenAI(api_key=api_key, base_url=base_url)
+    return AsyncOpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=get_openai_timeout_seconds(),
+    )

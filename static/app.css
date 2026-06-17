@@ -915,6 +915,11 @@ body.has-global-nav:not(.home-hub) .shell {
   background: rgba(235, 154, 64, 0.2);
 }
 
+.job-badge--editing {
+  color: #0f766e;
+  background: rgba(20, 184, 166, 0.16);
+}
+
 .job-title {
   font-weight: 700;
   min-width: 0;
@@ -925,6 +930,27 @@ body.has-global-nav:not(.home-hub) .shell {
   color: var(--muted);
   font-size: 0.9rem;
   /* padding-left: 1.45rem; */
+}
+
+.job-notice {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.job-notice--warning {
+  color: #7a4b00;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(180, 83, 9, 0.22);
+}
+
+.job-notice--error {
+  color: #8a1f1f;
+  background: rgba(220, 38, 38, 0.1);
+  border-color: rgba(185, 28, 28, 0.2);
 }
 
 .template-card .job-meta {

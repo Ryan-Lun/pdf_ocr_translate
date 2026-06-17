@@ -205,6 +205,10 @@ def normalize_for_translation(text: str) -> str:
     return translation_memory.normalize_source_text(text)
 
 
+def normalize_source_for_prompt(text: str) -> str:
+    return normalize_text(text)
+
+
 def _page_item_sort_key(bbox: list[float] | None, kind_order: int = 0) -> tuple[float, float, int]:
     if not (isinstance(bbox, list) and len(bbox) == 4):
         return (float("inf"), float("inf"), kind_order)
@@ -530,6 +534,7 @@ def resolve_batch_prompt(target_lang: str, override: str | None = None) -> str:
             f"Translate the text to {target_label} accurately and literally.",
             "Do NOT summarize, paraphrase, explain, or add content.",
             "Preserve all numbers, codes, references, and formatting.",
+            "Preserve sentence-ending punctuation; never replace punctuation marks such as 。, ., or commas with the digit 0.",
             "If the input is a standalone year, number, code, table number, figure number, symbol, unit, abbreviation, or non-sentence fragment, do not explain it. Return only the translated or preserved text. Examples: 2017年 -> 2017、2018年 -> 2018、N/A -> N/A",
             "CRITICAL FORMATTING RULE 1: You MUST insert a line break strictly before every numbered item (e.g., '2.', '3.', '4.').",
             "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",
@@ -616,7 +621,7 @@ def build_batch_items(
                     tm_dirty = True
                     return
         clean = glossary.apply_glossary_with_protection(
-            normalize_for_translation(canonical_source_text),
+            normalize_source_for_prompt(canonical_source_text),
             glossary_entries,
         )
         if not clean:
@@ -1180,9 +1185,8 @@ def run_batch_translate_job(
             logger.exception("Batch translate poll failed job_id=%s error=%s", job_id, exc)
             jobs.write_batch_status(job_dir, "failed", **status_meta, batch_id=batch_id, error=str(exc))
             now_ts = time.time()
-            jobs.set_job_state(
+            jobs.fail_job(
                 job_dir,
-                status="failed",
                 stage="translate",
                 error_message=str(exc),
                 completed_at=now_ts,
@@ -1281,9 +1285,8 @@ def run_batch_translate_job(
         logger.exception("Batch translate failed job_id=%s error=%s", job_id, exc)
         jobs.write_batch_status(job_dir, "failed", **status_meta, error=str(exc))
         now_ts = time.time()
-        jobs.set_job_state(
+        jobs.fail_job(
             job_dir,
-            status="failed",
             stage="translate",
             error_message=str(exc),
             completed_at=now_ts,
@@ -1345,14 +1348,23 @@ def _poll_batch_translate_job(
         now_ts = time.time()
         error_message = f"Batch status = {status}"
         final_status = "cancelled" if normalized_status in {"canceled", "cancelled"} else "failed"
-        jobs.set_job_state(
-            job_dir,
-            status=final_status,
-            stage="translate",
-            error_message=error_message,
-            completed_at=now_ts,
-            extra_meta={"translate_completed_at": now_ts},
-        )
+        if final_status == "failed":
+            jobs.fail_job(
+                job_dir,
+                stage="translate",
+                error_message=error_message,
+                completed_at=now_ts,
+                extra_meta={"translate_completed_at": now_ts},
+            )
+        else:
+            jobs.set_job_state(
+                job_dir,
+                status=final_status,
+                stage="translate",
+                error_message=error_message,
+                completed_at=now_ts,
+                extra_meta={"translate_completed_at": now_ts},
+            )
         return True
 
     output_file_id = batch_obj.output_file_id or batch_obj.error_file_id

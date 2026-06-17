@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import docx
 from docx.document import Document
@@ -534,6 +534,7 @@ class EnhancedWordTranslator:
         debug_job_dir: Path | None = None,
         debug_custom_id: str | None = None,
         cancel_event: threading.Event | None = None,
+        warning_callback: Callable[[str], None] | None = None,
     ) -> tuple[str, int]:
         base_delay = 1.0
         for attempt in range(self.max_retries):
@@ -599,11 +600,15 @@ class EnhancedWordTranslator:
                 )
                 if self.is_invalid_translation_response(text, translated_text):
                     if attempt == self.max_retries - 1:
-                        return text, 0
+                        raise RuntimeError(
+                            f"Word 翻譯連續 {self.max_retries} 次回傳無效內容，已中斷任務。"
+                        )
                     continue
                 if not translated_text:
                     if attempt == self.max_retries - 1:
-                        return text, 0
+                        raise RuntimeError(
+                            f"Word 翻譯連續 {self.max_retries} 次回傳空白內容，已中斷任務。"
+                        )
                     continue
                 if debug_job_dir is not None and debug_custom_id:
                     translation_debug.record_parsed(
@@ -631,12 +636,16 @@ class EnhancedWordTranslator:
                         error=str(exc),
                     )
                 logger.warning("Word translation attempt failed attempt=%s error=%s", attempt + 1, exc)
+                if warning_callback is not None:
+                    warning_callback(f"第 {attempt + 1} 次 Word 翻譯請求失敗：{exc}")
                 if attempt == self.max_retries - 1:
-                    return text, 0
+                    raise RuntimeError(
+                        f"Word 翻譯請求連續失敗 {self.max_retries} 次，已中斷任務：{exc} 請向系統管理員回報此問題。"
+                    ) from exc
             if cancel_event is not None and cancel_event.is_set():
                 raise WordTranslationCancelled("Word translation cancelled.")
             await asyncio.sleep(base_delay * (2**attempt) + random.uniform(0, 1))
-        return text, 0
+        raise RuntimeError(f"Word 翻譯連續失敗 {self.max_retries} 次，已中斷任務。請向系統管理員回報此問題。")
 
     async def translate_texts_batch_with_quality(
         self,
@@ -650,6 +659,7 @@ class EnhancedWordTranslator:
         debug_custom_id: str | None = None,
         item_ids: dict[str, str] | None = None,
         cancel_event: threading.Event | None = None,
+        warning_callback: Callable[[str], None] | None = None,
     ) -> dict[str, tuple[str, int]]:
         if not texts:
             return {}
@@ -665,6 +675,7 @@ class EnhancedWordTranslator:
                 debug_job_dir=debug_job_dir,
                 debug_custom_id=debug_custom_id,
                 cancel_event=cancel_event,
+                warning_callback=warning_callback,
             )
             return {text: (translated_text, quality_score)}
 
@@ -749,6 +760,7 @@ class EnhancedWordTranslator:
                         system_prompt_adjustment=system_prompt_adjustment,
                         glossary_entries=glossary_entries,
                         cancel_event=cancel_event,
+                        warning_callback=warning_callback,
                     )
                 else:
                     quality_score = 40
@@ -772,6 +784,8 @@ class EnhancedWordTranslator:
                     error=str(exc),
                 )
             logger.warning("Word batch translation failed, falling back to singles error=%s", exc)
+            if warning_callback is not None:
+                warning_callback(f"Word 批次翻譯失敗，改用逐段翻譯：{exc}")
             results = {}
             for text in texts:
                 translated_text, quality_score = await self.translate_text_with_quality(
@@ -782,6 +796,7 @@ class EnhancedWordTranslator:
                     system_prompt_adjustment=system_prompt_adjustment,
                     glossary_entries=glossary_entries,
                     cancel_event=cancel_event,
+                    warning_callback=warning_callback,
                 )
                 results[text] = (translated_text, quality_score)
             return results
@@ -813,6 +828,7 @@ class EnhancedWordTranslator:
         system_prompt: str | None = None,
         debug_job_dir: Path | None = None,
         cancel_event: threading.Event | None = None,
+        warning_callback: Callable[[str], None] | None = None,
     ):
         doc = docx.Document(source_path)
         self.mark_update_fields_on_open(doc)
@@ -878,6 +894,7 @@ class EnhancedWordTranslator:
                     debug_custom_id=f"chunk_{batch_index:04d}",
                     item_ids=item_ids,
                     cancel_event=cancel_event,
+                    warning_callback=warning_callback,
                 )
                 await asyncio.sleep(request_delay)
                 return results
@@ -947,7 +964,7 @@ def _run_word_job(
         status="running",
         stage="prepare",
         started_at=now_ts,
-        extra_meta={"translate_started_at": now_ts},
+        extra_meta={"translate_started_at": now_ts, "last_warning": ""},
     )
     translator = EnhancedWordTranslator()
     with WORD_JOB_EVENTS_LOCK:
@@ -958,6 +975,17 @@ def _run_word_job(
         else:
             processing_source_path = source_path
         jobs.set_job_state(job_dir, status="running", stage="translate")
+
+        def record_warning(message: str) -> None:
+            jobs.set_job_state(
+                job_dir,
+                status="running",
+                stage="translate",
+                extra_meta={
+                    "last_warning": message,
+                    "last_warning_at": time.time(),
+                },
+            )
 
         async def _runner() -> tuple[float, float]:
             last_progress = 0.0
@@ -971,6 +999,7 @@ def _run_word_job(
                 system_prompt=system_prompt,
                 debug_job_dir=job_dir,
                 cancel_event=cancel_event,
+                warning_callback=record_warning,
             ):
                 last_progress = float(progress)
                 last_quality = float(avg_quality)
@@ -1007,7 +1036,10 @@ def _run_word_job(
             stage="completed",
             progress=max(100.0, round(last_progress, 2)),
             completed_at=now_done,
-            extra_meta={"translate_completed_at": now_done, "avg_quality": round(last_quality, 2)},
+            extra_meta={
+                "translate_completed_at": now_done,
+                "avg_quality": round(last_quality, 2),
+            },
         )
         jobs.job_store.register_artifact(job_id, "docx", "output/output.docx")
     except Exception as exc:
@@ -1028,13 +1060,13 @@ def _run_word_job(
             job_id=job_id,
             detail={"job_dir": str(job_dir), "source_path": str(source_path)},
         )
-        jobs.set_job_state(
+        now_ts = time.time()
+        jobs.fail_job(
             job_dir,
-            status="failed",
             stage="failed",
             error_message=str(exc),
-            completed_at=time.time(),
-            extra_meta={"translate_completed_at": time.time()},
+            completed_at=now_ts,
+            extra_meta={"translate_completed_at": now_ts},
         )
     finally:
         with WORD_JOB_EVENTS_LOCK:

@@ -7,7 +7,7 @@ from sqlalchemy import inspect
 from . import auth_store, job_store
 
 SCHEMA_GROUPS: dict[str, tuple[str, ...]] = {
-    "jobs": ("jobs", "job_artifacts", "job_events", "document_templates"),
+    "jobs": ("jobs", "job_artifacts", "job_events", "editor_presence", "document_templates"),
     "logs": ("audit_logs", "system_error_logs"),
     "auth": ("users", "roles", "user_roles"),
 }
@@ -35,6 +35,15 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "job_artifacts": ("id", "job_id", "artifact_type", "file_path", "created_at"),
     "job_events": ("id", "job_id", "event_type", "stage", "message", "created_at"),
+    "editor_presence": (
+        "job_id",
+        "work_id",
+        "display_name",
+        "remote_addr",
+        "user_agent",
+        "created_at",
+        "last_seen_at",
+    ),
     "audit_logs": ("id", "created_at", "action", "work_id", "detail_json", "job_id", "request_path", "remote_addr"),
     "system_error_logs": ("id", "created_at", "level", "component", "message", "error_type", "detail_json", "job_id", "request_path", "remote_addr"),
     "document_templates": (

@@ -79,7 +79,7 @@ def run_doc_workspace_job(
             job_dir,
             status="running",
             stage="translate",
-            extra_meta={"translate_started_at": time.time()},
+            extra_meta={"translate_started_at": time.time(), "last_warning": ""},
         )
         write_doc_status(job_dir, "translate_running", target_lang=target_lang)
         translated_html_path = translated_dir / "doc.translated.html"
@@ -87,6 +87,18 @@ def run_doc_workspace_job(
         translated_images_dir = translated_dir / "images"
         if source_images_dir.exists():
             shutil.copytree(source_images_dir, translated_images_dir, dirs_exist_ok=True)
+
+        def record_warning(message: str) -> None:
+            jobs.set_job_state(
+                job_dir,
+                status="running",
+                stage="translate",
+                extra_meta={
+                    "last_warning": message,
+                    "last_warning_at": time.time(),
+                },
+            )
+
         markdown_translate.translate_html_file(
             structure_html_path,
             translated_html_path,
@@ -94,6 +106,7 @@ def run_doc_workspace_job(
             target_lang=target_lang,
             system_prompt=system_prompt,
             debug_job_dir=job_dir,
+            warning_callback=record_warning,
         )
         jobs.job_store.register_artifact(job_id, "translated_html", "translated/doc.translated.html")
 
@@ -148,12 +161,10 @@ def run_doc_workspace_job(
             job_id=job_id,
             detail={"job_dir": str(job_dir)},
         )
-        jobs.set_job_state(
+        jobs.fail_job(
             job_dir,
-            status="failed",
             stage="failed",
             error_message=str(exc),
-            completed_at=time.time(),
         )
         write_doc_status(job_dir, "failed", error=str(exc))
 

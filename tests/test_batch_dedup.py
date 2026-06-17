@@ -64,6 +64,35 @@ def test_table_paragraph_blocks_are_skipped_when_merged_cells_exist():
     assert prefilled == {}
 
 
+def test_build_batch_items_preserves_chinese_sentence_punctuation_in_prompt():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": ["產品已完成檢查。"],
+            "rec_polys": [
+                [[0, 0], [100, 0], [100, 20], [0, 20]],
+            ],
+        }
+    ]
+
+    items, _, key_map, _ = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        pp_pages={},
+        document_mode="scanned",
+    )
+
+    assert items[0]["body"]["messages"][1]["content"] == "產品已完成檢查。"
+    assert key_map == {
+        "p0000-l0000": {
+            "source_text": "產品已完成檢查。",
+            "source_normalized": "產品已完成檢查.",
+        }
+    }
+
+
 def test_edits_payload_does_not_duplicate_table_paragraph_blocks():
     ocr_pages = [
         {
@@ -1262,6 +1291,7 @@ def test_zh_target_prompt_requires_traditional_chinese():
     prompt = resolve_batch_prompt("zh")
     assert "Traditional Chinese" in prompt
     assert "Never use Simplified Chinese characters" in prompt
+    assert "never replace punctuation marks" in prompt
 
 
 def test_zh_cn_target_prompt_requires_simplified_chinese():

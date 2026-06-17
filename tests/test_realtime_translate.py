@@ -1,3 +1,7 @@
+import inspect
+
+import pytest
+
 from app.services import realtime_translate
 
 
@@ -17,6 +21,97 @@ def test_extract_batch_item_payload_reuses_batch_messages():
     assert custom_id == "p0000-l0001"
     assert system_prompt == "base prompt"
     assert user_text == "source text"
+
+
+def test_realtime_translate_defaults_to_three_retries():
+    assert inspect.signature(realtime_translate._translate_item).parameters["max_retries"].default == 3
+    assert inspect.signature(realtime_translate._translate_chunk).parameters["max_retries"].default == 3
+
+
+def test_realtime_translate_item_failure_uses_chinese_error(tmp_path):
+    class _FailingRawResponse:
+        async def create(self, **kwargs):
+            raise TimeoutError("Request timed out.")
+
+    class _FailingCompletions:
+        with_raw_response = _FailingRawResponse()
+
+    class _FailingChat:
+        completions = _FailingCompletions()
+
+    class _FailingClient:
+        chat = _FailingChat()
+
+    item = {
+        "custom_id": "p0000-l0001",
+        "body": {
+            "messages": [
+                {"role": "system", "content": "base prompt"},
+                {"role": "user", "content": "第一段"},
+            ]
+        },
+    }
+    warnings: list[str] = []
+
+    with pytest.raises(RuntimeError, match="PDF 原版面翻譯單段請求連續失敗 1 次"):
+        __import__("asyncio").run(
+            realtime_translate._translate_item(
+                _FailingClient(),
+                job_dir=tmp_path,
+                chunk_label="chunk_0001",
+                item=item,
+                model_name="fake-model",
+                request_delay=0,
+                max_retries=1,
+                warning_callback=warnings.append,
+            )
+        )
+    assert warnings == ["第 1 次 PDF 原版面翻譯單段請求失敗：Request timed out."]
+
+
+def test_realtime_translate_chunk_failure_does_not_fallback_to_singles(tmp_path, monkeypatch):
+    calls = {"chunk": 0, "item": 0}
+
+    async def fake_translate_chunk(*args, **kwargs):
+        calls["chunk"] += 1
+        warning_callback = kwargs.get("warning_callback")
+        if warning_callback is not None:
+            warning_callback("第 1 次 PDF 原版面翻譯批次區塊請求失敗：Request timed out.")
+        raise RuntimeError("PDF 原版面翻譯批次區塊請求連續失敗 1 次，已中斷任務：Request timed out.")
+
+    async def fake_translate_item(*args, **kwargs):
+        calls["item"] += 1
+        return "p0000-l0001", "translated"
+
+    monkeypatch.setattr(realtime_translate, "_translate_chunk", fake_translate_chunk)
+    monkeypatch.setattr(realtime_translate, "_translate_item", fake_translate_item)
+    items = [
+        {
+            "custom_id": "p0000-l0001",
+            "body": {"messages": [{"content": "base prompt"}, {"content": "第一段"}]},
+        },
+        {
+            "custom_id": "p0000-l0002",
+            "body": {"messages": [{"content": "base prompt"}, {"content": "第二段"}]},
+        },
+    ]
+    warnings: list[str] = []
+
+    with pytest.raises(RuntimeError, match="PDF 原版面翻譯批次區塊請求連續失敗"):
+        __import__("asyncio").run(
+            realtime_translate._translate_chunk_with_fallback(
+                object(),
+                job_dir=tmp_path,
+                chunk_label="chunk_0001",
+                items=items,
+                model_name="fake-model",
+                request_delay=0,
+                warning_callback=warnings.append,
+            )
+        )
+
+    assert calls == {"chunk": 1, "item": 0}
+    assert warnings == ["第 1 次 PDF 原版面翻譯批次區塊請求失敗：Request timed out."]
 
 
 def test_chunk_roundtrip_serializes_and_parses_delimited_items():

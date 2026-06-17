@@ -232,6 +232,16 @@
           // meta.textContent = `上傳時間: ${formatDate(job.updated_at)} · 狀態: ${job.status_label || "Unknown"}${durationText}${progressText}${qualityText}`;
           meta.textContent = `上傳時間: ${formatDate(job.updated_at)} · 狀態: ${job.status_label || "Unknown"}${durationText}${progressText}`;
 
+          const notice = document.createElement("div");
+          notice.className = "job-notice";
+          if (job.job_status === "failed" && job.error) {
+            notice.classList.add("job-notice--error");
+            notice.textContent = `錯誤原因：${job.error}`;
+          } else if (job.last_warning) {
+            notice.classList.add("job-notice--warning");
+            notice.textContent = `最近警告：${job.last_warning}`;
+          }
+
           const actions = document.createElement("div");
           actions.className = "job-actions";
 
@@ -304,6 +314,7 @@
 
           card.appendChild(header);
           card.appendChild(meta);
+          if (notice.textContent) card.appendChild(notice);
           card.appendChild(actions);
           wordJobsList.appendChild(card);
         });

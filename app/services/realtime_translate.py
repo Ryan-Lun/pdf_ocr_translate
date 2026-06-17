@@ -8,7 +8,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import batch, jobs, openai_config, rate_limiter, state
 
@@ -176,6 +176,11 @@ def _normalize_realtime_translation(text: str) -> str:
     normalized = batch.normalize_text(str(text or ""))
     normalized = batch.glossary.restore_protected_glossary_terms(normalized)
     return _normalize_numbered_item_breaks(normalized)
+
+
+def _realtime_attempt_error(kind: str, max_retries: int, detail: Exception) -> RuntimeError:
+    label = "單段" if kind == "item" else "批次區塊"
+    return RuntimeError(f"PDF 原版面翻譯{label}請求連續失敗 {max_retries} 次，已中斷任務：{detail}")
 
 
 def _extract_batch_item_payload(item: dict[str, Any]) -> tuple[str, str, str]:
@@ -429,7 +434,8 @@ async def _translate_item(
     item: dict[str, Any],
     model_name: str,
     request_delay: float,
-    max_retries: int = 4,
+    max_retries: int = 3,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> tuple[str, str]:
     custom_id, system_prompt, user_text = _extract_batch_item_payload(item)
     messages = [
@@ -484,8 +490,10 @@ async def _translate_item(
                 attempt=attempt + 1,
                 error=str(exc),
             )
+            if warning_callback is not None:
+                warning_callback(f"第 {attempt + 1} 次 PDF 原版面翻譯單段請求失敗：{exc}")
             if attempt == max_retries - 1:
-                raise RuntimeError(f"Realtime item translation failed for {custom_id}: {exc}") from exc
+                raise _realtime_attempt_error("item", max_retries, exc) from exc
             await asyncio.sleep((2**attempt) + random.uniform(0, 0.5))
     return custom_id, ""
 
@@ -498,7 +506,8 @@ async def _translate_chunk(
     items: list[dict[str, Any]],
     model_name: str,
     request_delay: float,
-    max_retries: int = 4,
+    max_retries: int = 3,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> dict[str, str]:
     if not items:
         return {}
@@ -560,6 +569,8 @@ async def _translate_chunk(
                 attempt=attempt + 1,
                 error=str(exc),
             )
+            if warning_callback is not None:
+                warning_callback(f"第 {attempt + 1} 次 PDF 原版面翻譯批次區塊請求失敗：{exc}")
             if attempt == max_retries - 1:
                 if last_content:
                     _record_merge_notice_candidates(
@@ -569,7 +580,7 @@ async def _translate_chunk(
                         output=last_content,
                         error=str(exc),
                     )
-                raise RuntimeError(f"Realtime chunk translation failed for {first_id}: {exc}") from exc
+                raise _realtime_attempt_error("chunk", max_retries, exc) from exc
             await asyncio.sleep((2**attempt) + random.uniform(0, 0.5))
     return {}
 
@@ -582,6 +593,7 @@ async def _translate_chunk_with_fallback(
     items: list[dict[str, Any]],
     model_name: str,
     request_delay: float,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> dict[str, str]:
     if not items:
         return {}
@@ -593,38 +605,18 @@ async def _translate_chunk_with_fallback(
             item=items[0],
             model_name=model_name,
             request_delay=request_delay,
+            warning_callback=warning_callback,
         )
         return {custom_id: text} if custom_id and text else {}
-    try:
-        return await _translate_chunk(
-            client,
-            job_dir=job_dir,
-            chunk_label=chunk_label,
-            items=items,
-            model_name=model_name,
-            request_delay=request_delay,
-        )
-    except Exception:
-        mid = max(1, len(items) // 2)
-        left = await _translate_chunk_with_fallback(
-            client,
-            job_dir=job_dir,
-            chunk_label=f"{chunk_label}__a",
-            items=items[:mid],
-            model_name=model_name,
-            request_delay=request_delay,
-        )
-        right = await _translate_chunk_with_fallback(
-            client,
-            job_dir=job_dir,
-            chunk_label=f"{chunk_label}__b",
-            items=items[mid:],
-            model_name=model_name,
-            request_delay=request_delay,
-        )
-        merged = dict(left)
-        merged.update(right)
-        return merged
+    return await _translate_chunk(
+        client,
+        job_dir=job_dir,
+        chunk_label=chunk_label,
+        items=items,
+        model_name=model_name,
+        request_delay=request_delay,
+        warning_callback=warning_callback,
+    )
 
 
 def run_realtime_translate_job(
@@ -649,7 +641,7 @@ def run_realtime_translate_job(
         job_dir,
         status="running",
         stage="translate",
-        extra_meta={"translate_started_at": time.time()},
+        extra_meta={"translate_started_at": time.time(), "last_warning": ""},
     )
     jobs.write_merge_notices(job_dir, [])
     jobs.write_batch_status(job_dir, "running", **status_meta, completed_chunks=0, total_chunks=0)
@@ -697,6 +689,17 @@ def run_realtime_translate_job(
             request_delay = 60.0 / max(1, state.PDF_REALTIME_RPM_LIMIT)
             translations = batch.build_translations_from_jsonl_text("", prefilled=plan["prefilled"])
 
+            def record_warning(message: str) -> None:
+                jobs.set_job_state(
+                    job_dir,
+                    status="running",
+                    stage="translate",
+                    extra_meta={
+                        "last_warning": message,
+                        "last_warning_at": time.time(),
+                    },
+                )
+
             async def _task(index: int, realtime_items: list[dict[str, Any]]) -> tuple[int, dict[str, str]]:
                 async with semaphore:
                     chunk_translations = await _translate_chunk_with_fallback(
@@ -706,6 +709,7 @@ def run_realtime_translate_job(
                         items=realtime_items,
                         model_name=plan["model_name"],
                         request_delay=request_delay,
+                        warning_callback=record_warning,
                     )
                     return index, chunk_translations
 
@@ -746,9 +750,8 @@ def run_realtime_translate_job(
         logger.exception("Realtime translate failed job_id=%s error=%s", job_id, exc)
         jobs.write_batch_status(job_dir, "failed", **status_meta, error=str(exc))
         now_ts = time.time()
-        jobs.set_job_state(
+        jobs.fail_job(
             job_dir,
-            status="failed",
             stage="translate",
             error_message=str(exc),
             completed_at=now_ts,

@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, func, inspect, select, text
@@ -117,6 +117,18 @@ class JobEventRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class EditorPresenceRecord(Base):
+    __tablename__ = "editor_presence"
+
+    job_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    work_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    remote_addr: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class AuditLogRecord(Base):
     __tablename__ = "audit_logs"
 
@@ -165,6 +177,7 @@ REQUIRED_TABLES = (
     "jobs",
     "job_artifacts",
     "job_events",
+    "editor_presence",
     "audit_logs",
     "system_error_logs",
     "document_templates",
@@ -173,6 +186,12 @@ REQUIRED_TABLES = (
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _ensure_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _int_env(name: str, default: int) -> int:
@@ -243,6 +262,7 @@ def _assert_required_tables() -> None:
             'jobs',
             'job_artifacts',
             'job_events',
+            'editor_presence',
             'audit_logs',
             'system_error_logs',
             'document_templates'
@@ -380,6 +400,75 @@ def list_artifacts(job_ids: list[str] | tuple[str, ...] | set[str]) -> dict[str,
         return artifacts
 
 
+def upsert_editor_presence(
+    *,
+    job_id: str,
+    work_id: str,
+    display_name: str | None = None,
+    remote_addr: str | None = None,
+    user_agent: str | None = None,
+) -> None:
+    cleaned_work_id = " ".join(str(work_id or "").split()).strip()
+    if not job_id or not cleaned_work_id:
+        return
+    now = utcnow()
+    with session_scope() as session:
+        record = session.get(EditorPresenceRecord, (job_id, cleaned_work_id))
+        if record is None:
+            session.add(
+                EditorPresenceRecord(
+                    job_id=job_id,
+                    work_id=cleaned_work_id,
+                    display_name=str(display_name or "").strip() or None,
+                    remote_addr=str(remote_addr or "").strip() or None,
+                    user_agent=str(user_agent or "").strip()[:500] or None,
+                    created_at=now,
+                    last_seen_at=now,
+                )
+            )
+            return
+        record.display_name = str(display_name or "").strip() or record.display_name
+        record.remote_addr = str(remote_addr or "").strip() or None
+        record.user_agent = str(user_agent or "").strip()[:500] or None
+        record.last_seen_at = now
+
+
+def list_active_editor_presence(
+    job_ids: list[str] | tuple[str, ...] | set[str],
+    *,
+    max_age_seconds: int = 60,
+) -> dict[str, list[dict[str, Any]]]:
+    normalized_ids = [str(job_id) for job_id in job_ids if job_id]
+    if not normalized_ids:
+        return {}
+    cutoff = utcnow() - timedelta(seconds=max(1, int(max_age_seconds)))
+    with session_scope() as session:
+        stale = session.scalars(
+            select(EditorPresenceRecord).where(EditorPresenceRecord.last_seen_at < cutoff)
+        ).all()
+        for record in stale:
+            session.delete(record)
+        stmt = (
+            select(EditorPresenceRecord)
+            .where(EditorPresenceRecord.job_id.in_(normalized_ids))
+            .where(EditorPresenceRecord.last_seen_at >= cutoff)
+            .order_by(EditorPresenceRecord.last_seen_at.desc())
+        )
+        result: dict[str, list[dict[str, Any]]] = {}
+        now_ts = utcnow()
+        for record in session.scalars(stmt).all():
+            last_seen_at = _ensure_aware_utc(record.last_seen_at)
+            result.setdefault(record.job_id, []).append(
+                {
+                    "work_id": record.work_id,
+                    "display_name": record.display_name or record.work_id,
+                    "last_seen_at": last_seen_at.timestamp(),
+                    "seconds_ago": max(0, int((now_ts - last_seen_at).total_seconds())),
+                }
+            )
+        return result
+
+
 def update_job(job_id: str, **updates: Any) -> None:
     with session_scope() as session:
         record = session.get(JobRecord, job_id)
@@ -405,6 +494,10 @@ def delete_job(job_id: str) -> bool:
             select(JobEventRecord).where(JobEventRecord.job_id == job_id)
         ).all():
             session.delete(event)
+        for presence in session.scalars(
+            select(EditorPresenceRecord).where(EditorPresenceRecord.job_id == job_id)
+        ).all():
+            session.delete(presence)
         session.delete(record)
         return True
 

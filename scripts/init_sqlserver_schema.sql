@@ -97,6 +97,22 @@ BEGIN
 END;
 GO
 
+IF OBJECT_ID(N'translation.editor_presence', N'U') IS NULL
+BEGIN
+    CREATE TABLE translation.editor_presence (
+        job_id char(32) NOT NULL,
+        work_id nvarchar(100) NOT NULL,
+        display_name nvarchar(200) NULL,
+        remote_addr nvarchar(100) NULL,
+        user_agent nvarchar(500) NULL,
+        created_at datetime2(6) NOT NULL CONSTRAINT DF_translation_editor_presence_created_at DEFAULT (SYSUTCDATETIME()),
+        last_seen_at datetime2(6) NOT NULL CONSTRAINT DF_translation_editor_presence_last_seen_at DEFAULT (SYSUTCDATETIME()),
+        CONSTRAINT PK_translation_editor_presence PRIMARY KEY CLUSTERED (job_id, work_id),
+        CONSTRAINT FK_translation_editor_presence_jobs FOREIGN KEY (job_id) REFERENCES translation.jobs(job_id)
+    );
+END;
+GO
+
 IF OBJECT_ID(N'translation.audit_logs', N'U') IS NULL
 BEGIN
     CREATE TABLE translation.audit_logs (
@@ -170,6 +186,10 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_job_events_job_id_created_at' AND object_id = OBJECT_ID(N'translation.job_events'))
     CREATE INDEX IX_translation_job_events_job_id_created_at ON translation.job_events (job_id, created_at DESC);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_editor_presence_last_seen_at' AND object_id = OBJECT_ID(N'translation.editor_presence'))
+    CREATE INDEX IX_translation_editor_presence_last_seen_at ON translation.editor_presence (last_seen_at DESC);
 GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_audit_logs_created_at' AND object_id = OBJECT_ID(N'translation.audit_logs'))

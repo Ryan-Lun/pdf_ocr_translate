@@ -31,7 +31,20 @@ def current_work_id(user: Any) -> str:
 
 
 def user_is_admin(user: Any) -> bool:
-    return bool(getattr(user, "is_admin", False))
+    if bool(getattr(user, "is_admin", False)):
+        return True
+    role_names = getattr(user, "role_names", ())
+    if isinstance(role_names, (list, tuple, set)) and "admin" in role_names:
+        return True
+    work_id = current_work_id(user)
+    if not work_id:
+        return False
+    try:
+        from . import auth_store
+
+        return "admin" in auth_store.get_effective_role_names(work_id)
+    except Exception:
+        return False
 
 
 def owner_access_enabled() -> bool:

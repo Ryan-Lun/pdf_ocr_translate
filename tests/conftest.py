@@ -44,7 +44,9 @@ def clean_document_templates(request, monkeypatch, tmp_path):
     request.getfixturevalue("app")
     monkeypatch.setattr(state, "DOCUMENT_TEMPLATES_PATH", tmp_path / "document_templates.json")
     with job_store.session_scope() as session:
+        session.execute(delete(job_store.EditorPresenceRecord))
         session.execute(delete(job_store.DocumentTemplateRecord))
     yield
     with job_store.session_scope() as session:
+        session.execute(delete(job_store.EditorPresenceRecord))
         session.execute(delete(job_store.DocumentTemplateRecord))

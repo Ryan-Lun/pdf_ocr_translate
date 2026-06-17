@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import fitz
 
-from app.services import doc_workspace, document_templates, job_store, jobs, pipeline, state, translation_memory
+from app.services import auth_store, authz_service, doc_workspace, document_templates, job_store, jobs, pipeline, state, translation_memory
 
 
 def test_index_ok(client):
@@ -151,13 +151,21 @@ def test_api_jobs_excludes_template_source_jobs(client, tmp_path, monkeypatch):
     )
     class Record:
         def __init__(self, current_job_type):
+            now = job_store.utcnow()
             self.job_id = job_id
             self.job_type = current_job_type
             self.status = "queued"
             self.stage = "queued"
             self.progress = 0.0
+            self.job_name = "template-source"
+            self.owner_work_id = None
             self.target_lang = None
             self.document_mode = "scanned"
+            self.payload_json = json.dumps({"creator_name": "tester"})
+            self.started_at = now
+            self.completed_at = None
+            self.created_at = now
+            self.updated_at = now
 
     monkeypatch.setattr(
         jobs.job_store,
@@ -732,6 +740,253 @@ def test_api_jobs_returns_json(client):
     payload = resp.get_json()
     assert isinstance(payload, dict)
     assert "jobs" in payload
+
+
+def test_editor_presence_heartbeat_records_active_editor(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    job_id = "5" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_name": "editable",
+            "job_type": "ocr_overlay",
+            "document_mode": "form",
+        },
+    )
+    job_store.delete_job(job_id)
+    job_store.create_job(
+        job_id=job_id,
+        job_type="ocr_overlay",
+        stage="completed",
+        status="completed",
+        job_name="editable",
+        payload={"creator_name": "alice"},
+    )
+
+    resp = client.post(f"/api/job/{job_id}/editor-presence")
+
+    assert resp.status_code == 200
+    payload = client.get("/api/jobs").get_json()
+    assert payload["can_view_active_editors"] is True
+    job = next(item for item in payload["jobs"] if item["job_id"] == job_id)
+    assert job["active_editors"][0]["work_id"] == "anonymous"
+    assert job["active_editors"][0]["display_name"] == "anonymous"
+
+
+def test_api_jobs_includes_active_editor_names(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    job_id = "6" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_name": "active-editor",
+            "job_type": "ocr_overlay",
+            "document_mode": "form",
+        },
+    )
+    job_store.delete_job(job_id)
+    job_store.create_job(
+        job_id=job_id,
+        job_type="ocr_overlay",
+        stage="completed",
+        status="completed",
+        job_name="active-editor",
+        payload={"creator_name": "alice"},
+    )
+    job_store.upsert_editor_presence(
+        job_id=job_id,
+        work_id="NE025",
+        display_name="Ryan Huang",
+    )
+
+    payload = client.get("/api/jobs").get_json()
+    job = next(item for item in payload["jobs"] if item["job_id"] == job_id)
+
+    assert len(job["active_editors"]) == 1
+    assert job["active_editors"][0]["work_id"] == "NE025"
+    assert job["active_editors"][0]["display_name"] == "Ryan Huang"
+    assert job["active_editors"][0]["seconds_ago"] >= 0
+
+    presence_payload = client.get("/api/editor-presence").get_json()
+    assert presence_payload["can_view_active_editors"] is True
+    assert presence_payload["presence"][job_id][0]["work_id"] == "NE025"
+
+
+def test_build_jobs_list_hides_active_editors_for_owner_scoped_view(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    job_id = "7" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_name": "owner-view",
+            "job_type": "ocr_overlay",
+            "document_mode": "form",
+            "owner_work_id": "USER01",
+        },
+    )
+    job_store.delete_job(job_id)
+    job_store.create_job(
+        job_id=job_id,
+        job_type="ocr_overlay",
+        stage="completed",
+        status="completed",
+        job_name="owner-view",
+        owner_work_id="USER01",
+        payload={"creator_name": "user"},
+    )
+    job_store.upsert_editor_presence(
+        job_id=job_id,
+        work_id="ADMIN01",
+        display_name="Admin User",
+    )
+
+    with app.test_request_context():
+        owner_jobs = jobs.build_jobs_list(
+            job_type="ocr_overlay",
+            owner_work_id="USER01",
+            include_all=False,
+        )
+        admin_jobs = jobs.build_jobs_list(
+            job_type="ocr_overlay",
+            include_all=True,
+        )
+
+    owner_job = next(item for item in owner_jobs if item["job_id"] == job_id)
+    admin_job = next(item for item in admin_jobs if item["job_id"] == job_id)
+    assert owner_job["active_editors"] == []
+    assert admin_job["active_editors"][0]["work_id"] == "ADMIN01"
+
+
+def test_build_jobs_list_includes_status_file_errors(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+
+    overlay_id = "8" * 32
+    overlay_dir = tmp_path / "jobs" / overlay_id
+    overlay_dir.mkdir(parents=True)
+    jobs.write_job_meta(
+        overlay_dir,
+        {
+            "job_name": "overlay-failed",
+            "job_type": "ocr_overlay",
+            "document_mode": "form",
+        },
+    )
+    jobs.write_batch_status(
+        overlay_dir,
+        "failed",
+        error="PDF 原版面翻譯單段請求連續失敗 3 次，已中斷任務：Request timed out.",
+    )
+    job_store.delete_job(overlay_id)
+    job_store.create_job(
+        job_id=overlay_id,
+        job_type="ocr_overlay",
+        stage="translate",
+        status="running",
+        job_name="overlay-failed",
+        payload={
+            "last_warning": "第 2 次 PDF 原版面翻譯單段請求失敗：Request timed out.",
+            "last_warning_at": 123.0,
+        },
+    )
+
+    doc_id = "9" * 32
+    doc_dir = tmp_path / "jobs" / doc_id
+    doc_dir.mkdir(parents=True)
+    jobs.write_job_meta(
+        doc_dir,
+        {
+            "job_name": "doc-failed",
+            "job_type": "doc_workspace",
+        },
+    )
+    doc_workspace.write_doc_status(
+        doc_dir,
+        "failed",
+        error="PDF 翻譯重建請求連續失敗 3 次，已中斷任務：Request timed out.",
+    )
+    job_store.delete_job(doc_id)
+    job_store.create_job(
+        job_id=doc_id,
+        job_type="doc_workspace",
+        stage="failed",
+        status="running",
+        job_name="doc-failed",
+        payload={
+            "last_warning": "第 2 次 PDF 翻譯重建請求失敗：Request timed out.",
+            "last_warning_at": 456.0,
+        },
+    )
+
+    with app.test_request_context():
+        overlay_jobs = jobs.build_jobs_list(job_type="ocr_overlay", include_all=True)
+        doc_jobs = jobs.build_jobs_list(job_type="doc_workspace", include_all=True)
+
+    overlay_job = next(item for item in overlay_jobs if item["job_id"] == overlay_id)
+    doc_job = next(item for item in doc_jobs if item["job_id"] == doc_id)
+    assert overlay_job["error"].startswith("PDF 原版面翻譯單段請求連續失敗 3 次")
+    assert doc_job["error"].startswith("PDF 翻譯重建請求連續失敗 3 次")
+    assert overlay_job["last_warning"].startswith("第 2 次 PDF 原版面翻譯單段請求失敗")
+    assert overlay_job["last_warning_at"] == 123.0
+    assert doc_job["last_warning"].startswith("第 2 次 PDF 翻譯重建請求失敗")
+    assert doc_job["last_warning_at"] == 456.0
+
+
+def test_fail_job_writes_single_status_source(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    job_id = "a" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_name": "failed-job",
+            "job_type": "word_translate",
+        },
+    )
+    job_store.delete_job(job_id)
+    job_store.create_job(
+        job_id=job_id,
+        job_type="word_translate",
+        stage="translate",
+        status="running",
+        job_name="failed-job",
+    )
+
+    completed_at = jobs.fail_job(
+        job_dir,
+        stage="translate",
+        error_message="Word 翻譯請求連續失敗 3 次，已中斷任務：Request timed out.",
+        extra_meta={"translate_completed_at": 123.0},
+    )
+
+    record = job_store.get_job(job_id)
+    meta = jobs.load_job_meta(job_dir)
+    assert record is not None
+    assert record.status == "failed"
+    assert record.stage == "translate"
+    assert record.error_message.startswith("Word 翻譯請求連續失敗 3 次")
+    assert meta["error"].startswith("Word 翻譯請求連續失敗 3 次")
+    assert meta["processing_completed_at"] == completed_at
+    assert meta["failed_at"] == completed_at
+    assert meta["translate_completed_at"] == 123.0
+
+
+def test_user_is_admin_falls_back_to_local_role(app):
+    auth_store.upsert_user_role_for_work_id(
+        work_id="ADMIN02",
+        role_name=auth_store.ROLE_ADMIN,
+        display_name="Admin Two",
+    )
+    user = SimpleNamespace(work_id="ADMIN02", role_names=(auth_store.ROLE_EDITOR,), is_admin=False)
+
+    with app.app_context():
+        assert authz_service.user_is_admin(user) is True
 
 
 def test_api_job_data_includes_unprocessed_pdf_pages(client, tmp_path, monkeypatch):

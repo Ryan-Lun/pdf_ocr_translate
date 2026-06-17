@@ -896,9 +896,33 @@ function refreshAllConsistencyPanels() {
 let glossaryEntries = [];
 let currentJobId = null;
 let batchPageModalResolver = null;
+let editorPresenceTimer = null;
+const EDITOR_PRESENCE_INTERVAL_MS = 20000;
 
 function normalizeGlossaryText(value) {
   return String(value || "").trim();
+}
+
+async function sendEditorPresence() {
+  const jobId = document.body.dataset.jobId;
+  if (!jobId || document.visibilityState === "hidden") return;
+  try {
+    await fetch(`/api/job/${jobId}/editor-presence`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      keepalive: true,
+    });
+  } catch (error) {}
+}
+
+function startEditorPresenceHeartbeat() {
+  if (editorPresenceTimer) return;
+  sendEditorPresence();
+  editorPresenceTimer = window.setInterval(sendEditorPresence, EDITOR_PRESENCE_INTERVAL_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") sendEditorPresence();
+  });
 }
 
 function setGlossaryActionButtonState(button, label, disabled = false) {
@@ -4890,6 +4914,7 @@ async function init() {
   const jobId = document.body.dataset.jobId;
   if (!jobId) return;
   currentJobId = jobId;
+  startEditorPresenceHeartbeat();
   bindControls();
   setSelectionMode("boxes");
   const data = await loadJobData(jobId);

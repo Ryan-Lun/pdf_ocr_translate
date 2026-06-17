@@ -31,9 +31,34 @@ def _current_owner_work_id() -> str:
     return ""
 
 
+def _current_editor_identity() -> tuple[str, str]:
+    work_id = _current_owner_work_id()
+    if not work_id and getattr(current_user, "is_authenticated", False):
+        try:
+            work_id = " ".join(str(current_user.get_id() or "").split()).strip()
+        except Exception:
+            work_id = ""
+    if not work_id:
+        work_id = "anonymous"
+
+    display_name = ""
+    if getattr(current_user, "is_authenticated", False):
+        display_name = " ".join(str(getattr(current_user, "display_name", "") or "").split()).strip()
+    return work_id, display_name or work_id
+
+
 def _current_access_scope() -> tuple[str, bool]:
     return _current_owner_work_id(), (
-        authz_service.user_is_admin(current_user)
+        not current_app.config.get("AUTH_ENABLED", False)
+        or authz_service.user_is_admin(current_user)
+        or not authz_service.owner_access_enabled()
+    )
+
+
+def _can_view_active_editors() -> bool:
+    return (
+        not current_app.config.get("AUTH_ENABLED", False)
+        or authz_service.user_is_admin(current_user)
         or not authz_service.owner_access_enabled()
     )
 
@@ -809,23 +834,32 @@ def apply_document_template(template_id: str):
 @api_bp.route("/jobs", methods=["GET"], endpoint="list_jobs")
 def list_jobs():
     owner_work_id, include_all = _current_access_scope()
+    can_view_active_editors = _can_view_active_editors()
     jobs_list = jobs.build_jobs_list(
         job_type="ocr_overlay",
         owner_work_id=owner_work_id,
         include_all=include_all,
+        include_active_editors=can_view_active_editors,
     )
-    return jsonify({"jobs": jobs_list})
+    return jsonify(
+        {
+            "jobs": jobs_list,
+            "can_view_active_editors": can_view_active_editors,
+        }
+    )
 
 
 @api_bp.route("/template-jobs", methods=["GET"], endpoint="list_template_jobs")
 def list_template_jobs():
     owner_work_id, include_all = _current_access_scope()
+    can_view_active_editors = _can_view_active_editors()
     jobs_list = jobs.build_jobs_list(
         job_type="template_source",
         owner_work_id=owner_work_id,
         include_all=include_all,
+        include_active_editors=can_view_active_editors,
     )
-    return jsonify({"jobs": jobs_list})
+    return jsonify({"jobs": jobs_list, "can_view_active_editors": can_view_active_editors})
 
 
 @api_bp.route("/document-templates/source-jobs", methods=["GET"], endpoint="document_template_source_jobs")
@@ -836,23 +870,67 @@ def document_template_source_jobs():
 @api_bp.route("/doc-jobs", methods=["GET"], endpoint="list_doc_jobs")
 def list_doc_jobs():
     owner_work_id, include_all = _current_access_scope()
+    can_view_active_editors = _can_view_active_editors()
     jobs_list = jobs.build_jobs_list(
         job_type="doc_workspace",
         owner_work_id=owner_work_id,
         include_all=include_all,
+        include_active_editors=can_view_active_editors,
     )
-    return jsonify({"jobs": jobs_list})
+    return jsonify({"jobs": jobs_list, "can_view_active_editors": can_view_active_editors})
 
 
 @api_bp.route("/word-jobs", methods=["GET"], endpoint="list_word_jobs")
 def list_word_jobs():
     owner_work_id, include_all = _current_access_scope()
+    can_view_active_editors = _can_view_active_editors()
     jobs_list = jobs.build_jobs_list(
         job_type="word_translate",
         owner_work_id=owner_work_id,
         include_all=include_all,
+        include_active_editors=can_view_active_editors,
     )
-    return jsonify({"jobs": jobs_list})
+    return jsonify({"jobs": jobs_list, "can_view_active_editors": can_view_active_editors})
+
+
+@api_bp.route("/editor-presence", methods=["GET"], endpoint="editor_presence_index")
+def editor_presence_index():
+    if not _can_view_active_editors():
+        return _forbidden_json()
+    owner_work_id, include_all = _current_access_scope()
+    job_ids = jobs.list_accessible_job_ids(
+        job_type="ocr_overlay",
+        owner_work_id=owner_work_id,
+        include_all=include_all,
+    )
+    presence = jobs.job_store.list_active_editor_presence(job_ids)
+    return jsonify(
+        {
+            "ok": True,
+            "can_view_active_editors": True,
+            "presence": presence,
+        }
+    )
+
+
+@api_bp.route("/job/<job_id>/editor-presence", methods=["POST"], endpoint="editor_presence")
+def editor_presence(job_id: str):
+    if not jobs.safe_job_id(job_id):
+        abort(404)
+    if _job_access_denied(job_id):
+        return _forbidden_json()
+    job_dir = jobs.job_dir(job_id)
+    if not job_dir.exists():
+        abort(404)
+    work_id, display_name = _current_editor_identity()
+    jobs.job_store.upsert_editor_presence(
+        job_id=job_id,
+        work_id=work_id,
+        display_name=display_name,
+        remote_addr=request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip(),
+        user_agent=request.headers.get("User-Agent", ""),
+    )
+    return jsonify({"ok": True})
 
 
 @api_bp.route("/job/<job_id>/cancel-word", methods=["POST"], endpoint="cancel_word_job")
@@ -1041,15 +1119,18 @@ def download_word_jobs_docx():
 
 def _jobs_stream_response(job_type: str):
     owner_work_id, include_all = _current_access_scope()
+    can_view_active_editors = _can_view_active_editors()
     @stream_with_context
     def generate():
         last_payload = None
         while True:
             payload = {
+                "can_view_active_editors": can_view_active_editors,
                 "jobs": jobs.build_jobs_list(
                     job_type=job_type,
                     owner_work_id=owner_work_id,
                     include_all=include_all,
+                    include_active_editors=can_view_active_editors,
                 )
             }
             data = json.dumps(payload, ensure_ascii=False)
