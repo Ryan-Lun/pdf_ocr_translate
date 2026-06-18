@@ -46,3 +46,38 @@ def test_openai_timeout_invalid_env_uses_default(monkeypatch):
     monkeypatch.setenv("AZURE_OPENAI_TIMEOUT_SECONDS", "not-a-number")
 
     assert openai_config.get_openai_timeout_seconds() == openai_config.DEFAULT_OPENAI_TIMEOUT_SECONDS
+
+
+def test_format_request_error_includes_read_timeout_for_timeout(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_TIMEOUT_SECONDS", "12.5")
+
+    assert openai_config.format_request_error(TimeoutError("Request timed out.")) == (
+        "Request timed out. (read timeout=12.5s)"
+    )
+
+
+def test_format_request_error_allows_subsecond_timeout(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_TIMEOUT_SECONDS", "0.1")
+
+    assert openai_config.get_openai_timeout_seconds() == 0.1
+    assert openai_config.format_request_error(TimeoutError("Request timed out.")) == (
+        "Request timed out. (read timeout=0.1s)"
+    )
+
+
+def test_format_request_error_hides_connection_pool_endpoint(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_TIMEOUT_SECONDS", "0.1")
+
+    message = openai_config.format_request_error(
+        TimeoutError("HTTPSConnectionPool(host='192.168.12.66', port=8080): Read timed out.")
+    )
+
+    assert message == "Request timed out. (read timeout=0.1s)"
+    assert "192.168.12.66" not in message
+    assert "port=8080" not in message
+
+
+def test_format_request_error_leaves_non_timeout_error_unchanged(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_TIMEOUT_SECONDS", "12.5")
+
+    assert openai_config.format_request_error(RuntimeError("Bad request.")) == "Bad request."

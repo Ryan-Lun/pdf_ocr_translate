@@ -180,7 +180,8 @@ def _normalize_realtime_translation(text: str) -> str:
 
 def _realtime_attempt_error(kind: str, max_retries: int, detail: Exception) -> RuntimeError:
     label = "單段" if kind == "item" else "批次區塊"
-    return RuntimeError(f"PDF 原版面翻譯{label}請求連續失敗 {max_retries} 次，已中斷任務：{detail}")
+    error_detail = openai_config.format_request_error(detail)
+    return RuntimeError(f"PDF 原版面翻譯{label}請求連續失敗 {max_retries} 次，已中斷任務：{error_detail} 請向系統管理員回報此問題。")
 
 
 def _extract_batch_item_payload(item: dict[str, Any]) -> tuple[str, str, str]:
@@ -437,6 +438,7 @@ async def _translate_item(
     max_retries: int = 3,
     warning_callback: Callable[[str], None] | None = None,
 ) -> tuple[str, str]:
+    retry_count = max(1, int(max_retries))
     custom_id, system_prompt, user_text = _extract_batch_item_payload(item)
     messages = [
         {"role": "system", "content": system_prompt},
@@ -451,7 +453,7 @@ async def _translate_item(
         expected_ids=[custom_id],
     )
     estimated_tokens = rate_limiter.estimate_messages_tokens(messages) + state.REALTIME_COMPLETION_TOKEN_BUDGET
-    for attempt in range(max_retries):
+    for attempt in range(retry_count):
         try:
             await rate_limiter.REALTIME_RATE_LIMITER.acquire_async(model_name, estimated_tokens)
             await asyncio.to_thread(_GLOBAL_SEMAPHORE.acquire)
@@ -484,18 +486,18 @@ async def _translate_item(
                 return custom_id, content
             raise RuntimeError("Empty realtime translation response.")
         except Exception as exc:
+            error_detail = openai_config.format_request_error(exc)
             _record_chunk_error(
                 job_dir=job_dir,
                 chunk_label=chunk_label,
                 attempt=attempt + 1,
-                error=str(exc),
+                error=error_detail,
             )
             if warning_callback is not None:
-                warning_callback(f"第 {attempt + 1} 次 PDF 原版面翻譯單段請求失敗：{exc}")
-            if attempt == max_retries - 1:
-                raise _realtime_attempt_error("item", max_retries, exc) from exc
+                warning_callback(f"第 {attempt + 1} 次 PDF 原版面翻譯單段請求失敗：{error_detail}")
+            if attempt == retry_count - 1:
+                raise _realtime_attempt_error("item", retry_count, exc) from exc
             await asyncio.sleep((2**attempt) + random.uniform(0, 0.5))
-    return custom_id, ""
 
 
 async def _translate_chunk(
@@ -509,6 +511,7 @@ async def _translate_chunk(
     max_retries: int = 3,
     warning_callback: Callable[[str], None] | None = None,
 ) -> dict[str, str]:
+    retry_count = max(1, int(max_retries))
     if not items:
         return {}
     first_id, system_prompt, _ = _extract_batch_item_payload(items[0])
@@ -526,7 +529,7 @@ async def _translate_chunk(
     estimated_tokens = rate_limiter.estimate_text_tokens(prompt) + rate_limiter.estimate_text_tokens(payload) + state.REALTIME_COMPLETION_TOKEN_BUDGET
 
     last_content = ""
-    for attempt in range(max_retries):
+    for attempt in range(retry_count):
         try:
             await rate_limiter.REALTIME_RATE_LIMITER.acquire_async(model_name, estimated_tokens)
             await asyncio.to_thread(_GLOBAL_SEMAPHORE.acquire)
@@ -563,26 +566,26 @@ async def _translate_chunk(
                 return translations
             raise RuntimeError("Empty realtime chunk translation response.")
         except Exception as exc:
+            error_detail = openai_config.format_request_error(exc)
             _record_chunk_error(
                 job_dir=job_dir,
                 chunk_label=chunk_label,
                 attempt=attempt + 1,
-                error=str(exc),
+                error=error_detail,
             )
             if warning_callback is not None:
-                warning_callback(f"第 {attempt + 1} 次 PDF 原版面翻譯批次區塊請求失敗：{exc}")
-            if attempt == max_retries - 1:
+                warning_callback(f"第 {attempt + 1} 次 PDF 原版面翻譯批次區塊請求失敗：{error_detail}")
+            if attempt == retry_count - 1:
                 if last_content:
                     _record_merge_notice_candidates(
                         job_dir=job_dir,
                         chunk_label=chunk_label,
                         items=items,
                         output=last_content,
-                        error=str(exc),
+                        error=error_detail,
                     )
-                raise _realtime_attempt_error("chunk", max_retries, exc) from exc
+                raise _realtime_attempt_error("chunk", retry_count, exc) from exc
             await asyncio.sleep((2**attempt) + random.uniform(0, 0.5))
-    return {}
 
 
 async def _translate_chunk_with_fallback(
@@ -690,14 +693,10 @@ def run_realtime_translate_job(
             translations = batch.build_translations_from_jsonl_text("", prefilled=plan["prefilled"])
 
             def record_warning(message: str) -> None:
-                jobs.set_job_state(
+                jobs.record_job_warning(
                     job_dir,
-                    status="running",
                     stage="translate",
-                    extra_meta={
-                        "last_warning": message,
-                        "last_warning_at": time.time(),
-                    },
+                    message=message,
                 )
 
             async def _task(index: int, realtime_items: list[dict[str, Any]]) -> tuple[int, dict[str, str]]:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 
 from openai import AsyncOpenAI, OpenAI
 
 
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 120.0
+_CONNECTION_POOL_RE = re.compile(r"\bHTTPS?ConnectionPool\([^)]*\):\s*", re.IGNORECASE)
 
 
 def _float_env(name: str, default: float) -> float:
@@ -95,6 +97,17 @@ def get_openai_timeout_seconds() -> float:
             _float_env("OPENAI_TIMEOUT_SECONDS", DEFAULT_OPENAI_TIMEOUT_SECONDS),
         ),
     )
+
+
+def format_request_error(exc: Exception) -> str:
+    message = _CONNECTION_POOL_RE.sub("", str(exc).strip() or exc.__class__.__name__).strip()
+    exc_name = exc.__class__.__name__.lower()
+    lowered = message.lower()
+    if "timeout" not in exc_name and "timed out" not in lowered and "timeout" not in lowered:
+        return message
+
+    timeout_seconds = get_openai_timeout_seconds()
+    return f"Request timed out. (read timeout={timeout_seconds:g}s)"
 
 
 @lru_cache(maxsize=1)

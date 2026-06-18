@@ -953,6 +953,20 @@ body.has-global-nav:not(.home-hub) .shell {
   border-color: rgba(185, 28, 28, 0.2);
 }
 
+.job-warning-title {
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.job-warning-list {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.job-warning-item {
+  overflow-wrap: anywhere;
+}
+
 .template-card .job-meta {
   padding-left: 0;
 }

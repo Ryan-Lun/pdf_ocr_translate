@@ -17,7 +17,7 @@ def audit_app(monkeypatch):
     monkeypatch.setattr(TestingConfig, "AUTH_ENABLED", True)
     monkeypatch.setattr(TestingConfig, "AUTH_STUB_ENABLED", True)
     monkeypatch.setattr(TestingConfig, "SECRET_KEY", "test-secret")
-    monkeypatch.setattr(TestingConfig, "BOOTSTRAP_ADMIN", "admin1")
+    monkeypatch.setattr(TestingConfig, "INITIAL_ADMIN_WORK_IDS", "admin1")
     app = create_app("testing")
     return app
 

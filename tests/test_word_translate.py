@@ -457,6 +457,7 @@ def test_word_translation_timeout_reports_warning(monkeypatch):
         "app.services.word_translate.openai_config.create_async_client",
         lambda: _TimeoutClient(),
     )
+    monkeypatch.setenv("AZURE_OPENAI_TIMEOUT_SECONDS", "1.5")
 
     translator = EnhancedWordTranslator()
     translator.max_retries = 1
@@ -473,7 +474,7 @@ def test_word_translation_timeout_reports_warning(monkeypatch):
             )
         )
 
-    assert warnings == ["第 1 次 Word 翻譯請求失敗：Request timed out."]
+    assert warnings == ["第 1 次 Word 翻譯請求失敗：Request timed out. (read timeout=1.5s)"]
 
 
 def test_word_translation_preserves_header_field_code_paragraph(tmp_path, monkeypatch):

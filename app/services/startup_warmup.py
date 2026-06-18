@@ -95,7 +95,7 @@ def _warm_triton_service() -> None:
     }
     try:
         response = requests.post(
-            state.TRITON_URL,
+            state.TABLE_RECOGNTION_V2_URL,
             json=payload,
             timeout=state.STARTUP_WARMUP_TIMEOUT_SECONDS,
         )

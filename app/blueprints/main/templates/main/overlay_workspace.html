@@ -302,6 +302,29 @@
         return ["failed", "cancelled"].includes(job.job_status);
       }
 
+      function renderWarningNotice(notice, job) {
+        const warningMessages = Array.isArray(job.recent_warnings)
+          ? job.recent_warnings.map((warning) => warning.message).filter(Boolean).slice(-3)
+          : [];
+        if (!warningMessages.length && job.last_warning) warningMessages.push(job.last_warning);
+        if (!warningMessages.length) return false;
+        notice.classList.add("job-notice--warning");
+        const title = document.createElement("div");
+        title.className = "job-warning-title";
+        title.textContent = "最近警告：";
+        const list = document.createElement("div");
+        list.className = "job-warning-list";
+        warningMessages.forEach((message) => {
+          const item = document.createElement("div");
+          item.className = "job-warning-item";
+          item.textContent = message;
+          list.appendChild(item);
+        });
+        notice.appendChild(title);
+        notice.appendChild(list);
+        return true;
+      }
+
       async function cancelJob(jobId) {
         const res = await fetch(`/api/job/${jobId}/cancel`, { method: "POST" });
         if (!res.ok) throw new Error("cancel failed");
@@ -403,9 +426,8 @@
           if ((job.job_status === "failed" || job.status_code === "failed") && job.error) {
             notice.classList.add("job-notice--error");
             notice.textContent = `錯誤原因：${job.error}`;
-          } else if (job.last_warning) {
-            notice.classList.add("job-notice--warning");
-            notice.textContent = `最近警告：${job.last_warning}`;
+          } else if (isActiveJob(job) || ["failed", "cancelled"].includes(job.job_status)) {
+            renderWarningNotice(notice, job);
           }
 
           const actions = document.createElement("div");

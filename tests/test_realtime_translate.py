@@ -28,7 +28,9 @@ def test_realtime_translate_defaults_to_three_retries():
     assert inspect.signature(realtime_translate._translate_chunk).parameters["max_retries"].default == 3
 
 
-def test_realtime_translate_item_failure_uses_chinese_error(tmp_path):
+def test_realtime_translate_item_failure_uses_chinese_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_TIMEOUT_SECONDS", "3.5")
+
     class _FailingRawResponse:
         async def create(self, **kwargs):
             raise TimeoutError("Request timed out.")
@@ -66,7 +68,7 @@ def test_realtime_translate_item_failure_uses_chinese_error(tmp_path):
                 warning_callback=warnings.append,
             )
         )
-    assert warnings == ["第 1 次 PDF 原版面翻譯單段請求失敗：Request timed out."]
+    assert warnings == ["第 1 次 PDF 原版面翻譯單段請求失敗：Request timed out. (read timeout=3.5s)"]
 
 
 def test_realtime_translate_chunk_failure_does_not_fallback_to_singles(tmp_path, monkeypatch):
@@ -112,6 +114,75 @@ def test_realtime_translate_chunk_failure_does_not_fallback_to_singles(tmp_path,
 
     assert calls == {"chunk": 1, "item": 0}
     assert warnings == ["第 1 次 PDF 原版面翻譯批次區塊請求失敗：Request timed out."]
+
+
+def test_realtime_translate_chunk_counts_three_retry_attempts(tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_TIMEOUT_SECONDS", "4.5")
+    calls = {"create": 0}
+
+    async def fake_acquire_async(model_name, estimated_tokens):
+        return None
+
+    async def fake_sleep(seconds):
+        return None
+
+    class _FailingRawResponse:
+        async def create(self, **kwargs):
+            calls["create"] += 1
+            raise TimeoutError("Request timed out.")
+
+    class _FailingCompletions:
+        with_raw_response = _FailingRawResponse()
+
+    class _FailingChat:
+        completions = _FailingCompletions()
+
+    class _FailingClient:
+        chat = _FailingChat()
+
+    monkeypatch.setattr(
+        realtime_translate.rate_limiter.REALTIME_RATE_LIMITER,
+        "acquire_async",
+        fake_acquire_async,
+    )
+    monkeypatch.setattr(
+        realtime_translate.rate_limiter.REALTIME_RATE_LIMITER,
+        "update_from_headers",
+        lambda model_name, headers: None,
+    )
+    monkeypatch.setattr(realtime_translate.asyncio, "sleep", fake_sleep)
+
+    items = [
+        {
+            "custom_id": "p0000-l0001",
+            "body": {"messages": [{"content": "base prompt"}, {"content": "第一段"}]},
+        },
+        {
+            "custom_id": "p0000-l0002",
+            "body": {"messages": [{"content": "base prompt"}, {"content": "第二段"}]},
+        },
+    ]
+    warnings: list[str] = []
+
+    with pytest.raises(RuntimeError, match="PDF 原版面翻譯批次區塊請求連續失敗 3 次"):
+        __import__("asyncio").run(
+            realtime_translate._translate_chunk(
+                _FailingClient(),
+                job_dir=tmp_path,
+                chunk_label="chunk_0001",
+                items=items,
+                model_name="fake-model",
+                request_delay=0,
+                warning_callback=warnings.append,
+            )
+        )
+
+    assert calls["create"] == 3
+    assert warnings == [
+        "第 1 次 PDF 原版面翻譯批次區塊請求失敗：Request timed out. (read timeout=4.5s)",
+        "第 2 次 PDF 原版面翻譯批次區塊請求失敗：Request timed out. (read timeout=4.5s)",
+        "第 3 次 PDF 原版面翻譯批次區塊請求失敗：Request timed out. (read timeout=4.5s)",
+    ]
 
 
 def test_chunk_roundtrip_serializes_and_parses_delimited_items():

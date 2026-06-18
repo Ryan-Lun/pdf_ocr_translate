@@ -60,9 +60,26 @@ def run_doc_workspace_job(
     output_dir = job_dir / "output"
     try:
         _raise_if_cancel_requested(job_id)
-        jobs.set_job_state(job_dir, status="running", stage="extract")
+        jobs.set_job_state(
+            job_dir,
+            status="running",
+            stage="extract",
+            extra_meta={"last_warning": ""},
+        )
         write_doc_status(job_dir, "structure_running", target_lang=target_lang)
-        markdown_path, _ = pp_structure.extract_pdf_to_markdown(pdf_path, structure_dir)
+
+        def record_warning(message: str) -> None:
+            jobs.record_job_warning(
+                job_dir,
+                stage="translate" if "翻譯" in message else "extract",
+                message=message,
+            )
+
+        markdown_path, _ = pp_structure.extract_pdf_to_markdown(
+            pdf_path,
+            structure_dir,
+            warning_callback=record_warning,
+        )
         jobs.job_store.register_artifact(job_id, "structure_md", "structure/doc.md")
 
         _raise_if_cancel_requested(job_id)
@@ -87,17 +104,6 @@ def run_doc_workspace_job(
         translated_images_dir = translated_dir / "images"
         if source_images_dir.exists():
             shutil.copytree(source_images_dir, translated_images_dir, dirs_exist_ok=True)
-
-        def record_warning(message: str) -> None:
-            jobs.set_job_state(
-                job_dir,
-                status="running",
-                stage="translate",
-                extra_meta={
-                    "last_warning": message,
-                    "last_warning_at": time.time(),
-                },
-            )
 
         markdown_translate.translate_html_file(
             structure_html_path,

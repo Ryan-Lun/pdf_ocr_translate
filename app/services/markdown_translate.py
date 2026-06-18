@@ -182,7 +182,6 @@ def _doc_translate_request(
     empty_error: str,
     warning_callback: Callable[[str], None] | None = None,
 ) -> str:
-    last_error: Exception | None = None
     for attempt in range(DOC_TRANSLATE_MAX_RETRIES):
         try:
             response = client.chat.completions.create(
@@ -201,24 +200,21 @@ def _doc_translate_request(
                 return translated
             raise RuntimeError(empty_error)
         except Exception as exc:
-            last_error = exc
+            error_detail = openai_config.format_request_error(exc)
             if debug_job_dir is not None and debug_custom_id:
                 translation_debug.record_error(
                     job_dir=debug_job_dir,
                     chunk_label=debug_custom_id,
                     attempt=attempt + 1,
-                    error=str(exc),
+                    error=error_detail,
                 )
             if warning_callback is not None:
-                warning_callback(f"第 {attempt + 1} 次 PDF 翻譯重建請求失敗：{exc}")
+                warning_callback(f"第 {attempt + 1} 次 PDF 翻譯重建請求失敗：{error_detail}")
             if attempt == DOC_TRANSLATE_MAX_RETRIES - 1:
                 raise RuntimeError(
-                    f"PDF 翻譯重建請求連續失敗 {DOC_TRANSLATE_MAX_RETRIES} 次，已中斷任務：{exc}"
+                    f"PDF 翻譯重建請求連續失敗 {DOC_TRANSLATE_MAX_RETRIES} 次，已中斷任務：{error_detail} 請向系統管理員回報此問題。"
                 ) from exc
             time.sleep((2**attempt) + random.uniform(0, 0.5))
-    raise RuntimeError(
-        f"PDF 翻譯重建請求連續失敗 {DOC_TRANSLATE_MAX_RETRIES} 次，已中斷任務：{last_error}"
-    )
 
 
 def _translate_snippet(

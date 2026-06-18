@@ -4,6 +4,7 @@ import argparse
 import json
 import functools
 import os
+import random
 import re
 import time
 import cv2
@@ -70,10 +71,87 @@ DIGIT_RE = re.compile(r"\d")
 REMOVE_LATIN_RE = re.compile(r"[A-Za-z]+")
 REMOVE_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 NUMERIC_ONLY_RE = re.compile(r"^[0-9]+([,./:-][0-9]+)*%?$")
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 DEFAULT_OCR_MIN_LINE_SCORE = max(
     0.0,
-    min(1.0, float(os.getenv("OCR_MIN_LINE_SCORE", "0.8"))),
+    min(1.0, _float_env("OCR_MIN_LINE_SCORE", 0.8)),
 )
+DEFAULT_TABLE_RECOGNTION_V2TIMEOUT_SECONDS = max(
+    0.1,
+    _float_env("TABLE_RECOGNTION_V2TIMEOUT_SECONDS", _float_env("OCR_API_TIMEOUT_SECONDS", 120.0)),
+)
+TABLE_RECOGNTION_V2_MAX_RETRIES = 3
+
+
+def _format_table_recogntion_v2_error(exc: Exception) -> str:
+    message = str(exc).strip() or exc.__class__.__name__
+    lowered = message.lower()
+    exc_name = exc.__class__.__name__.lower()
+    if isinstance(exc, requests.exceptions.Timeout) or "timed out" in lowered or "timeout" in exc_name:
+        return f"Request timed out. (read timeout={DEFAULT_TABLE_RECOGNTION_V2TIMEOUT_SECONDS:g}s)"
+    if "connectionpool(" in lowered:
+        return "API connection failed."
+    return message
+
+
+def _post_table_recogntion_v2(
+    *,
+    url: str,
+    payload: dict[str, Any],
+    image_path: Path,
+    failure_counter: dict[str, int] | None = None,
+    progress_cb: Callable[[str, int, int, str], None] | None = None,
+    page_index: int = 0,
+    total_pages: int = 0,
+) -> dict[str, Any]:
+    for attempt in range(TABLE_RECOGNTION_V2_MAX_RETRIES):
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=DEFAULT_TABLE_RECOGNTION_V2TIMEOUT_SECONDS,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(f"HTTP {response.status_code}")
+            output = response.json()
+            if output.get("errorCode", -1) != 0:
+                msg = output.get("errorMsg") or "unknown error"
+                raise RuntimeError(str(msg))
+            return output
+        except Exception as exc:
+            error_detail = _format_table_recogntion_v2_error(exc)
+            if failure_counter is not None:
+                failure_counter["count"] = int(failure_counter.get("count") or 0) + 1
+                total_failures = failure_counter["count"]
+                total_suffix = f"（累計 {total_failures}/{TABLE_RECOGNTION_V2_MAX_RETRIES}）"
+            else:
+                total_failures = attempt + 1
+                total_suffix = ""
+            page_prefix = f"第 {page_index} 頁" if page_index else ""
+            if progress_cb is not None:
+                progress_cb(
+                    "ocr",
+                    page_index,
+                    total_pages,
+                    f"{page_prefix}第 {attempt + 1} 次 TABLE RECOGNTION V2 API 請求失敗{total_suffix}：{error_detail}",
+                )
+            if total_failures >= TABLE_RECOGNTION_V2_MAX_RETRIES:
+                failure_scope = "累計" if failure_counter is not None else "連續"
+                raise RuntimeError(
+                    f"TABLE RECOGNTION V2 API 請求{failure_scope}失敗 {TABLE_RECOGNTION_V2_MAX_RETRIES} 次，已中斷任務：{error_detail} 請向系統管理員回報此問題。"
+                ) from exc
+            time.sleep((2**attempt) + random.uniform(0, 0.5))
 
 
 def _filter_text_by_lang(text: str, keep_lang: str) -> str:
@@ -258,6 +336,7 @@ def run_layout_parsing_predict(
 
     out_jsons: list[Path] = []
     total = len(images)
+    failure_counter = {"count": 0}
     for idx, img_path in enumerate(images, start=1):
         img = cv2.imread(img_path)
         height, width = img.shape[:2]
@@ -272,13 +351,15 @@ def run_layout_parsing_predict(
             "useDocOrientationClassify": False,
             "useTableOrientationClassify": False,
         }
-        response = requests.post(triton_url, json=payload, timeout=120)
-        if response.status_code != 200:
-            raise RuntimeError(f"OCR request failed for {img_path}: HTTP {response.status_code}")
-        output = response.json()
-        if output.get("errorCode", -1) != 0:
-            msg = output.get("errorMsg") or "unknown error"
-            raise RuntimeError(f"Triton OCR failed for {img_path}: {msg}")
+        output = _post_table_recogntion_v2(
+            url=triton_url,
+            payload=payload,
+            image_path=img_path,
+            failure_counter=failure_counter,
+            progress_cb=progress_cb,
+            page_index=idx,
+            total_pages=total,
+        )
 
         try:
             pruned = output["result"]["tableRecResults"][0]["prunedResult"]

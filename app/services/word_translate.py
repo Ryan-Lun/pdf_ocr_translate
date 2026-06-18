@@ -628,19 +628,20 @@ class EnhancedWordTranslator:
             except Exception as exc:
                 if isinstance(exc, WordTranslationCancelled):
                     raise
+                error_detail = openai_config.format_request_error(exc)
                 if debug_job_dir is not None and debug_custom_id:
                     translation_debug.record_error(
                         job_dir=debug_job_dir,
                         chunk_label=debug_custom_id,
                         attempt=attempt + 1,
-                        error=str(exc),
+                        error=error_detail,
                     )
-                logger.warning("Word translation attempt failed attempt=%s error=%s", attempt + 1, exc)
+                logger.warning("Word translation attempt failed attempt=%s error=%s", attempt + 1, error_detail)
                 if warning_callback is not None:
-                    warning_callback(f"第 {attempt + 1} 次 Word 翻譯請求失敗：{exc}")
+                    warning_callback(f"第 {attempt + 1} 次 Word 翻譯請求失敗：{error_detail}")
                 if attempt == self.max_retries - 1:
                     raise RuntimeError(
-                        f"Word 翻譯請求連續失敗 {self.max_retries} 次，已中斷任務：{exc} 請向系統管理員回報此問題。"
+                        f"Word 翻譯請求連續失敗 {self.max_retries} 次，已中斷任務：{error_detail} 請向系統管理員回報此問題。"
                     ) from exc
             if cancel_event is not None and cancel_event.is_set():
                 raise WordTranslationCancelled("Word translation cancelled.")

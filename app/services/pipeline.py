@@ -37,7 +37,26 @@ def run_ocr_pipeline_job(
     logger.info("OCR pipeline start job_id=%s", job_id)
     normalized_document_mode = jobs.normalize_document_mode(document_mode)
     jobs.set_active_upload({"event": cancel_event, "job_id": job_id, "started_at": time.time()})
-    jobs.set_job_state(job_dir, status="running", stage="ocr", started_at=time.time())
+    jobs.set_job_state(
+        job_dir,
+        status="running",
+        stage="ocr",
+        started_at=time.time(),
+        extra_meta={"last_warning": ""},
+    )
+
+    def record_progress(stage: str, current: int, total: int, message: str) -> None:
+        progress = round((max(0, current) / max(1, total)) * 100.0, 2) if total else None
+        if "請求失敗" in str(message):
+            jobs.record_job_warning(job_dir, stage=stage or "ocr", message=str(message), progress=progress)
+            return
+        jobs.set_job_state(
+            job_dir,
+            status="running",
+            stage=stage or "ocr",
+            progress=progress,
+        )
+
     try:
         run_pipeline(
             pdf_path=pdf_path,
@@ -52,10 +71,11 @@ def run_ocr_pipeline_job(
             enable_translate=False,
             translate_target_lang=translate_target_lang,
             translate_model=translate_model,
-            triton_url=state.TRITON_URL,
+            triton_url=state.TABLE_RECOGNTION_V2_URL,
             keep_lang=keep_lang,
             document_mode=normalized_document_mode,
             cancel_event=cancel_event,
+            progress_cb=record_progress,
         )
     except PipelineCancelled:
         logger.info("OCR pipeline cancelled job_id=%s", job_id)
@@ -76,9 +96,8 @@ def run_ocr_pipeline_job(
             detail={"stage": "ocr", "job_dir": str(job_dir)},
         )
         now_ts = time.time()
-        jobs.set_job_state(
+        jobs.fail_job(
             job_dir,
-            status="failed",
             stage="ocr",
             error_message=str(exc),
             completed_at=now_ts,

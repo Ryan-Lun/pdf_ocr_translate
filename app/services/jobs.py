@@ -60,6 +60,49 @@ OCR_STAGE_DISPLAY = {
 }
 
 
+_CONNECTION_POOL_RE = re.compile(r"\bHTTPS?ConnectionPool\([^)]*\):\s*", re.IGNORECASE)
+
+
+def sanitize_job_message(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return _CONNECTION_POOL_RE.sub("", text).strip() or None
+
+
+def _serialize_warning_events(events: list[Any]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for event in events:
+        message = sanitize_job_message(getattr(event, "message", ""))
+        if not message:
+            continue
+        warnings.append(
+            {
+                "message": message,
+                "stage": str(getattr(event, "stage", "") or "") or None,
+                "created_at": timestamp_from_datetime(getattr(event, "created_at", None)),
+            }
+        )
+    return warnings
+
+
+def record_job_warning(job_dir_path: Path, *, stage: str, message: str, progress: float | None = None) -> None:
+    cleaned_message = sanitize_job_message(message)
+    if not cleaned_message:
+        return
+    job_store.append_event(job_dir_path.name, "warning", stage=stage, message=cleaned_message)
+    set_job_state(
+        job_dir_path,
+        status="running",
+        stage=stage,
+        progress=progress,
+        extra_meta={
+            "last_warning": cleaned_message,
+            "last_warning_at": time.time(),
+        },
+    )
+
+
 def safe_job_id(job_id: str) -> bool:
     return bool(re.fullmatch(r"[a-f0-9]{32}", job_id))
 
@@ -293,6 +336,9 @@ def set_job_state(
         meta["processing_completed_at"] = completed_at
     if extra_meta:
         meta.update({k: v for k, v in extra_meta.items() if v is not None})
+    if status == "completed":
+        meta.pop("last_warning", None)
+        meta.pop("last_warning_at", None)
     job_meta_path(job_dir_path).write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -313,6 +359,18 @@ def set_job_state(
             record = job_store.get_job(job_id)
             payload = job_store.deserialize_payload(record)
             payload.update({k: v for k, v in extra_meta.items() if v is not None})
+            if status == "completed":
+                payload.pop("last_warning", None)
+                payload.pop("last_warning_at", None)
+            store_updates["payload_json"] = json.dumps(payload, ensure_ascii=False)
+        except Exception:
+            pass
+    elif status == "completed":
+        try:
+            record = job_store.get_job(job_id)
+            payload = job_store.deserialize_payload(record)
+            payload.pop("last_warning", None)
+            payload.pop("last_warning_at", None)
             store_updates["payload_json"] = json.dumps(payload, ensure_ascii=False)
         except Exception:
             pass
@@ -413,7 +471,9 @@ def build_jobs_list(
     if not include_all and not normalized_owner:
         return jobs
     records = job_store.list_jobs(job_type)
-    artifacts_by_job_id = job_store.list_artifacts([record.job_id for record in records])
+    record_ids = [record.job_id for record in records]
+    artifacts_by_job_id = job_store.list_artifacts(record_ids)
+    warning_events_by_job_id = job_store.list_recent_events(record_ids, event_type="warning", limit_per_job=3)
     should_include_active_editors = include_all if include_active_editors is None else bool(include_active_editors)
     active_editors_by_job_id = (
         job_store.list_active_editor_presence([record.job_id for record in records])
@@ -434,6 +494,7 @@ def build_jobs_list(
         current_job_type = record.job_type
         job_id = record.job_id
         payload = job_store.deserialize_payload(record)
+        recent_warnings = _serialize_warning_events(warning_events_by_job_id.get(job_id, []))
         artifacts = artifacts_by_job_id.get(job_id, {})
         active_editors = active_editors_by_job_id.get(job_id, [])
         record_owner_work_id = str(record.owner_work_id or payload.get("owner_work_id") or "").strip()
@@ -478,9 +539,10 @@ def build_jobs_list(
                     "creator_name": creator_name,
                     "owner_work_id": record_owner_work_id or None,
                     "active_editors": active_editors,
-                    "last_warning": str(payload.get("last_warning") or "").strip() or None,
+                    "last_warning": sanitize_job_message(payload.get("last_warning")),
                     "last_warning_at": payload.get("last_warning_at"),
-                    "error": error_message,
+                    "recent_warnings": recent_warnings,
+                    "error": sanitize_job_message(error_message),
                     "download_name": build_docx_name(job_id, job_name),
                     "source_pdf_url": _artifact_url(job_id, artifacts, "source_pdf"),
                     "structure_md_url": _artifact_url(job_id, artifacts, "structure_md"),
@@ -515,9 +577,10 @@ def build_jobs_list(
                     "active_editors": active_editors,
                     "progress": float(record.progress or 0.0),
                     "avg_quality": float(payload.get("avg_quality") or 0.0),
-                    "last_warning": str(payload.get("last_warning") or "").strip() or None,
+                    "last_warning": sanitize_job_message(payload.get("last_warning")),
                     "last_warning_at": payload.get("last_warning_at"),
-                    "error": record.error_message or payload.get("error"),
+                    "recent_warnings": recent_warnings,
+                    "error": sanitize_job_message(record.error_message or payload.get("error")),
                     "target_lang": record.target_lang or payload.get("target_lang"),
                     "download_name": build_docx_name(job_id, job_name),
                     "source_docx_url": _artifact_url(job_id, artifacts, "source_docx"),
@@ -571,9 +634,10 @@ def build_jobs_list(
                 "translate_mode": normalize_translate_mode(
                     payload.get("translate_mode")
                 ),
-                "last_warning": str(payload.get("last_warning") or "").strip() or None,
+                "last_warning": sanitize_job_message(payload.get("last_warning")),
                 "last_warning_at": payload.get("last_warning_at"),
-                "error": error_message,
+                "recent_warnings": recent_warnings,
+                "error": sanitize_job_message(error_message),
                 "download_name": download_name,
                 "editor_url": url_for("editor.editor", job_id=job_id),
                 "debug_pdf_url": _artifact_url(job_id, artifacts, "debug_pdf"),

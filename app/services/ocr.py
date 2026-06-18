@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 import base64
+import time
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,42 @@ FITZ_TEXT_ALIGN = {
     TEXT_ALIGN_RIGHT: 2,
 }
 PDF_TEXT_LINEHEIGHT = 1.0
+TABLE_RECOGNTION_V2_MAX_RETRIES = 3
+
+
+def _format_table_recogntion_v2_error(exc: Exception) -> str:
+    message = str(exc).strip() or exc.__class__.__name__
+    lowered = message.lower()
+    exc_name = exc.__class__.__name__.lower()
+    if isinstance(exc, requests.exceptions.Timeout) or "timed out" in lowered or "timeout" in exc_name:
+        return f"Request timed out. (read timeout={state.TABLE_RECOGNTION_V2TIMEOUT_SECONDS:g}s)"
+    if "connectionpool(" in lowered:
+        return "API connection failed."
+    return message
+
+
+def _post_table_recogntion_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    for attempt in range(TABLE_RECOGNTION_V2_MAX_RETRIES):
+        try:
+            response = requests.post(
+                state.TABLE_RECOGNTION_V2_URL,
+                json=payload,
+                timeout=state.TABLE_RECOGNTION_V2TIMEOUT_SECONDS,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(f"HTTP {response.status_code}")
+            output = response.json()
+            if output.get("errorCode", -1) != 0:
+                raise RuntimeError(str(output.get("errorMsg") or "Region OCR failed."))
+            return output
+        except Exception as exc:
+            logger.warning("Region OCR attempt failed attempt=%s error=%s", attempt + 1, exc)
+            error_detail = _format_table_recogntion_v2_error(exc)
+            if attempt == TABLE_RECOGNTION_V2_MAX_RETRIES - 1:
+                raise RuntimeError(
+                    f"TABLE RECOGNTION V2 API 請求連續失敗 {TABLE_RECOGNTION_V2_MAX_RETRIES} 次，已中斷任務：{error_detail} 請向系統管理員回報此問題。"
+                ) from exc
+            time.sleep((2**attempt) + random.uniform(0, 0.5))
 
 def normalize_box_rotation(value: Any) -> int:
     try:
@@ -716,12 +754,7 @@ def run_region_ocr(
         "useDocOrientationClassify": False,
         "useTableOrientationClassify": False,
     }
-    response = requests.post(state.TRITON_URL, json=payload, timeout=120)
-    if response.status_code != 200:
-        raise RuntimeError(f"Region OCR request failed: HTTP {response.status_code}")
-    output = response.json()
-    if output.get("errorCode", -1) != 0:
-        raise RuntimeError(str(output.get("errorMsg") or "Region OCR failed."))
+    output = _post_table_recogntion_v2(payload)
     try:
         pruned = output["result"]["tableRecResults"][0]["prunedResult"]
     except Exception as exc:

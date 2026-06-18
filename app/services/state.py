@@ -69,7 +69,11 @@ DOC_WORKSPACE_ROOT = OUT_ROOT / "doc_workspace"
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret").strip() or "dev-secret"
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "pdf_ocr_translate_session").strip() or "pdf_ocr_translate_session"
 
-TRITON_URL = os.getenv("TRITON_URL", "https://racks-editing-norm-timber.trycloudflare.com/table-recognition")
+TABLE_RECOGNTION_V2_URL = os.getenv(
+    "TABLE_RECOGNTION_V2_URL",
+    os.getenv("TRITON_URL", "https://racks-editing-norm-timber.trycloudflare.com/table-recognition"),
+)
+TRITON_URL = TABLE_RECOGNTION_V2_URL
 PP_STRUCTURE_URL = os.getenv(
     "PP_STRUCTURE_URL",
     os.getenv(
@@ -77,6 +81,26 @@ PP_STRUCTURE_URL = os.getenv(
         "https://writing-coordination-farm-approximately.trycloudflare.com/layout-parsing",
     ),
 )
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+TABLE_RECOGNTION_V2TIMEOUT_SECONDS = max(
+    0.1,
+    _float_env("TABLE_RECOGNTION_V2TIMEOUT_SECONDS", _float_env("OCR_API_TIMEOUT_SECONDS", 120.0)),
+)
+OCR_API_TIMEOUT_SECONDS = TABLE_RECOGNTION_V2TIMEOUT_SECONDS
+REGION_OCR_API_TIMEOUT_SECONDS = TABLE_RECOGNTION_V2TIMEOUT_SECONDS
+PP_STRUCTURE_TIMEOUT_SECONDS = max(0.1, _float_env("PP_STRUCTURE_TIMEOUT_SECONDS", 300.0))
+
 OPENAI_BASE_URL = openai_config.get_openai_base_url()
 AZURE_BASE_URL = OPENAI_BASE_URL
 OPENAI_API_KEY = openai_config.get_openai_api_key()
@@ -213,7 +237,7 @@ AUTH_STUB_ENABLED = _env_bool("AUTH_STUB_ENABLED", True)
 AUTH_REQUIRE_LOCAL_USER = _env_bool("AUTH_REQUIRE_LOCAL_USER", False)
 AUTHZ_MODE = os.getenv("AUTHZ_MODE", "").strip().lower()
 OWNER_ACCESS_ENABLED = _env_bool("OWNER_ACCESS_ENABLED", True)
-BOOTSTRAP_ADMIN = os.getenv("INITIAL_ADMIN_WORK_IDS", "").strip()
+INITIAL_ADMIN_WORK_IDS = os.getenv("INITIAL_ADMIN_WORK_IDS", "").strip()
 SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", False)
 LDAP_HOST = os.getenv("LDAP_HOST", "").strip()
 LDAP_PORT = int(os.getenv("LDAP_PORT", "636" if _env_bool("LDAP_USE_SSL", False) else "389"))

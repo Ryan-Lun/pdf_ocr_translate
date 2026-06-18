@@ -48,7 +48,7 @@ def ops_app(monkeypatch):
     app.config.update(
         AUTH_ENABLED=True,
         AUTO_SCHEMA_MANAGEMENT=False,
-        BOOTSTRAP_ADMIN="admin1",
+        INITIAL_ADMIN_WORK_IDS="admin1",
     )
     register_operations_cli(app)
     return app
@@ -84,6 +84,17 @@ def test_seed_bootstrap_populates_auth_defaults(ops_app):
     assert "auth=1" in result.output
     assert "roles=2" in result.output
     assert "admins=1" in result.output
+
+
+def test_seed_bootstrap_uses_initial_admin_work_ids_config(ops_app):
+    ops_app.config["INITIAL_ADMIN_WORK_IDS"] = "NE025"
+
+    runner = ops_app.test_cli_runner()
+    result = runner.invoke(args=["seed-bootstrap"])
+
+    assert result.exit_code == 0
+    assert "admins=1" in result.output
+    assert auth_store.get_effective_role_names("NE025") == (auth_store.ROLE_ADMIN,)
 
 
 def test_configure_database_schema_updates_metadata_schema():

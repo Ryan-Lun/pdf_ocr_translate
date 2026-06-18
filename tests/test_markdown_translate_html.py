@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import types
 from pathlib import Path
@@ -28,6 +29,15 @@ def _load_module():
     fake_glossary.apply_glossary_with_protection = lambda text, entries=None: text
     fake_glossary.restore_protected_glossary_terms = lambda text: text
     fake_openai_config = types.ModuleType("app.services.openai_config")
+    fake_openai_config.get_openai_timeout_seconds = lambda: max(
+        0.1,
+        float(os.getenv("AZURE_OPENAI_TIMEOUT_SECONDS") or os.getenv("OPENAI_TIMEOUT_SECONDS") or "120"),
+    )
+    fake_openai_config.format_request_error = lambda exc: (
+        f"{exc} (read timeout={fake_openai_config.get_openai_timeout_seconds():g}s)"
+        if "timeout" in exc.__class__.__name__.lower() or "timed out" in str(exc).lower() or "timeout" in str(exc).lower()
+        else str(exc)
+    )
     fake_state = types.ModuleType("app.services.state")
     fake_translation_debug = types.ModuleType("app.services.translation_debug")
     fake_translation_debug.record_request = lambda **kwargs: None
@@ -237,8 +247,9 @@ def test_translate_html_file_writes_realtime_debug(tmp_path: Path):
     assert mirrored.exists()
 
 
-def test_translate_html_file_timeout_fails_after_three_retries(tmp_path: Path):
+def test_translate_html_file_timeout_fails_after_three_retries(tmp_path: Path, monkeypatch):
     module = _load_module()
+    monkeypatch.setenv("AZURE_OPENAI_TIMEOUT_SECONDS", "2.5")
     source = tmp_path / "doc.html"
     output = tmp_path / "doc.translated.html"
     source.write_text("<p>Hello</p>", encoding="utf-8")
@@ -269,13 +280,13 @@ def test_translate_html_file_timeout_fails_after_three_retries(tmp_path: Path):
         )
     except RuntimeError as exc:
         assert "PDF 翻譯重建請求連續失敗 3 次" in str(exc)
-        assert "Request timed out." in str(exc)
+        assert "Request timed out. (read timeout=2.5s)" in str(exc)
     else:
         raise AssertionError("expected RuntimeError")
 
     assert attempts["count"] == 3
     assert warnings == [
-        "第 1 次 PDF 翻譯重建請求失敗：Request timed out.",
-        "第 2 次 PDF 翻譯重建請求失敗：Request timed out.",
-        "第 3 次 PDF 翻譯重建請求失敗：Request timed out.",
+        "第 1 次 PDF 翻譯重建請求失敗：Request timed out. (read timeout=2.5s)",
+        "第 2 次 PDF 翻譯重建請求失敗：Request timed out. (read timeout=2.5s)",
+        "第 3 次 PDF 翻譯重建請求失敗：Request timed out. (read timeout=2.5s)",
     ]

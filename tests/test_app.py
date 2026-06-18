@@ -977,6 +977,143 @@ def test_fail_job_writes_single_status_source(app, tmp_path, monkeypatch):
     assert meta["translate_completed_at"] == 123.0
 
 
+def test_ocr_retry_warning_is_visible_in_jobs_list(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    job_id = "b" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_name": "ocr-retry",
+            "job_type": "ocr_overlay",
+            "document_mode": "form",
+        },
+    )
+    job_store.delete_job(job_id)
+    job_store.create_job(
+        job_id=job_id,
+        job_type="ocr_overlay",
+        stage="ocr",
+        status="running",
+        job_name="ocr-retry",
+    )
+
+    def fake_run_pipeline(*args, **kwargs):
+        kwargs["progress_cb"]("ocr", 1, 3, "第 1 次 OCR API 請求失敗：Request timed out.")
+        kwargs["progress_cb"]("ocr", 1, 3, "第 2 次 OCR API 請求失敗：Request timed out.")
+        raise RuntimeError("OCR API 請求連續失敗 3 次，已中斷任務：Request timed out.")
+
+    monkeypatch.setattr(pipeline, "run_pipeline", fake_run_pipeline)
+
+    pipeline.run_ocr_pipeline_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        pdf_path=tmp_path / "source.pdf",
+        dpi=150,
+        start_page=1,
+        end_page=None,
+        page_numbers=None,
+        translate_source_lang="auto",
+        enable_translate=False,
+        translate_target_lang="en",
+        translate_model="model",
+        translate_mode="batch",
+        keep_lang="all",
+        document_mode="form",
+        cancel_event=threading.Event(),
+    )
+
+    with app.test_request_context():
+        payload = jobs.build_jobs_list(job_type="ocr_overlay", include_all=True)
+
+    job = next(item for item in payload if item["job_id"] == job_id)
+    assert job["job_status"] == "failed"
+    assert job["last_warning"].startswith("第 2 次 OCR API 請求失敗")
+    assert [warning["message"] for warning in job["recent_warnings"]] == [
+        "第 1 次 OCR API 請求失敗：Request timed out.",
+        "第 2 次 OCR API 請求失敗：Request timed out.",
+    ]
+    assert job["error"].startswith("OCR API 請求連續失敗 3 次")
+
+
+def test_doc_workspace_structure_retry_warning_is_visible(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    job_id = "c" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_name": "doc-structure-retry",
+            "job_type": "doc_workspace",
+        },
+    )
+    job_store.delete_job(job_id)
+    job_store.create_job(
+        job_id=job_id,
+        job_type="doc_workspace",
+        stage="extract",
+        status="running",
+        job_name="doc-structure-retry",
+    )
+
+    def fake_extract_pdf_to_markdown(pdf_path, out_dir, dpi=150, warning_callback=None):
+        assert warning_callback is not None
+        warning_callback("第 1 次 PDF 重建結構 API 請求失敗：Request timed out.")
+        warning_callback("第 2 次 PDF 重建結構 API 請求失敗：Request timed out.")
+        raise RuntimeError("PDF 重建結構 API 請求連續失敗 3 次，已中斷任務：Request timed out.")
+
+    monkeypatch.setattr(doc_workspace.pp_structure, "extract_pdf_to_markdown", fake_extract_pdf_to_markdown)
+
+    doc_workspace.run_doc_workspace_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        pdf_path=tmp_path / "source.pdf",
+        source_lang="auto",
+        target_lang="en",
+    )
+
+    with app.test_request_context():
+        payload = jobs.build_jobs_list(job_type="doc_workspace", include_all=True)
+
+    job = next(item for item in payload if item["job_id"] == job_id)
+    assert job["job_status"] == "failed"
+    assert job["last_warning"].startswith("第 2 次 PDF 重建結構 API 請求失敗")
+    assert [warning["message"] for warning in job["recent_warnings"]] == [
+        "第 1 次 PDF 重建結構 API 請求失敗：Request timed out.",
+        "第 2 次 PDF 重建結構 API 請求失敗：Request timed out.",
+    ]
+    assert job["error"].startswith("PDF 重建結構 API 請求連續失敗 3 次")
+
+
+def test_completed_job_clears_warning_summary_but_keeps_recent_warning_events(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    job_id = "d" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    jobs.write_job_meta(job_dir, {"job_name": "completed-with-retry", "job_type": "ocr_overlay"})
+    job_store.delete_job(job_id)
+    job_store.create_job(
+        job_id=job_id,
+        job_type="ocr_overlay",
+        stage="ocr",
+        status="running",
+        job_name="completed-with-retry",
+    )
+
+    jobs.record_job_warning(job_dir, stage="ocr", message="第 1 次 TABLE RECOGNTION V2 API 請求失敗：Request timed out.")
+    jobs.set_job_state(job_dir, status="completed", stage="completed", completed_at=123.0)
+
+    with app.test_request_context():
+        payload = jobs.build_jobs_list(job_type="ocr_overlay", include_all=True)
+
+    job = next(item for item in payload if item["job_id"] == job_id)
+    assert job["job_status"] == "completed"
+    assert job["last_warning"] is None
+    assert job["recent_warnings"][0]["message"].startswith("第 1 次 TABLE RECOGNTION V2 API 請求失敗")
+
+
 def test_user_is_admin_falls_back_to_local_role(app):
     auth_store.upsert_user_role_for_work_id(
         work_id="ADMIN02",

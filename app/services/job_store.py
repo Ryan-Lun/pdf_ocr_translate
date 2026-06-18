@@ -561,6 +561,28 @@ def append_event(job_id: str, event_type: str, stage: str | None = None, message
         )
 
 
+def list_recent_events(
+    job_ids: list[str],
+    *,
+    event_type: str | None = None,
+    limit_per_job: int = 3,
+) -> dict[str, list[JobEventRecord]]:
+    cleaned_ids = [str(job_id or "").strip() for job_id in job_ids if str(job_id or "").strip()]
+    if not cleaned_ids or limit_per_job <= 0:
+        return {}
+    stmt = select(JobEventRecord).where(JobEventRecord.job_id.in_(cleaned_ids))
+    if event_type:
+        stmt = stmt.where(JobEventRecord.event_type == str(event_type).strip())
+    stmt = stmt.order_by(JobEventRecord.created_at.desc(), JobEventRecord.id.desc())
+    grouped: dict[str, list[JobEventRecord]] = {job_id: [] for job_id in cleaned_ids}
+    with session_scope() as session:
+        for event in session.scalars(stmt).all():
+            bucket = grouped.setdefault(str(event.job_id), [])
+            if len(bucket) < limit_per_job:
+                bucket.append(event)
+    return {job_id: list(reversed(events)) for job_id, events in grouped.items() if events}
+
+
 def register_artifact(job_id: str, artifact_type: str, file_path: str) -> None:
     with session_scope() as session:
         session.add(
