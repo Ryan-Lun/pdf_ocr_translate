@@ -152,7 +152,7 @@ WORD_QUALITY_DEPLOYMENT=your-quality-deployment
 | `OPENAI_API_KEY` | 必填 | 空字串 | OpenAI / Azure OpenAI API key。也可用 `AZURE_OPENAI_API_KEY` 或 `UO_AZURE_OPENAI_API_KEY` 作為 fallback。 |
 | `OPENAI_BASE_URL` | 必填 | 空字串 | OpenAI / Azure OpenAI endpoint。也可用 `AZURE_OPENAI_ENDPOINT` 或 `AZURE_OPENAI_BASE_URL` 作為 fallback。 |
 | `BATCH_TRANSLATE_DEPLOYMENT` | 必填 | `batch-o3-mini` | PDF batch 翻譯使用的 deployment。正式環境應明確指定。 |
-| `DOC_TRANSLATE_DEPLOYMENT` | 必填 | `gpt-4.1-mini` | 文件翻譯使用的 deployment。正式環境應明確指定。 |
+| `DOC_TRANSLATE_DEPLOYMENT` | 必填 | 空字串 | 文件翻譯使用的 deployment。正式環境必須明確指定，不會 fallback 到預設模型名稱。 |
 | `WORD_TRANSLATE_DEPLOYMENT` | 必填 | `gpt-4o-mini` | Word 翻譯使用的 deployment。正式環境應明確指定。 |
 | `WORD_QUALITY_DEPLOYMENT` | 必填 | `gpt-4o` | Word 品質檢查或修正使用的 deployment。正式環境應明確指定。 |
 
@@ -202,13 +202,18 @@ WORD_QUALITY_DEPLOYMENT=your-quality-deployment
 | `AUTH_REQUIRE_LOCAL_USER` | 選填 | `0` | 是否要求使用者必須已存在本機 `users` 表才可登入。 |
 | `LDAP_USER_DISPLAY_ATTR` | 選填 | `displayName` | AD 顯示名稱欄位。 |
 | `LDAP_USER_EMAIL_ATTR` | 選填 | `mail` | AD Email 欄位。 |
-| `PDF_REALTIME_TRANSLATE_DEPLOYMENT` | 選填 | `DOC_TRANSLATE_DEPLOYMENT`，再 fallback 到 `gpt-4.1-mini` | PDF 即時翻譯使用的 deployment。若與文件翻譯共用模型可不設定。 |
+| `PDF_REALTIME_TRANSLATE_DEPLOYMENT` | 選填 | `DOC_TRANSLATE_DEPLOYMENT`，再 fallback 到 `DOC_TRANSLATE_MODEL`，最後為空字串 | PDF 即時翻譯使用的 deployment。若與文件翻譯共用模型可不設定；未設定文件翻譯 deployment 時不會 fallback 到預設模型名稱。 |
+| `AZURE_OPENAI_TIMEOUT_SECONDS` | 選填 | `OPENAI_TIMEOUT_SECONDS`，再 fallback 到 `120` | OpenAI / Azure OpenAI 請求逾時秒數，影響 PDF 即時翻譯、PDF 翻譯重建、Word 翻譯與其他 OpenAI client。錯誤訊息中的 `(read timeout=...s)` 會依此值顯示。 |
+| `OPENAI_TIMEOUT_SECONDS` | 選填 | `120` | OpenAI 請求逾時秒數 fallback。 |
 | `AZURE_OPENAI_API_KEY_ENV` | 選填 | `OPENAI_API_KEY` | 指定程式讀取哪個環境變數作為 Azure API key。 |
 | `AZURE_BATCH_POLL_SECONDS` | 選填 | `60` | Azure batch job 輪詢間隔秒數。 |
 | `AZURE_BATCH_COMPLETION_WINDOW` | 選填 | `24h` | Azure batch completion window。 |
 | `DOC_TRANSLATE_MAX_CHARS` | 選填 | `4000` | 文件翻譯單次處理最大字元數。 |
 | `DOC_TRANSLATE_USE_AZURE` | 選填 | `0` | 文件翻譯是否使用 Azure 流程。 |
 | `PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY` | 選填 | `0` | PDF 原版面翻譯是否啟用 translation memory。 |
+| `TABLE_RECOGNTION_V2TIMEOUT_SECONDS` | 選填 | `OCR_API_TIMEOUT_SECONDS`，再 fallback 到 `120` | TABLE RECOGNTION V2 / PDF 原版面 OCR 表格辨識 API 請求逾時秒數。 |
+| `OCR_API_TIMEOUT_SECONDS` | 選填 | `120` | OCR API 逾時秒數 fallback。 |
+| `PP_STRUCTURE_TIMEOUT_SECONDS` | 選填 | `300` | PP-Structure / PDF 翻譯重建版面解析 API 請求逾時秒數。 |
 | `OCR_MIN_LINE_SCORE` | 選填 | `0.8` | OCR 行文字最低信心分數。 |
 | `STARTUP_WARMUP_ENABLED` | 選填 | `1` | 是否啟用啟動暖機。 |
 | `STARTUP_WARMUP_BLOCKING` | 選填 | `1` | 是否讓 Web / Worker 啟動時等待暖機完成。 |

@@ -56,7 +56,7 @@ def get_doc_translate_deployment() -> str:
     return (
         os.getenv("DOC_TRANSLATE_DEPLOYMENT")
         or os.getenv("DOC_TRANSLATE_MODEL")
-        or "gpt-4.1-mini"
+        or ""
     ).strip()
 
 
@@ -65,7 +65,7 @@ def get_pdf_realtime_translate_deployment() -> str:
         os.getenv("PDF_REALTIME_TRANSLATE_DEPLOYMENT")
         or os.getenv("DOC_TRANSLATE_DEPLOYMENT")
         or os.getenv("DOC_TRANSLATE_MODEL")
-        or "gpt-4.1-mini"
+        or ""
     ).strip()
 
 
@@ -85,7 +85,7 @@ def get_word_quality_deployment() -> str:
         or os.getenv("WORD_TRANSLATE_QUALITY_MODEL")
         or os.getenv("AZURE_OPENAI_QUALITY_DEPLOYMENT")
         or os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT")
-        or "gpt-4o"
+        or ""
     ).strip()
 
 

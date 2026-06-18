@@ -48,6 +48,29 @@ def test_openai_timeout_invalid_env_uses_default(monkeypatch):
     assert openai_config.get_openai_timeout_seconds() == openai_config.DEFAULT_OPENAI_TIMEOUT_SECONDS
 
 
+def test_doc_translate_deployment_has_no_model_name_fallback(monkeypatch):
+    monkeypatch.delenv("DOC_TRANSLATE_DEPLOYMENT", raising=False)
+    monkeypatch.delenv("DOC_TRANSLATE_MODEL", raising=False)
+
+    assert openai_config.get_doc_translate_deployment() == ""
+
+
+def test_pdf_realtime_translate_deployment_has_no_model_name_fallback(monkeypatch):
+    monkeypatch.delenv("PDF_REALTIME_TRANSLATE_DEPLOYMENT", raising=False)
+    monkeypatch.delenv("DOC_TRANSLATE_DEPLOYMENT", raising=False)
+    monkeypatch.delenv("DOC_TRANSLATE_MODEL", raising=False)
+
+    assert openai_config.get_pdf_realtime_translate_deployment() == ""
+
+
+def test_pdf_realtime_translate_deployment_falls_back_to_doc_deployment(monkeypatch):
+    monkeypatch.delenv("PDF_REALTIME_TRANSLATE_DEPLOYMENT", raising=False)
+    monkeypatch.setenv("DOC_TRANSLATE_DEPLOYMENT", "doc-deployment")
+    monkeypatch.delenv("DOC_TRANSLATE_MODEL", raising=False)
+
+    assert openai_config.get_pdf_realtime_translate_deployment() == "doc-deployment"
+
+
 def test_format_request_error_includes_read_timeout_for_timeout(monkeypatch):
     monkeypatch.setenv("AZURE_OPENAI_TIMEOUT_SECONDS", "12.5")
 
