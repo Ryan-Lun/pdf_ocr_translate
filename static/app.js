@@ -905,7 +905,7 @@ function normalizeGlossaryText(value) {
 
 async function sendEditorPresence() {
   const jobId = document.body.dataset.jobId;
-  if (!jobId || document.visibilityState === "hidden") return;
+  if (!jobId) return;
   try {
     await fetch(`/api/job/${jobId}/editor-presence`, {
       method: "POST",
@@ -920,9 +920,7 @@ function startEditorPresenceHeartbeat() {
   if (editorPresenceTimer) return;
   sendEditorPresence();
   editorPresenceTimer = window.setInterval(sendEditorPresence, EDITOR_PRESENCE_INTERVAL_MS);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") sendEditorPresence();
-  });
+  document.addEventListener("visibilitychange", sendEditorPresence);
 }
 
 function setGlossaryActionButtonState(button, label, disabled = false) {

@@ -894,6 +894,28 @@ let glossaryEntries = [];
 let currentJobId = null;
 let batchPageModalResolver = null;
 let editingGlossaryIndex = -1;
+let editorPresenceTimer = null;
+const EDITOR_PRESENCE_INTERVAL_MS = 20000;
+
+async function sendEditorPresence() {
+  const jobId = document.body.dataset.jobId;
+  if (!jobId) return;
+  try {
+    await fetch(`/api/job/${jobId}/editor-presence`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      keepalive: true,
+    });
+  } catch (error) {}
+}
+
+function startEditorPresenceHeartbeat() {
+  if (editorPresenceTimer) return;
+  sendEditorPresence();
+  editorPresenceTimer = window.setInterval(sendEditorPresence, EDITOR_PRESENCE_INTERVAL_MS);
+  document.addEventListener("visibilitychange", sendEditorPresence);
+}
 
 function resetGlossaryEditorState() {
   editingGlossaryIndex = -1;
@@ -4967,6 +4989,7 @@ async function init() {
   const jobId = document.body.dataset.jobId;
   if (!jobId) return;
   currentJobId = jobId;
+  startEditorPresenceHeartbeat();
   if (templateNameEl && document.body.dataset.templateName) {
     templateNameEl.value = document.body.dataset.templateName;
   }
