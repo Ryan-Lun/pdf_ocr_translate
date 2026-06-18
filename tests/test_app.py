@@ -769,10 +769,12 @@ def test_editor_presence_heartbeat_records_active_editor(client, tmp_path, monke
 
     assert resp.status_code == 200
     payload = client.get("/api/jobs").get_json()
-    assert payload["can_view_active_editors"] is True
+    assert payload["can_view_active_editors"] is False
     job = next(item for item in payload["jobs"] if item["job_id"] == job_id)
-    assert job["active_editors"][0]["work_id"] == "anonymous"
-    assert job["active_editors"][0]["display_name"] == "anonymous"
+    assert job["active_editors"] == []
+
+    presence_resp = client.get("/api/editor-presence")
+    assert presence_resp.status_code == 403
 
 
 def test_api_jobs_includes_active_editor_names(client, tmp_path, monkeypatch):
@@ -802,6 +804,7 @@ def test_api_jobs_includes_active_editor_names(client, tmp_path, monkeypatch):
         work_id="NE025",
         display_name="Ryan Huang",
     )
+    monkeypatch.setattr("app.blueprints.api.routes.authz_service.user_is_admin", lambda _user: True)
 
     payload = client.get("/api/jobs").get_json()
     job = next(item for item in payload["jobs"] if item["job_id"] == job_id)

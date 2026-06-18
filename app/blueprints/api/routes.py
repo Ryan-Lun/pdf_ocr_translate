@@ -56,11 +56,7 @@ def _current_access_scope() -> tuple[str, bool]:
 
 
 def _can_view_active_editors() -> bool:
-    return (
-        not current_app.config.get("AUTH_ENABLED", False)
-        or authz_service.user_is_admin(current_user)
-        or not authz_service.owner_access_enabled()
-    )
+    return authz_service.user_is_admin(current_user)
 
 
 def _forbidden_json():

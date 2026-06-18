@@ -183,7 +183,6 @@
       const translateModelSelect = document.getElementById("translateModelSelect");
       const selectedJobs = new Set();
       let allJobs = [];
-      let canViewActiveEditors = false;
       const jobsPageState = { page: 1, pageSize: 3 };
       let jobsLoading = false;
       let jobsSource = null;
@@ -376,16 +375,6 @@
           ownerTag.className = "job-badge";
           ownerTag.textContent = `建立者：${job.creator_name || "未填寫"}`;
 
-          const activeEditors = canViewActiveEditors && Array.isArray(job.active_editors) ? job.active_editors : [];
-          const editorTag = document.createElement("div");
-          editorTag.className = "job-badge job-badge--editing";
-          const activeEditorNames = activeEditors
-            .map((editor) => editor.display_name || editor.work_id)
-            .filter(Boolean)
-            .join("、");
-          editorTag.textContent = `編輯中：${activeEditorNames || "無"}`;
-          editorTag.hidden = !canViewActiveEditors;
-
           const header = document.createElement("div");
           header.className = "job-header";
 
@@ -400,7 +389,6 @@
 
           const headerMeta = document.createElement("div");
           headerMeta.className = "job-header-meta";
-          headerMeta.appendChild(editorTag);
           headerMeta.appendChild(ownerTag);
           headerMeta.appendChild(translateTag);
           headerMeta.appendChild(modeTag);
@@ -555,7 +543,6 @@
             return applyJobsFilters();
           }
           const data = await res.json();
-          canViewActiveEditors = !!data.can_view_active_editors;
           allJobs = data.jobs || [];
           applyJobsFilters();
         } catch (error) {
@@ -573,7 +560,6 @@
         jobsSource.addEventListener("jobs", (event) => {
           try {
             const payload = JSON.parse(event.data) || {};
-            canViewActiveEditors = !!payload.can_view_active_editors;
             allJobs = payload.jobs || [];
             applyJobsFilters();
           } catch (error) {}
