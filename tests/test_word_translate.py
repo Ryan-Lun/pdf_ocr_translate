@@ -184,6 +184,8 @@ def test_word_zh_prompt_requires_traditional_chinese():
     assert "Never use Simplified Chinese characters" in system_prompt
     assert "No Unnecessary Source-Language Leakage" in system_prompt
     assert "Do not output bilingual text" in system_prompt
+    assert "do NOT guess, normalize, autocorrect" in system_prompt
+    assert "Glossary entries override this rule" in system_prompt
     assert "Traditional Chinese" in quality_prompt
     assert "leaving unnecessary source-language text mixed into the output" in quality_prompt
 

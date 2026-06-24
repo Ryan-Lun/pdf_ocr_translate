@@ -529,18 +529,28 @@ def _get_tm_entry_with_fallback(
 
 
 
+def ensure_source_fidelity_guard(prompt: str) -> str:
+    cleaned = str(prompt or "").strip()
+    guard = state.TRANSLATION_SOURCE_FIDELITY_GUARD.strip()
+    if not cleaned:
+        return guard
+    if guard in cleaned:
+        return cleaned
+    return f"{cleaned}\n\n{guard}"
+
+
 def resolve_batch_prompt(target_lang: str, override: str | None = None) -> str:
     if override:
-        return override.strip()
+        return ensure_source_fidelity_guard(override)
     normalized = (target_lang or "").strip().lower()
     if normalized in {"en", "english", "en-us", "en-gb"}:
-        return state.AZURE_BATCH_SYSTEM_PROMPT
+        return ensure_source_fidelity_guard(state.AZURE_BATCH_SYSTEM_PROMPT)
     target_label = describe_target_language(target_lang)
     extra_rules: list[str] = []
     zh_rule = traditional_chinese_instruction(target_lang)
     if zh_rule:
         extra_rules.append(zh_rule)
-    return "\n".join(
+    prompt = "\n".join(
         [
             "You are a professional translator.",
             f"Translate the text to {target_label} accurately and literally.",
@@ -552,9 +562,10 @@ def resolve_batch_prompt(target_lang: str, override: str | None = None) -> str:
             "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",
             "Strictly prohibit duplicate words or expressions with identical meanings; if they appear, you must remove the redundancy and keep only one.",
             *extra_rules,
-            "Output only the translated text."
+            "Output only the translated text.",
         ]
     ).strip()
+    return ensure_source_fidelity_guard(prompt)
 
 def build_batch_items(
     ocr_pages: list[dict[str, Any]],

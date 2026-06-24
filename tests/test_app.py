@@ -940,6 +940,40 @@ def test_build_jobs_list_includes_status_file_errors(app, tmp_path, monkeypatch)
     assert doc_job["last_warning_at"] == 456.0
 
 
+def test_doc_workspace_jobs_include_structure_markdown_download(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "DOC_WORKSPACE_JOB_ROOT", tmp_path / "pdf_rebuild")
+    job_id = "7" * 32
+    job_dir = state.DOC_WORKSPACE_JOB_ROOT / job_id
+    structure_dir = job_dir / "structure"
+    structure_dir.mkdir(parents=True)
+    (structure_dir / "doc.md").write_text("# OCR text\n\n人工髖關節", encoding="utf-8")
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_name": "測試文件",
+            "job_type": "doc_workspace",
+        },
+    )
+    job_store.delete_job(job_id)
+    job_store.create_job(
+        job_id=job_id,
+        job_type="doc_workspace",
+        stage="completed",
+        status="completed",
+        job_name="測試文件",
+        payload={},
+    )
+    job_store.register_artifact(job_id, "structure_md", "structure/doc.md")
+
+    with app.test_request_context():
+        doc_jobs = jobs.build_jobs_list(job_type="doc_workspace", include_all=True)
+
+    doc_job = next(item for item in doc_jobs if item["job_id"] == job_id)
+    assert doc_job["structure_md_url"].endswith(f"/jobs/{job_id}/structure/doc.md")
+    assert doc_job["structure_download_name"] == "測試文件_structure.md"
+
+
 def test_fail_job_writes_single_status_source(app, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     job_id = "a" * 32

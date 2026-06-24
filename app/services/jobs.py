@@ -544,6 +544,7 @@ def build_jobs_list(
                     "recent_warnings": recent_warnings,
                     "error": sanitize_job_message(error_message),
                     "download_name": build_docx_name(job_id, job_name),
+                    "structure_download_name": build_doc_markdown_name(job_id, job_name, translated=False),
                     "source_pdf_url": _artifact_url(job_id, artifacts, "source_pdf"),
                     "structure_md_url": _artifact_url(job_id, artifacts, "structure_md"),
                     "structure_html_url": _artifact_url(job_id, artifacts, "structure_html"),

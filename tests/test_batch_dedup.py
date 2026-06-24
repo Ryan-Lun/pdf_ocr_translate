@@ -1292,6 +1292,8 @@ def test_zh_target_prompt_requires_traditional_chinese():
     assert "Traditional Chinese" in prompt
     assert "Never use Simplified Chinese characters" in prompt
     assert "never replace punctuation marks" in prompt
+    assert "do NOT guess, normalize, autocorrect" in prompt
+    assert "Glossary entries override this rule" in prompt
 
 
 def test_zh_cn_target_prompt_requires_simplified_chinese():
@@ -1299,6 +1301,19 @@ def test_zh_cn_target_prompt_requires_simplified_chinese():
     assert "Simplified Chinese" in prompt
     assert "Use Simplified Chinese characters only" in prompt
     assert "Never use Traditional Chinese characters" in prompt
+
+
+def test_english_target_prompt_rejects_ocr_guessing():
+    prompt = resolve_batch_prompt("en")
+    assert "do NOT guess, normalize, autocorrect" in prompt
+    assert "Do NOT infer specific meanings" in prompt
+    assert "preserve the original source term" in prompt
+
+
+def test_custom_batch_prompt_still_gets_source_fidelity_guard():
+    prompt = resolve_batch_prompt("en", "Use concise legal wording.")
+    assert prompt.startswith("Use concise legal wording.")
+    assert "do NOT guess, normalize, autocorrect" in prompt
 
 
 def test_general_mode_chart_blocks_fall_back_to_ocr_lines_for_batch_items():

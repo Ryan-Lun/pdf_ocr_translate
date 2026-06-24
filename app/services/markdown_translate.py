@@ -158,6 +158,8 @@ def _build_system_prompt(
         )
         prompt.append("Use the following glossary when applicable:")
         prompt.append(glossary_lines)
+    if state.TRANSLATION_SOURCE_FIDELITY_GUARD not in "\n".join(prompt):
+        prompt.append(state.TRANSLATION_SOURCE_FIDELITY_GUARD)
     custom_prompt = str(system_prompt_adjustment or "").strip()
     if custom_prompt:
         prompt.append(

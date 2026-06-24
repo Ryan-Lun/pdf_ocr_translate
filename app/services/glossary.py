@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover - optional dependency in runtime env
     xlsxwriter = None
 
 _PROTECTED_TERM_PREFIX = "[[[GLOSSARY_TERM_"
-_PROTECTED_TERM_PATTERN = re.compile(r"\[\[\[GLOSSARY_TERM_\d+::(.*?)\]\]\]")
+_PROTECTED_TERM_PATTERN = re.compile(r"\[{3,}GLOSSARY_TERM_\d+::(.*?)\]{3,}")
 _SPREADSHEET_NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 _GLOSSARY_CACHE_LOCK = threading.Lock()
 _GLOBAL_GLOSSARY_CACHE: tuple[Path, float | None, list[dict[str, str]]] | None = None

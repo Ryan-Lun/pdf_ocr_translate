@@ -128,6 +128,14 @@ SYSTEM_GLOSSARY_PATH = os.getenv(
 DOCUMENT_TEMPLATES_PATH = Path(
     os.getenv("DOCUMENT_TEMPLATES_PATH", str(TEMPLATE_ROOT / "document_templates.json"))
 )
+TRANSLATION_SOURCE_FIDELITY_GUARD = "\n".join(
+    [
+        "## Source Fidelity Guard",
+        "If the source text contains corrupted OCR text, unclear terms, invalid words, garbled characters, unusual terminology, mixed scripts, or ambiguous domain-specific terms, do NOT guess, normalize, autocorrect, or replace them with a more common term based only on context.",
+        "Do NOT infer specific meanings, product names, body parts, materials, processes, standards, model numbers, departments, or technical terms unless they are explicitly present in the source text or defined in the glossary.",
+        "If a term appears inconsistent or corrupted, preserve the original source term in the translation instead of substituting a plausible alternative. Glossary entries override this rule when they explicitly match the source term.",
+    ]
+)
 AZURE_BATCH_SYSTEM_PROMPT = os.getenv(
     "AZURE_BATCH_SYSTEM_PROMPT",
     "\n".join(
@@ -138,6 +146,7 @@ AZURE_BATCH_SYSTEM_PROMPT = os.getenv(
             "Preserve all numbers, codes, references, and formatting.",
             "Preserve sentence-ending punctuation; never replace punctuation marks such as 。, ., or commas with the digit 0.",
             "If the input is a standalone year, number, code, table number, figure number, symbol, unit, abbreviation, or non-sentence fragment, do not explain it. Return only the translated or preserved text. Examples: 2017年 -> 2017、2018年 -> 2018、N/A -> N/A",
+            TRANSLATION_SOURCE_FIDELITY_GUARD,
             "CRITICAL FORMATTING RULE 1: You MUST insert a line break strictly before every numbered item (e.g., '2.', '3.', '4.').",
             "CRITICAL FORMATTING RULE 2: You MUST keep all text within the same numbered item as ONE continuous paragraph. Do NOT add line breaks inside a step.",
             "Strictly prohibit duplicate words or expressions with identical meanings; if they appear, you must remove the redundancy and keep only one.",
@@ -160,6 +169,7 @@ DOC_TRANSLATE_SYSTEM_PROMPT = os.getenv(
             "Translate the provided HTML content accurately and literally.",
             "Preserve the original HTML structure, headings, lists, tables, links, image references, and attributes needed for rendering.",
             "Do NOT remove placeholders, file paths, URLs, tag structure, or embedded resource references.",
+            TRANSLATION_SOURCE_FIDELITY_GUARD,
             "Return only the translated HTML.",
         ]
     ),

@@ -149,6 +149,8 @@ def build_word_system_prompt_with_source(source_lang: str, target_lang: str) -> 
             f"Source language: {describe_target_language(source_lang)}.\n\n"
             f"{prompt}"
         )
+    if state.TRANSLATION_SOURCE_FIDELITY_GUARD not in prompt:
+        prompt = f"{prompt}\n\n{state.TRANSLATION_SOURCE_FIDELITY_GUARD}"
     return prompt
 
 

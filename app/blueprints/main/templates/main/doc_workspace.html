@@ -277,13 +277,14 @@
             actions.appendChild(cancelBtn);
           }
 
-          // if (job.structure_md_url) {
-          //   const mdLink = document.createElement("a");
-          //   mdLink.href = `${job.structure_md_url}?download=1`;
-          //   mdLink.textContent = "下載原始 MD";
-          //   mdLink.className = "ghost";
-          //   actions.appendChild(mdLink);
-          // }
+          if (job.structure_md_url) {
+            const mdLink = document.createElement("a");
+            mdLink.href = `${job.structure_md_url}?download=1`;
+            mdLink.textContent = "下載 OCR MD";
+            mdLink.className = "ghost";
+            mdLink.download = job.structure_download_name || `${job.job_id}_structure.md`;
+            actions.appendChild(mdLink);
+          }
 
           // if (job.structure_html_url) {
           //   const htmlLink = document.createElement("a");

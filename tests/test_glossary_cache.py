@@ -69,3 +69,12 @@ def test_glossary_entries_reverse_for_english_to_chinese():
     )
     assert "[[[GLOSSARY_TERM_0001::批號]]]" in protected
     assert glossary.restore_protected_glossary_terms(protected) == "批號"
+
+
+def test_restore_protected_glossary_terms_tolerates_extra_brackets():
+    text = "The purpose is [[[[GLOSSARY_TERM_0001::artificial hip joint]]] replacement."
+
+    assert (
+        glossary.restore_protected_glossary_terms(text)
+        == "The purpose is artificial hip joint replacement."
+    )
