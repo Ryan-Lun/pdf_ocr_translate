@@ -199,8 +199,10 @@ def test_production_startup_rejects_default_ocr_tunnel_urls(monkeypatch):
         create_app("production")
 
 
-def test_production_startup_rejects_default_pp_structure_tunnel_url(monkeypatch):
+def test_production_startup_rejects_implicit_default_pp_structure_url(monkeypatch):
     _configure_valid_production(monkeypatch)
+    monkeypatch.delenv("PP_STRUCTURE_URL", raising=False)
+    monkeypatch.delenv("TRITON_LAYOUT_URL", raising=False)
     monkeypatch.setattr(
         ProductionConfig,
         "PP_STRUCTURE_URL",
@@ -211,24 +213,36 @@ def test_production_startup_rejects_default_pp_structure_tunnel_url(monkeypatch)
         create_app("production")
 
 
-@pytest.mark.parametrize(
-    ("setting", "value"),
-    [
-        (
-            "TABLE_RECOGNTION_V2_URL",
-            "https://stale-service.trycloudflare.com/table-recognition",
-        ),
-        ("PP_STRUCTURE_URL", "https://old-layout.trycloudflare.com/layout-parsing"),
-    ],
-)
-def test_production_startup_rejects_any_development_tunnel_endpoint(
-    monkeypatch, setting, value
-):
+def test_production_startup_rejects_ocr_development_tunnel_endpoint(monkeypatch):
     _configure_valid_production(monkeypatch)
-    monkeypatch.setattr(ProductionConfig, setting, value)
+    monkeypatch.setattr(
+        ProductionConfig,
+        "TABLE_RECOGNTION_V2_URL",
+        "https://stale-service.trycloudflare.com/table-recognition",
+    )
 
-    with pytest.raises(RuntimeError, match=setting):
+    with pytest.raises(RuntimeError, match="TABLE_RECOGNTION_V2_URL"):
         create_app("production")
+
+
+def test_production_startup_allows_explicit_pp_structure_tunnel_endpoint(monkeypatch):
+    _configure_valid_production(monkeypatch)
+    _disable_runtime_initializers(monkeypatch)
+    monkeypatch.setenv(
+        "PP_STRUCTURE_URL",
+        "https://old-layout.trycloudflare.com/layout-parsing",
+    )
+    monkeypatch.setattr(
+        ProductionConfig,
+        "PP_STRUCTURE_URL",
+        "https://old-layout.trycloudflare.com/layout-parsing",
+    )
+
+    app = create_app("production")
+
+    assert app.config["PP_STRUCTURE_URL"] == (
+        "https://old-layout.trycloudflare.com/layout-parsing"
+    )
 
 
 def test_production_startup_has_no_insecure_bypass(monkeypatch):

@@ -115,13 +115,10 @@ def validate_startup_config(config: Any) -> None:
     if not pp_structure_url:
         errors.append("PP_STRUCTURE_URL is required in production.")
     elif pp_structure_url.rstrip("/") == DEFAULT_PP_STRUCTURE_URL.rstrip("/"):
-        errors.append(
-            "PP_STRUCTURE_URL must not use the development tunnel default in production."
-        )
-    elif _is_development_endpoint(pp_structure_url):
-        errors.append(
-            "PP_STRUCTURE_URL must not use a development tunnel endpoint in production."
-        )
+        if not _has_explicit_env("PP_STRUCTURE_URL", "TRITON_LAYOUT_URL"):
+            errors.append(
+                "PP_STRUCTURE_URL must not use the implicit development default in production."
+            )
 
     if errors:
         raise RuntimeError(
