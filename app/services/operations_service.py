@@ -4,7 +4,7 @@ import click
 from flask import current_app
 from sqlalchemy import func, select
 
-from . import auth_store, job_store
+from . import auth_store, job_store, jobs
 from .schema_control import missing_columns, missing_schema_groups, required_schema_groups
 
 
@@ -44,6 +44,11 @@ def run_seed_bootstrap(app, *, include_auth: bool | None = None) -> dict[str, ob
                 result["role_count"] = int(session.scalar(select(func.count()).select_from(auth_store.RoleRecord)) or 0)
             result["admin_count"] = auth_store.count_users_with_role(auth_store.ROLE_ADMIN)
         return result
+
+
+def run_job_state_sync(app, *, dry_run: bool = False) -> dict[str, object]:
+    with app.app_context():
+        return jobs.sync_legacy_jobs_from_disk(dry_run=dry_run)
 
 
 def register_operations_cli(app) -> None:
@@ -89,3 +94,31 @@ def register_operations_cli(app) -> None:
             f"roles={result.get('role_count', 0)} "
             f"admins={result.get('admin_count', 0)}"
         )
+
+    @app.cli.command("job-state-sync")
+    @click.option(
+        "--dry-run",
+        is_flag=True,
+        help="Report legacy job rows that would be created without writing SQL.",
+    )
+    def job_state_sync_command(dry_run: bool) -> None:
+        result = run_job_state_sync(current_app._get_current_object(), dry_run=dry_run)
+        click.echo(
+            "job_state_sync "
+            f"dry_run={'1' if dry_run else '0'} "
+            f"scanned={result['scanned']} "
+            f"created={result['created']} "
+            f"updated={result['updated']} "
+            f"would_create={result['would_create']} "
+            f"skipped={result['skipped']} "
+            f"errors={len(result['errors'])}"
+        )
+        for detail in result.get("details", []):
+            click.echo(
+                "job_state_sync_detail "
+                f"job_id={detail.get('job_id')} "
+                f"action={detail.get('action')} "
+                f"reason={detail.get('reason')}"
+            )
+        if result["errors"]:
+            raise click.ClickException("Some legacy jobs could not be synced.")

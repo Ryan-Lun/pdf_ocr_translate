@@ -97,6 +97,133 @@ def test_seed_bootstrap_uses_initial_admin_work_ids_config(ops_app):
     assert auth_store.get_effective_role_names("NE025") == (auth_store.ROLE_ADMIN,)
 
 
+def test_job_state_sync_dry_run_reports_legacy_job_without_creating_record(ops_app, tmp_path, monkeypatch):
+    from app.services import jobs, state
+
+    job_id = "1" * 32
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path)
+    monkeypatch.setattr(state, "PDF_OVERLAY_JOB_ROOT", tmp_path)
+    monkeypatch.setattr(state, "DOC_WORKSPACE_JOB_ROOT", tmp_path / "doc")
+    monkeypatch.setattr(state, "WORD_TRANSLATE_JOB_ROOT", tmp_path / "word")
+    monkeypatch.setattr(state, "TEMPLATE_JOB_ROOT", tmp_path / "templates")
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_type": "ocr_overlay",
+            "job_name": "legacy-sync",
+            "owner_work_id": "owner-a",
+        },
+    )
+
+    runner = ops_app.test_cli_runner()
+    result = runner.invoke(args=["job-state-sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "scanned=1" in result.output
+    assert "created=0" in result.output
+    assert "updated=0" in result.output
+    assert "would_create=1" in result.output
+    assert "skipped=0" in result.output
+    assert "1" * 32 in result.output
+    assert "would_create" in result.output
+    assert job_store.get_job(job_id) is None
+
+
+def test_job_state_sync_creates_missing_sql_record_and_reports_skips(ops_app, tmp_path, monkeypatch):
+    from app.services import jobs, state
+
+    legacy_job_id = "2" * 32
+    existing_job_id = "3" * 32
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path)
+    monkeypatch.setattr(state, "PDF_OVERLAY_JOB_ROOT", tmp_path)
+    monkeypatch.setattr(state, "DOC_WORKSPACE_JOB_ROOT", tmp_path / "doc")
+    monkeypatch.setattr(state, "WORD_TRANSLATE_JOB_ROOT", tmp_path / "word")
+    monkeypatch.setattr(state, "TEMPLATE_JOB_ROOT", tmp_path / "templates")
+    for job_id, name in ((legacy_job_id, "legacy-sync"), (existing_job_id, "existing-sql")):
+        job_dir = tmp_path / job_id
+        job_dir.mkdir()
+        jobs.write_job_meta(
+            job_dir,
+            {
+                "job_type": "ocr_overlay",
+                "job_name": name,
+                "owner_work_id": "owner-a",
+            },
+        )
+    job_store.create_job(
+        job_id=existing_job_id,
+        job_type="ocr_overlay",
+        stage="render",
+        status="completed",
+        job_name="sql-authoritative",
+        owner_work_id="owner-a",
+    )
+
+    runner = ops_app.test_cli_runner()
+    result = runner.invoke(args=["job-state-sync"])
+
+    assert result.exit_code == 0
+    assert "scanned=2" in result.output
+    assert "created=1" in result.output
+    assert "updated=0" in result.output
+    assert "would_create=0" in result.output
+    assert "skipped=1" in result.output
+    assert legacy_job_id in result.output
+    assert existing_job_id in result.output
+    assert "sql_exists_complete" in result.output
+    legacy_record = job_store.get_job(legacy_job_id)
+    existing_record = job_store.get_job(existing_job_id)
+    assert legacy_record is not None
+    assert legacy_record.job_name == "legacy-sync"
+    assert legacy_record.owner_work_id == "owner-a"
+    assert existing_record is not None
+    assert existing_record.job_name == "sql-authoritative"
+
+
+def test_job_state_sync_fills_incomplete_sql_fields_without_overriding_state(ops_app, tmp_path, monkeypatch):
+    from app.services import jobs, state
+
+    job_id = "4" * 32
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path)
+    monkeypatch.setattr(state, "PDF_OVERLAY_JOB_ROOT", tmp_path)
+    monkeypatch.setattr(state, "DOC_WORKSPACE_JOB_ROOT", tmp_path / "doc")
+    monkeypatch.setattr(state, "WORD_TRANSLATE_JOB_ROOT", tmp_path / "word")
+    monkeypatch.setattr(state, "TEMPLATE_JOB_ROOT", tmp_path / "templates")
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_type": "ocr_overlay",
+            "job_name": "legacy-filled-name",
+            "owner_work_id": "owner-a",
+        },
+    )
+    job_store.create_job(
+        job_id=job_id,
+        job_type="ocr_overlay",
+        stage="render",
+        status="completed",
+        progress=1.0,
+    )
+
+    runner = ops_app.test_cli_runner()
+    result = runner.invoke(args=["job-state-sync"])
+
+    assert result.exit_code == 0
+    assert "updated=1" in result.output
+    assert job_id in result.output
+    assert "filled_missing_sql_fields" in result.output
+    record = job_store.get_job(job_id)
+    assert record is not None
+    assert record.status == "completed"
+    assert record.stage == "render"
+    assert record.job_name == "legacy-filled-name"
+    assert record.owner_work_id == "owner-a"
+
+
 def test_configure_database_schema_updates_metadata_schema():
     original_schema = job_store.current_database_schema()
     try:

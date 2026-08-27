@@ -380,6 +380,7 @@ def create_job_state(
     )
     snapshot = dict(meta or {})
     if snapshot:
+        snapshot.setdefault("state_source", "sql")
         _write_json_snapshot(
             job_meta_path(job_dir_path),
             snapshot,
@@ -604,6 +605,380 @@ def infer_job_store_status(job_dir_path: Path, meta: dict[str, Any]) -> tuple[st
     return _job_store_status_for_ocr(job_dir_path, meta)
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _path_timestamp(path: Path) -> float:
+    try:
+        return float(path.stat().st_mtime)
+    except FileNotFoundError:
+        return 0.0
+
+
+def _collect_legacy_relevant_paths(job_dir_path: Path, job_type: str, meta: dict[str, Any]) -> list[Path]:
+    paths = [job_dir_path, job_meta_path(job_dir_path)]
+    if job_type in {"ocr_overlay", "template_source"}:
+        paths.extend(
+            [
+                job_dir_path / f"{job_dir_path.name}.pdf",
+                job_dir_path / "source.pdf",
+                job_dir_path / "overlay_debug.pdf",
+                job_dir_path / "edited.pdf",
+                batch_config_path(job_dir_path),
+                batch_status_path(job_dir_path),
+            ]
+        )
+    elif job_type == "doc_workspace":
+        paths.extend(
+            [
+                job_dir_path / "source.pdf",
+                job_dir_path / "structure" / "doc.md",
+                job_dir_path / "structure" / "doc.html",
+                job_dir_path / "translated" / "doc.translated.html",
+                job_dir_path / "output" / "output.docx",
+                doc_status_path(job_dir_path),
+            ]
+        )
+    elif job_type == "word_translate":
+        source_name = str(meta.get("source_filename") or "").strip()
+        if source_name:
+            paths.append(job_dir_path / source_name)
+        paths.append(job_dir_path / "output" / "output.docx")
+    return paths
+
+
+def _infer_legacy_timestamps(
+    job_dir_path: Path, job_type: str, meta: dict[str, Any], status: str
+) -> tuple[Any, Any, Any]:
+    paths = _collect_legacy_relevant_paths(job_dir_path, job_type, meta)
+    existing_ts = [_path_timestamp(path) for path in paths if path.exists()]
+    fallback_created = existing_ts[0] if existing_ts else 0.0
+    created_ts = 0.0
+
+    if job_type in {"ocr_overlay", "template_source"}:
+        created_ts = _path_timestamp(job_dir_path / f"{job_dir_path.name}.pdf") or _path_timestamp(
+            job_dir_path / "source.pdf"
+        )
+    elif job_type == "doc_workspace":
+        created_ts = _path_timestamp(job_dir_path / "source.pdf")
+    elif job_type == "word_translate":
+        source_name = str(meta.get("source_filename") or "").strip()
+        if source_name:
+            created_ts = _path_timestamp(job_dir_path / source_name)
+
+    if not created_ts:
+        created_ts = fallback_created or _path_timestamp(job_dir_path)
+
+    updated_ts = max(existing_ts) if existing_ts else created_ts
+    completed_ts = _safe_float(meta.get("processing_completed_at"), 0.0)
+    if not completed_ts and status in {"completed", "failed", "cancelled"}:
+        completed_ts = updated_ts
+
+    return (
+        datetime_from_timestamp(created_ts),
+        datetime_from_timestamp(updated_ts),
+        datetime_from_timestamp(completed_ts),
+    )
+
+
+def _build_legacy_payload(job_dir_path: Path, job_type: str, meta: dict[str, Any]) -> dict[str, Any] | None:
+    if job_type in {"ocr_overlay", "template_source"}:
+        batch_config = load_batch_config(job_dir_path) or {}
+        payload = {
+            "dpi": int(meta.get("dpi") or 200),
+            "start_page": int(meta.get("start_page") or 1),
+            "end_page": meta.get("end_page"),
+            "translate_source_lang": str(
+                batch_config.get("source_lang") or meta.get("source_lang") or "auto"
+            ),
+            "translate_target_lang": str(
+                batch_config.get("target_lang") or meta.get("target_lang") or "en"
+            ),
+            "translate_model": str(batch_config.get("model") or meta.get("translate_model") or ""),
+            "translate_mode": normalize_translate_mode(
+                batch_config.get("translate_mode") or meta.get("translate_mode")
+            ),
+            "keep_lang": str(meta.get("keep_lang") or "all"),
+            "enable_translate": bool(batch_config),
+            "document_mode": normalize_document_mode(
+                batch_config.get("document_mode") or meta.get("document_mode")
+            ),
+            "creator_name": str(meta.get("creator_name") or "").strip(),
+            "owner_work_id": str(meta.get("owner_work_id") or "").strip(),
+        }
+        if not payload["translate_model"]:
+            payload.pop("translate_model")
+        return payload
+
+    if job_type == "doc_workspace":
+        return {
+            "source_lang": str(meta.get("source_lang") or "auto"),
+            "target_lang": str(meta.get("target_lang") or "en"),
+            "creator_name": str(meta.get("creator_name") or "").strip(),
+            "owner_work_id": str(meta.get("owner_work_id") or "").strip(),
+        }
+
+    if job_type == "word_translate":
+        retain_terms = meta.get("retain_terms")
+        if not isinstance(retain_terms, list):
+            retain_terms = []
+        return {
+            "source_lang": str(meta.get("source_lang") or "auto"),
+            "target_lang": str(meta.get("target_lang") or "en"),
+            "retain_terms": [str(item) for item in retain_terms if str(item).strip()],
+            "creator_name": str(meta.get("creator_name") or "").strip(),
+            "owner_work_id": str(meta.get("owner_work_id") or "").strip(),
+        }
+
+    return None
+
+
+def _collect_legacy_artifacts(job_dir_path: Path, job_type: str, meta: dict[str, Any]) -> dict[str, str]:
+    artifacts: dict[str, str] = {}
+
+    def add_if_exists(artifact_type: str, rel_path: str) -> None:
+        if (job_dir_path / rel_path).exists():
+            artifacts[artifact_type] = rel_path
+
+    if job_type in {"ocr_overlay", "template_source"}:
+        source_name = str(meta.get("source_filename") or "").strip()
+        if source_name:
+            add_if_exists("source_pdf", source_name)
+        add_if_exists("source_pdf", "source.pdf")
+        add_if_exists("source_pdf", f"{job_dir_path.name}.pdf")
+        add_if_exists("debug_pdf", "overlay_debug.pdf")
+        add_if_exists("edited_pdf", "edited.pdf")
+    elif job_type == "doc_workspace":
+        add_if_exists("source_pdf", "source.pdf")
+        add_if_exists("structure_md", "structure/doc.md")
+        add_if_exists("structure_html", "structure/doc.html")
+        add_if_exists("translated_html", "translated/doc.translated.html")
+        add_if_exists("docx", "output/output.docx")
+    elif job_type == "word_translate":
+        source_name = str(meta.get("source_filename") or "").strip()
+        if source_name:
+            add_if_exists("source_docx", source_name)
+        add_if_exists("docx", "output/output.docx")
+
+    return artifacts
+
+
+def _sql_first_snapshot(meta: dict[str, Any]) -> bool:
+    return str(meta.get("state_source") or "").strip().lower() == "sql"
+
+
+def _missing_sql_field_updates(record: Any, job_dir_path: Path, job_type: str, meta: dict[str, Any]) -> dict[str, Any]:
+    batch_config = load_batch_config(job_dir_path) or {}
+    legacy_payload = _build_legacy_payload(job_dir_path, job_type, meta) or {}
+    updates: dict[str, Any] = {}
+
+    if not normalize_job_name(getattr(record, "job_name", None)):
+        job_name = normalize_job_name(meta.get("job_name"))
+        if job_name:
+            updates["job_name"] = job_name
+    if not str(getattr(record, "owner_work_id", "") or "").strip():
+        owner = str(meta.get("owner_work_id") or legacy_payload.get("owner_work_id") or "").strip()
+        if owner:
+            updates["owner_work_id"] = owner
+    if job_type in {"ocr_overlay", "template_source"} and not str(getattr(record, "target_lang", "") or "").strip():
+        target_lang = str(batch_config.get("target_lang") or meta.get("target_lang") or "").strip()
+        if target_lang:
+            updates["target_lang"] = target_lang
+    if job_type in {"ocr_overlay", "template_source"} and not str(getattr(record, "document_mode", "") or "").strip():
+        raw_document_mode = batch_config.get("document_mode") or meta.get("document_mode")
+        if raw_document_mode:
+            updates["document_mode"] = normalize_document_mode(raw_document_mode)
+    if not str(getattr(record, "stage", "") or "").strip():
+        _status, stage = infer_job_store_status(job_dir_path, meta)
+        updates["stage"] = stage
+    return updates
+
+
+def sync_legacy_jobs_from_disk(*, dry_run: bool = False) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "scanned": 0,
+        "created": 0,
+        "updated": 0,
+        "would_create": 0,
+        "skipped": 0,
+        "errors": [],
+        "details": [],
+    }
+    for root in iter_job_roots():
+        if not root.exists():
+            continue
+        for job_dir_path in sorted(root.iterdir()):
+            if not job_dir_path.is_dir() or not safe_job_id(job_dir_path.name):
+                continue
+            result["scanned"] += 1
+            try:
+                detail = _sync_legacy_job_from_disk(job_dir_path, dry_run=dry_run)
+            except Exception as exc:
+                error_detail = {"job_id": job_dir_path.name, "action": "error", "reason": str(exc)}
+                result["errors"].append(error_detail)
+                result["details"].append(error_detail)
+                continue
+            result[detail["action"]] += 1
+            result["details"].append(detail)
+    return result
+
+
+def _sync_legacy_job_from_disk(job_dir_path: Path, *, dry_run: bool = False) -> dict[str, Any]:
+    job_id = job_dir_path.name
+    meta = load_job_meta(job_dir_path) or {}
+    job_type = str(meta.get("job_type") or get_job_type(job_dir_path))
+    existing = job_store.get_job(job_id)
+    if existing is not None:
+        updates = _missing_sql_field_updates(existing, job_dir_path, job_type, meta)
+        if dry_run and updates:
+            return {"job_id": job_id, "action": "updated", "reason": "would_fill_missing_sql_fields"}
+        if updates:
+            job_store.update_job(job_id, **updates)
+            return {"job_id": job_id, "action": "updated", "reason": "filled_missing_sql_fields"}
+        return {"job_id": job_id, "action": "skipped", "reason": "sql_exists_complete"}
+
+    if _sql_first_snapshot(meta):
+        return {"job_id": job_id, "action": "skipped", "reason": "sql_first_snapshot_missing_sql"}
+
+    status, stage = infer_job_store_status(job_dir_path, meta)
+    if dry_run:
+        return {"job_id": job_id, "action": "would_create", "reason": "missing_sql_record"}
+
+    batch_config = load_batch_config(job_dir_path) or {}
+    batch_status = load_batch_status(job_dir_path) or {}
+    created_at, updated_at, completed_at = _infer_legacy_timestamps(
+        job_dir_path, job_type, meta, status
+    )
+    started_at = datetime_from_timestamp(_safe_float(meta.get("processing_started_at"), 0.0))
+    target_lang = str(batch_config.get("target_lang") or meta.get("target_lang") or "").strip() or None
+    document_mode = (
+        normalize_document_mode(batch_config.get("document_mode") or meta.get("document_mode"))
+        if job_type in {"ocr_overlay", "template_source"}
+        else None
+    )
+    error_message = str(meta.get("error") or batch_status.get("error") or "").strip() or None
+    job_store.create_job(
+        job_id=job_id,
+        job_type=job_type,
+        stage=stage,
+        status=status,
+        progress=_safe_float(meta.get("progress"), 100.0 if status == "completed" else 0.0),
+        job_name=normalize_job_name(meta.get("job_name")),
+        owner_work_id=str(meta.get("owner_work_id") or "").strip() or None,
+        target_lang=target_lang,
+        document_mode=document_mode,
+        payload=_build_legacy_payload(job_dir_path, job_type, meta),
+        error_message=error_message,
+        started_at=started_at,
+        completed_at=completed_at,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+    job_store.replace_artifacts(job_id, _collect_legacy_artifacts(job_dir_path, job_type, meta))
+    return {"job_id": job_id, "action": "created", "reason": "missing_sql_record"}
+
+
+def _legacy_artifact_url(job_id: str, artifacts: dict[str, str], artifact_type: str) -> str | None:
+    file_path = artifacts.get(artifact_type)
+    if not file_path:
+        return None
+    return url_for("jobs.job_file", job_id=job_id, filename=file_path)
+
+
+def _build_legacy_job_list_item(job_dir_path: Path) -> dict[str, Any] | None:
+    meta = load_job_meta(job_dir_path) or {}
+    job_id = job_dir_path.name
+    job_type = str(meta.get("job_type") or get_job_type(job_dir_path))
+    status, stage = infer_job_store_status(job_dir_path, meta)
+    created_at, updated_at, completed_at = _infer_legacy_timestamps(
+        job_dir_path, job_type, meta, status
+    )
+    created_ts = timestamp_from_datetime(created_at) or job_timestamp(job_dir_path)
+    updated_ts = timestamp_from_datetime(updated_at) or created_ts
+    started_ts = (
+        timestamp_from_datetime(
+            datetime_from_timestamp(_safe_float(meta.get("processing_started_at"), 0.0))
+        )
+        or created_ts
+    )
+    completed_ts = timestamp_from_datetime(completed_at)
+    if completed_ts is not None:
+        duration_seconds = max(0.0, completed_ts - started_ts)
+    elif status == "queued":
+        duration_seconds = 0.0
+    else:
+        duration_seconds = max(0.0, time.time() - started_ts)
+
+    job_name = normalize_job_name(meta.get("job_name"))
+    creator_name = str(meta.get("creator_name") or "").strip() or None
+    owner_work_id = str(meta.get("owner_work_id") or "").strip() or None
+    status_code, status_label = map_status_display(job_type, status, stage)
+    artifacts = _collect_legacy_artifacts(job_dir_path, job_type, meta)
+    common = {
+        "job_id": job_id,
+        "job_type": job_type,
+        "legacy_state": True,
+        "job_status": status,
+        "job_stage": stage,
+        "created_at": created_ts,
+        "updated_at": updated_ts,
+        "duration_seconds": duration_seconds,
+        "ocr_duration_seconds": None,
+        "translate_duration_seconds": None,
+        "status_code": status_code,
+        "status_label": status_label,
+        "status": status_label,
+        "job_name": job_name,
+        "creator_name": creator_name,
+        "owner_work_id": owner_work_id,
+        "active_editors": [],
+        "last_warning": sanitize_job_message(meta.get("last_warning")),
+        "last_warning_at": meta.get("last_warning_at"),
+        "recent_warnings": [],
+        "error": sanitize_job_message(meta.get("error")),
+    }
+
+    if job_type == "doc_workspace":
+        return {
+            **common,
+            "download_name": build_docx_name(job_id, job_name),
+            "structure_download_name": build_doc_markdown_name(job_id, job_name, translated=False),
+            "source_pdf_url": _legacy_artifact_url(job_id, artifacts, "source_pdf"),
+            "structure_md_url": _legacy_artifact_url(job_id, artifacts, "structure_md"),
+            "structure_html_url": _legacy_artifact_url(job_id, artifacts, "structure_html"),
+            "translated_html_url": _legacy_artifact_url(job_id, artifacts, "translated_html"),
+            "docx_url": _legacy_artifact_url(job_id, artifacts, "docx"),
+        }
+
+    if job_type == "word_translate":
+        return {
+            **common,
+            "progress": _safe_float(meta.get("progress"), 0.0),
+            "avg_quality": _safe_float(meta.get("avg_quality"), 0.0),
+            "target_lang": meta.get("target_lang"),
+            "download_name": build_docx_name(job_id, job_name),
+            "source_docx_url": _legacy_artifact_url(job_id, artifacts, "source_docx"),
+            "docx_url": _legacy_artifact_url(job_id, artifacts, "docx"),
+        }
+
+    batch_status = load_batch_status(job_dir_path) or {}
+    return {
+        **common,
+        "template_source": job_type == "template_source",
+        "document_mode": normalize_document_mode(meta.get("document_mode")),
+        "translate_mode": normalize_translate_mode(meta.get("translate_mode")),
+        "error": sanitize_job_message(meta.get("error") or batch_status.get("error")),
+        "download_name": build_download_name(job_id, job_name),
+        "editor_url": url_for("editor.editor", job_id=job_id),
+        "debug_pdf_url": _legacy_artifact_url(job_id, artifacts, "debug_pdf"),
+        "edited_pdf_url": _legacy_artifact_url(job_id, artifacts, "edited_pdf"),
+    }
+
+
 def build_jobs_list(
     job_type: str | None = None,
     owner_work_id: str | None = None,
@@ -616,6 +991,7 @@ def build_jobs_list(
         return jobs
     records = job_store.list_jobs(job_type)
     record_ids = [record.job_id for record in records]
+    record_id_set = set(record_ids)
     artifacts_by_job_id = job_store.list_artifacts(record_ids)
     warning_events_by_job_id = job_store.list_recent_events(record_ids, event_type="warning", limit_per_job=3)
     should_include_active_editors = include_all if include_active_editors is None else bool(include_active_editors)
@@ -638,10 +1014,13 @@ def build_jobs_list(
         current_job_type = record.job_type
         job_id = record.job_id
         payload = job_store.deserialize_payload(record)
+        disk_meta = load_job_meta(job_dir(job_id)) or {}
         recent_warnings = _serialize_warning_events(warning_events_by_job_id.get(job_id, []))
         artifacts = artifacts_by_job_id.get(job_id, {})
         active_editors = active_editors_by_job_id.get(job_id, [])
-        record_owner_work_id = str(record.owner_work_id or payload.get("owner_work_id") or "").strip()
+        record_owner_work_id = str(
+            record.owner_work_id or payload.get("owner_work_id") or disk_meta.get("owner_work_id") or ""
+        ).strip()
         if not include_all and record_owner_work_id != normalized_owner:
             continue
         is_template_source = current_job_type == "template_source"
@@ -656,8 +1035,8 @@ def build_jobs_list(
             duration_seconds = 0.0
         else:
             duration_seconds = max(0.0, time.time() - started_at)
-        job_name = normalize_job_name(record.job_name)
-        creator_name = str(payload.get("creator_name") or "").strip() or None
+        job_name = normalize_job_name(record.job_name) or normalize_job_name(disk_meta.get("job_name"))
+        creator_name = str(payload.get("creator_name") or disk_meta.get("creator_name") or "").strip() or None
 
         if current_job_type == "doc_workspace":
             status_code, status_label = map_status_display(
@@ -669,6 +1048,7 @@ def build_jobs_list(
                 {
                     "job_id": job_id,
                     "job_type": current_job_type,
+                    "legacy_state": False,
                     "job_status": record.status,
                     "job_stage": record.stage,
                     "created_at": created_at,
@@ -706,6 +1086,7 @@ def build_jobs_list(
                 {
                     "job_id": job_id,
                     "job_type": current_job_type,
+                    "legacy_state": False,
                     "job_status": record.status,
                     "job_stage": record.stage,
                     "created_at": created_at,
@@ -758,6 +1139,7 @@ def build_jobs_list(
             {
                 "job_id": job_id,
                 "job_type": current_job_type,
+                "legacy_state": False,
                 "job_status": record.status,
                 "job_stage": record.stage,
                 "created_at": created_at,
@@ -789,6 +1171,20 @@ def build_jobs_list(
                 "edited_pdf_url": _artifact_url(job_id, artifacts, "edited_pdf"),
                 }
             )
+    for job_dir_path in iter_job_dirs(job_type, include_templates=job_type == "template_source"):
+        if job_dir_path.name in record_id_set:
+            continue
+        legacy_meta = load_job_meta(job_dir_path) or {}
+        if _sql_first_snapshot(legacy_meta):
+            continue
+        legacy_item = _build_legacy_job_list_item(job_dir_path)
+        if legacy_item is None:
+            continue
+        legacy_owner = str(legacy_item.get("owner_work_id") or "").strip()
+        if not include_all and legacy_owner != normalized_owner:
+            continue
+        jobs.append(legacy_item)
+
     jobs.sort(key=lambda item: item["updated_at"], reverse=True)
     return jobs
 
@@ -823,6 +1219,20 @@ def list_accessible_job_ids(
             accessible.add(job_id)
             continue
         owner = str(record.owner_work_id or "").strip() or get_job_owner_work_id(job_id)
+        if owner == normalized_owner:
+            accessible.add(job_id)
+
+    for job_dir_path in iter_job_dirs(job_type, include_templates=job_type == "template_source"):
+        job_id = job_dir_path.name
+        if job_id in accessible or job_store.get_job(job_id) is not None:
+            continue
+        if include_all:
+            accessible.add(job_id)
+            continue
+        meta = load_job_meta(job_dir_path) or {}
+        if _sql_first_snapshot(meta):
+            continue
+        owner = str(meta.get("owner_work_id") or "").strip()
         if owner == normalized_owner:
             accessible.add(job_id)
     return accessible

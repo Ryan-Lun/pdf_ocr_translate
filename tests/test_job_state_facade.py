@@ -113,6 +113,137 @@ def test_build_jobs_list_prefers_sql_state_over_stale_snapshot(app, tmp_path, mo
         _delete_job(job_id)
 
 
+def test_build_jobs_list_displays_legacy_json_job_without_sql_record(app, tmp_path, monkeypatch):
+    job_id = _job_id()
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path)
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_type": "ocr_overlay",
+            "job_name": "legacy-json",
+            "owner_work_id": "owner-a",
+            "progress": 0.25,
+            "error": "legacy failure",
+        },
+    )
+    jobs.batch_status_path(job_dir).write_text(
+        '{"status":"failed","error":"legacy batch failure"}',
+        encoding="utf-8",
+    )
+
+    with app.test_request_context():
+        listed = jobs.build_jobs_list(owner_work_id="owner-a")
+
+    item = next(job for job in listed if job["job_id"] == job_id)
+    assert item["legacy_state"] is True
+    assert item["job_status"] == "failed"
+    assert item["job_stage"] == "translate"
+    assert item["status_code"] == "failed"
+    assert item["job_name"] == "legacy-json"
+    assert item["owner_work_id"] == "owner-a"
+    assert item["error"] == "legacy failure"
+    assert job_store.get_job(job_id) is None
+
+
+def test_build_jobs_list_legacy_fallback_does_not_override_new_sql_job(app, tmp_path, monkeypatch):
+    job_id = _job_id()
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path)
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_type": "ocr_overlay",
+            "job_name": "stale-json",
+            "owner_work_id": "owner-a",
+            "progress": 0.25,
+            "error": "stale json error",
+        },
+    )
+    job_store.create_job(
+        job_id=job_id,
+        job_type="ocr_overlay",
+        stage="render",
+        status="completed",
+        progress=1.0,
+        job_name="sql-new-job",
+        owner_work_id="owner-a",
+    )
+
+    try:
+        with app.test_request_context():
+            listed = jobs.build_jobs_list(owner_work_id="owner-a")
+
+        item = next(job for job in listed if job["job_id"] == job_id)
+        assert item["legacy_state"] is False
+        assert item["job_status"] == "completed"
+        assert item["job_stage"] == "render"
+        assert item["job_name"] == "sql-new-job"
+        assert item["error"] is None
+    finally:
+        _delete_job(job_id)
+
+
+def test_build_jobs_list_uses_legacy_metadata_only_for_incomplete_sql_fields(app, tmp_path, monkeypatch):
+    job_id = _job_id()
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path)
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_type": "ocr_overlay",
+            "job_name": "legacy-name",
+            "owner_work_id": "owner-a",
+            "error": "stale json error",
+        },
+    )
+    job_store.create_job(
+        job_id=job_id,
+        job_type="ocr_overlay",
+        stage="render",
+        status="completed",
+        progress=1.0,
+    )
+
+    try:
+        with app.test_request_context():
+            listed = jobs.build_jobs_list(owner_work_id="owner-a")
+
+        item = next(job for job in listed if job["job_id"] == job_id)
+        assert item["legacy_state"] is False
+        assert item["job_status"] == "completed"
+        assert item["job_stage"] == "render"
+        assert item["job_name"] == "legacy-name"
+        assert item["owner_work_id"] == "owner-a"
+        assert item["error"] is None
+    finally:
+        _delete_job(job_id)
+
+
+def test_build_jobs_list_does_not_fallback_for_sql_first_snapshot_without_sql_record(app, tmp_path, monkeypatch):
+    job_id = _job_id()
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path)
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    jobs.create_job_state(
+        job_dir,
+        job_type="ocr_overlay",
+        stage="queued",
+        job_name="sql-first-missing",
+        owner_work_id="owner-a",
+        meta={"job_type": "ocr_overlay", "job_name": "sql-first-missing", "owner_work_id": "owner-a"},
+    )
+    _delete_job(job_id)
+
+    with app.test_request_context():
+        listed = jobs.build_jobs_list(owner_work_id="owner-a")
+
+    assert all(job["job_id"] != job_id for job in listed)
+
+
 def test_write_batch_status_updates_sql_before_snapshot_failure(app, tmp_path, monkeypatch):
     job_id = _job_id()
     job_dir = tmp_path / job_id

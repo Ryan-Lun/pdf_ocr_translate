@@ -341,10 +341,15 @@ def create_job(
     target_lang: str | None = None,
     document_mode: str | None = None,
     payload: dict[str, Any] | None = None,
+    error_message: str | None = None,
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
+    created_at: datetime | None = None,
+    updated_at: datetime | None = None,
 ) -> None:
     now = utcnow()
+    created = created_at or now
+    updated = updated_at or created
     with session_scope() as session:
         session.add(
             JobRecord(
@@ -358,14 +363,14 @@ def create_job(
                 target_lang=target_lang,
                 document_mode=document_mode,
                 payload_json=_serialize_payload(payload),
-                error_message=None,
+                error_message=error_message,
                 cancel_requested=False,
                 retry_count=0,
                 worker_id=None,
                 started_at=started_at,
                 completed_at=completed_at,
-                created_at=now,
-                updated_at=now,
+                created_at=created,
+                updated_at=updated,
             )
         )
 
