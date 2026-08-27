@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from flask import Blueprint, abort, request, send_file, send_from_directory
 from flask_login import current_user
+from werkzeug.security import safe_join
 
 from ...services import authz_service, document_templates, jobs
 
@@ -22,11 +25,22 @@ def job_file(job_id: str, filename: str):
     job_dir = jobs.job_dir(job_id)
     if not job_dir.exists():
         abort(404)
-    is_template_source = document_templates.get_document_template_by_job(job_id, include_all=True) is not None
-    if not is_template_source and not authz_service.can_access_job(current_user, job_id):
+    is_template_source = (
+        document_templates.get_document_template_by_job(job_id, include_all=True)
+        is not None
+    )
+    if is_template_source:
+        if not authz_service.can_access_template_source_artifact(
+            current_user, job_id, filename
+        ):
+            abort(403)
+    elif not authz_service.can_access_job(current_user, job_id):
         abort(403)
-    file_path = job_dir / filename
-    if not file_path.exists():
+    safe_path = safe_join(job_dir, filename)
+    if safe_path is None:
+        abort(404)
+    file_path = Path(safe_path)
+    if not file_path.exists() or not file_path.is_file():
         abort(404)
     download_flag = str(request.args.get("download", "")).lower()
     if download_flag in {"1", "true", "yes"}:

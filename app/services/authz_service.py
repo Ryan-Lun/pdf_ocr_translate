@@ -53,6 +53,35 @@ def owner_access_enabled() -> bool:
     return True
 
 
+TEMPLATE_SOURCE_SHARED_PREVIEW_FILES = {"edited.pdf"}
+
+
+def _normalize_artifact_path(filename: object) -> str:
+    parts = []
+    for part in str(filename or "").replace("\\", "/").split("/"):
+        cleaned = part.strip()
+        if not cleaned or cleaned in {".", ".."}:
+            return ""
+        parts.append(cleaned)
+    return "/".join(parts)
+
+
+def is_shared_template_source_preview(filename: object) -> bool:
+    return _normalize_artifact_path(filename) in TEMPLATE_SOURCE_SHARED_PREVIEW_FILES
+
+
+def can_access_template_source_artifact(
+    user: Any, job_id: str, filename: object
+) -> bool:
+    if not has_app_context() or not current_app.config.get("AUTH_ENABLED", False):
+        return True
+    if not owner_access_enabled():
+        return True
+    if can_access_job(user, job_id):
+        return True
+    return is_shared_template_source_preview(filename)
+
+
 def can_access_owner(user: Any, owner_work_id: object) -> bool:
     if not owner_access_enabled():
         return True
