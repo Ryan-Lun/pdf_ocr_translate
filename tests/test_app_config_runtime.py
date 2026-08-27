@@ -12,8 +12,34 @@ def test_production_config_disables_startup_schema_management():
 
 def test_production_does_not_run_startup_schema_mutations(monkeypatch):
     with monkeypatch.context() as scoped:
+        scoped.setattr(ProductionConfig, "SECRET_KEY", "production-secret-value")
         scoped.setattr(ProductionConfig, "DATABASE_URL", "mssql+pyodbc://unit-test")
         scoped.setattr(ProductionConfig, "AUTH_ENABLED", True)
+        scoped.setattr(ProductionConfig, "AUTH_STUB_ENABLED", False)
+        scoped.setattr(ProductionConfig, "SESSION_COOKIE_SECURE", True)
+        scoped.setattr(ProductionConfig, "SESSION_COOKIE_HTTPONLY", True)
+        scoped.setattr(ProductionConfig, "LDAP_HOST", "ldap.example.com")
+        scoped.setattr(ProductionConfig, "LDAP_BASE_DN", "DC=example,DC=com")
+        scoped.setattr(ProductionConfig, "LDAP_BIND_DN", "CN=bind,DC=example,DC=com")
+        scoped.setattr(ProductionConfig, "LDAP_BIND_PASSWORD", "bind-password")
+        scoped.setattr(
+            ProductionConfig, "OPENAI_BASE_URL", "https://azure.example.com/openai/v1/"
+        )
+        scoped.setattr(ProductionConfig, "OPENAI_API_KEY", "test-key")
+        scoped.setattr(ProductionConfig, "AZURE_BATCH_MODEL", "batch-prod-deployment")
+        scoped.setattr(ProductionConfig, "DOC_TRANSLATE_MODEL", "doc-prod-deployment")
+        scoped.setattr(
+            ProductionConfig, "PDF_REALTIME_TRANSLATE_MODEL", "realtime-prod-deployment"
+        )
+        scoped.setattr(ProductionConfig, "WORD_TRANSLATE_MODEL", "word-prod-deployment")
+        scoped.setattr(
+            ProductionConfig,
+            "TABLE_RECOGNTION_V2_URL",
+            "https://ocr.example.com/table-recognition",
+        )
+        scoped.setattr(
+            ProductionConfig, "PP_STRUCTURE_URL", "https://ocr.example.com/layout-parsing"
+        )
 
         class FakeEngine:
             pass
