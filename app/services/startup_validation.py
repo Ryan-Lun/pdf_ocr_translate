@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -10,6 +11,8 @@ DEFAULT_TABLE_RECOGNTION_V2_URL = (
 DEFAULT_PP_STRUCTURE_URL = (
     "https://writing-coordination-farm-approximately.trycloudflare.com/layout-parsing"
 )
+DEFAULT_BATCH_TRANSLATE_DEPLOYMENT = "batch-o3-mini"
+DEFAULT_WORD_TRANSLATE_MODEL = "gpt-4o-mini"
 
 
 def _clean(value: object) -> str:
@@ -22,6 +25,10 @@ def _is_production(config: Any) -> bool:
 
 def _is_enabled(config: Any, key: str) -> bool:
     return bool(config.get(key, False))
+
+
+def _has_explicit_env(*keys: str) -> bool:
+    return any(_clean(os.getenv(key)) for key in keys)
 
 
 def _is_development_endpoint(value: str) -> bool:
@@ -76,10 +83,21 @@ def validate_startup_config(config: Any) -> None:
     ):
         if not _clean(config.get(key)):
             errors.append(f"{key} is required in production.")
-    if _clean(config.get("AZURE_BATCH_MODEL")) == "batch-o3-mini":
-        errors.append("AZURE_BATCH_MODEL must not use the development default in production.")
-    if _clean(config.get("WORD_TRANSLATE_MODEL")) == "gpt-4o-mini":
-        errors.append("WORD_TRANSLATE_MODEL must not use the development default in production.")
+    if _clean(config.get("AZURE_BATCH_MODEL")) == DEFAULT_BATCH_TRANSLATE_DEPLOYMENT:
+        if not _has_explicit_env("BATCH_TRANSLATE_DEPLOYMENT", "AZURE_BATCH_MODEL"):
+            errors.append(
+                "AZURE_BATCH_MODEL must not use the implicit development default in production."
+            )
+    if _clean(config.get("WORD_TRANSLATE_MODEL")) == DEFAULT_WORD_TRANSLATE_MODEL:
+        if not _has_explicit_env(
+            "WORD_TRANSLATE_DEPLOYMENT",
+            "WORD_TRANSLATE_MODEL",
+            "AZURE_OPENAI_TRANSLATION_DEPLOYMENT",
+            "AZURE_OPENAI_CHAT_DEPLOYMENT",
+        ):
+            errors.append(
+                "WORD_TRANSLATE_MODEL must not use the implicit development default in production."
+            )
 
     table_url = _clean(config.get("TABLE_RECOGNTION_V2_URL"))
     if not table_url:

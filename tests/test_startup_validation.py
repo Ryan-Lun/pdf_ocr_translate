@@ -125,8 +125,6 @@ def test_production_startup_rejects_enabled_group_gate_without_allowed_group(mon
         ("DOC_TRANSLATE_MODEL", "", "DOC_TRANSLATE_MODEL"),
         ("PDF_REALTIME_TRANSLATE_MODEL", "", "PDF_REALTIME_TRANSLATE_MODEL"),
         ("WORD_TRANSLATE_MODEL", "", "WORD_TRANSLATE_MODEL"),
-        ("AZURE_BATCH_MODEL", "batch-o3-mini", "AZURE_BATCH_MODEL"),
-        ("WORD_TRANSLATE_MODEL", "gpt-4o-mini", "WORD_TRANSLATE_MODEL"),
         ("TABLE_RECOGNTION_V2_URL", "", "TABLE_RECOGNTION_V2_URL"),
         ("PP_STRUCTURE_URL", "", "PP_STRUCTURE_URL"),
     ],
@@ -139,6 +137,54 @@ def test_production_startup_rejects_missing_external_service_settings(
 
     with pytest.raises(RuntimeError, match=message):
         create_app("production")
+
+
+def test_production_startup_rejects_implicit_default_batch_deployment(monkeypatch):
+    _configure_valid_production(monkeypatch)
+    monkeypatch.delenv("BATCH_TRANSLATE_DEPLOYMENT", raising=False)
+    monkeypatch.delenv("AZURE_BATCH_MODEL", raising=False)
+    monkeypatch.setattr(ProductionConfig, "AZURE_BATCH_MODEL", "batch-o3-mini")
+
+    with pytest.raises(RuntimeError, match="AZURE_BATCH_MODEL"):
+        create_app("production")
+
+
+def test_production_startup_allows_explicit_batch_deployment_named_like_default(
+    monkeypatch,
+):
+    _configure_valid_production(monkeypatch)
+    _disable_runtime_initializers(monkeypatch)
+    monkeypatch.setenv("BATCH_TRANSLATE_DEPLOYMENT", "batch-o3-mini")
+    monkeypatch.setattr(ProductionConfig, "AZURE_BATCH_MODEL", "batch-o3-mini")
+
+    app = create_app("production")
+
+    assert app.config["AZURE_BATCH_MODEL"] == "batch-o3-mini"
+
+
+def test_production_startup_rejects_implicit_default_word_model(monkeypatch):
+    _configure_valid_production(monkeypatch)
+    monkeypatch.delenv("WORD_TRANSLATE_DEPLOYMENT", raising=False)
+    monkeypatch.delenv("WORD_TRANSLATE_MODEL", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_TRANSLATION_DEPLOYMENT", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_CHAT_DEPLOYMENT", raising=False)
+    monkeypatch.setattr(ProductionConfig, "WORD_TRANSLATE_MODEL", "gpt-4o-mini")
+
+    with pytest.raises(RuntimeError, match="WORD_TRANSLATE_MODEL"):
+        create_app("production")
+
+
+def test_production_startup_allows_explicit_word_deployment_named_like_default(
+    monkeypatch,
+):
+    _configure_valid_production(monkeypatch)
+    _disable_runtime_initializers(monkeypatch)
+    monkeypatch.setenv("WORD_TRANSLATE_DEPLOYMENT", "gpt-4o-mini")
+    monkeypatch.setattr(ProductionConfig, "WORD_TRANSLATE_MODEL", "gpt-4o-mini")
+
+    app = create_app("production")
+
+    assert app.config["WORD_TRANSLATE_MODEL"] == "gpt-4o-mini"
 
 
 def test_production_startup_rejects_default_ocr_tunnel_urls(monkeypatch):
