@@ -1116,42 +1116,43 @@ def enqueue_word_job_from_upload(
     shutil.copy2(source_docx, source_path)
     retain_terms = _parse_retain_terms(retain_terms_raw)
     custom_system_prompt = str(system_prompt or "").strip()
-    jobs.write_job_meta(
+    owner = str(owner_work_id or "").strip()
+    meta = {
+        "job_name": display_name,
+        "job_type": "word_translate",
+        "processing_started_at": now_ts,
+        "word_stage": "uploaded",
+        "source_lang": source_lang,
+        "target_lang": target_lang,
+        "creator_name": creator_name,
+        "owner_work_id": owner,
+        "retain_terms": retain_terms,
+        "system_prompt": custom_system_prompt,
+        "source_filename": safe_name,
+        "progress": 0.0,
+        "avg_quality": 0.0,
+    }
+    payload = {
+        "source_lang": source_lang,
+        "target_lang": target_lang,
+        "creator_name": creator_name,
+        "owner_work_id": owner,
+        "retain_terms": retain_terms,
+        "system_prompt": custom_system_prompt,
+        "source_filename": safe_name,
+        "processing_started_at": now_ts,
+        "avg_quality": 0.0,
+    }
+    jobs.create_job_state(
         job_dir,
-        {
-            "job_name": display_name,
-            "job_type": "word_translate",
-            "processing_started_at": now_ts,
-            "word_stage": "uploaded",
-            "source_lang": source_lang,
-            "target_lang": target_lang,
-            "creator_name": creator_name,
-            "owner_work_id": str(owner_work_id or "").strip(),
-            "retain_terms": retain_terms,
-            "system_prompt": custom_system_prompt,
-            "source_filename": safe_name,
-            "progress": 0.0,
-            "avg_quality": 0.0,
-        },
-    )
-    jobs.job_store.create_job(
-        job_id=job_id,
         job_type="word_translate",
         stage="queued",
         job_name=display_name,
-        owner_work_id=str(owner_work_id or "").strip() or None,
+        owner_work_id=owner or None,
         target_lang=target_lang,
-        payload={
-            "source_lang": source_lang,
-            "target_lang": target_lang,
-            "creator_name": creator_name,
-            "owner_work_id": str(owner_work_id or "").strip(),
-            "retain_terms": retain_terms,
-            "system_prompt": custom_system_prompt,
-            "source_filename": safe_name,
-            "processing_started_at": now_ts,
-            "avg_quality": 0.0,
-        },
+        payload=payload,
+        meta=meta,
+        started_at=now_ts,
     )
     jobs.job_store.register_artifact(job_id, "source_docx", safe_name)
     jobs.notify_jobs_update()

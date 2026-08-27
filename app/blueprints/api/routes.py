@@ -315,7 +315,7 @@ def job_data(job_id: str):
         "edited_pdf_url": url_for("jobs.job_file", job_id=job_id, filename="edited.pdf")
         if edited_pdf_path.exists()
         else None,
-        "batch_status": jobs.load_batch_status(job_dir),
+        "batch_status": jobs.build_batch_status(job_dir),
         "document_mode": document_mode,
         "translate_mode": jobs.normalize_translate_mode(config.get("translate_mode")),
         "glossary": glossary.load_global_glossary(),
@@ -356,33 +356,17 @@ def batch_translate(job_id: str):
     job_dir = jobs.job_dir(job_id)
     if not job_dir.exists():
         abort(404)
-    status = jobs.load_batch_status(job_dir)
-    if status and status.get("status") in {"running", "queued"}:
+    status = jobs.build_batch_status(job_dir)
+    if jobs.batch_translation_active(job_dir):
         return jsonify({"ok": True, "status": status})
     config = jobs.load_batch_config(job_dir) or {}
-    record = jobs.job_store.get_job(job_id)
-    payload = jobs.job_store.deserialize_payload(record)
-    payload["resume_translate_only"] = True
-    payload["translate_mode"] = jobs.normalize_translate_mode(
-        config.get("translate_mode") or payload.get("translate_mode")
-    )
-    jobs.job_store.update_job(
-        job_id,
-        status="queued",
-        stage="translate",
-        payload_json=json.dumps(payload, ensure_ascii=False),
-        error_message=None,
-        completed_at=None,
-    )
-    jobs.write_batch_status(
+    status_payload = jobs.queue_batch_translation(
         job_dir,
-        "queued",
-        job_id=job_id,
         model=config.get("model"),
         target_lang=config.get("target_lang"),
-        translate_mode=payload.get("translate_mode"),
+        translate_mode=config.get("translate_mode"),
     )
-    return jsonify({"ok": True, "status": {"status": "queued"}})
+    return jsonify({"ok": True, "status": status_payload})
 
 
 @api_bp.route(
@@ -440,13 +424,7 @@ def batch_status(job_id: str):
     job_dir = jobs.job_dir(job_id)
     if not job_dir.exists():
         abort(404)
-    record = jobs.job_store.get_job(job_id)
-    status = jobs.load_batch_status(job_dir) or {"status": "not_started"}
-    if record is not None:
-        status["job_status"] = record.status
-        status["job_stage"] = record.stage
-        status["progress"] = record.progress
-    return jsonify({"ok": True, "status": status})
+    return jsonify({"ok": True, "status": jobs.build_batch_status(job_dir)})
 
 
 @api_bp.route("/job/<job_id>/batch-restore", methods=["POST"], endpoint="batch_restore")
@@ -938,7 +916,7 @@ def cancel_word_job(job_id: str):
     job_dir = jobs.job_dir(job_id)
     if not job_dir.exists() or jobs.get_job_type(job_dir) != "word_translate":
         abort(404)
-    cancelled = word_translate.cancel_word_job(job_id) or jobs.job_store.request_cancel(job_id)
+    cancelled = word_translate.cancel_word_job(job_id) or jobs.request_job_cancel(job_id)
     audit_service.record_audit("job_cancel", detail={"job_type": "word_translate", "cancelled": cancelled}, job_id=job_id)
     jobs.notify_jobs_update()
     return jsonify({"ok": True, "cancelled": cancelled})
@@ -956,7 +934,7 @@ def cancel_job(job_id: str):
     cancelled = False
     if record.job_type == "word_translate":
         cancelled = word_translate.cancel_word_job(job_id)
-    cancelled = jobs.job_store.request_cancel(job_id) or cancelled
+    cancelled = jobs.request_job_cancel(job_id) or cancelled
     audit_service.record_audit(
         "job_cancel",
         detail={"job_type": record.job_type, "cancelled": cancelled},
@@ -2002,7 +1980,7 @@ def cancel_upload():
             if not include_all and jobs.get_job_owner_work_id(item.job_id) != owner_work_id:
                 continue
             if item.status in {"queued", "running", "cancel_requested"}:
-                cancelled = jobs.job_store.request_cancel(item.job_id)
+                cancelled = jobs.request_job_cancel(item.job_id)
                 updated = jobs.job_store.get_job(item.job_id)
                 return jsonify(
                     {
@@ -2020,6 +1998,6 @@ def cancel_upload():
         event.set()
     job_id = active_job_id
     if jobs.safe_job_id(job_id):
-        jobs.job_store.request_cancel(job_id)
+        jobs.request_job_cancel(job_id)
     jobs.notify_jobs_update()
     return jsonify({"ok": True, "job_id": active.get("job_id")})

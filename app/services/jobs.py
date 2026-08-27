@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import re
 import shutil
 import time
@@ -60,6 +61,9 @@ OCR_STAGE_DISPLAY = {
 }
 
 
+logger = logging.getLogger(__name__)
+
+
 _CONNECTION_POOL_RE = re.compile(r"\bHTTPS?ConnectionPool\([^)]*\):\s*", re.IGNORECASE)
 
 
@@ -68,6 +72,22 @@ def sanitize_job_message(value: Any) -> str | None:
     if not text:
         return None
     return _CONNECTION_POOL_RE.sub("", text).strip() or None
+
+
+def _job_error_message(
+    record: Any, *fallbacks: Any
+) -> str | None:
+    record_error = sanitize_job_message(getattr(record, "error_message", None))
+    if record_error:
+        return record_error
+    record_status = str(getattr(record, "status", "") or "").lower()
+    if record_status in {"completed", "queued"}:
+        return None
+    for fallback in fallbacks:
+        cleaned = sanitize_job_message(fallback)
+        if cleaned:
+            return cleaned
+    return None
 
 
 def _serialize_warning_events(events: list[Any]) -> list[dict[str, Any]]:
@@ -291,6 +311,24 @@ def notify_jobs_update() -> None:
         state.JOBS_EVENT.notify_all()
 
 
+def _without_none(values: dict[str, Any] | None) -> dict[str, Any]:
+    return {k: v for k, v in (values or {}).items() if v is not None}
+
+
+def _write_json_snapshot(
+    path: Path, payload: dict[str, Any], *, job_id: str, snapshot_name: str
+) -> None:
+    try:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        logger.warning(
+            "Job JSON snapshot write failed job_id=%s snapshot=%s error=%s",
+            job_id,
+            snapshot_name,
+            exc,
+        )
+
+
 def map_status_display(job_type: str, status: str, stage: str) -> tuple[str, str]:
     normalized_stage = str(stage or "").strip().lower()
     normalized_status = str(status or "").strip().lower()
@@ -309,6 +347,47 @@ def map_status_display(job_type: str, status: str, stage: str) -> tuple[str, str
     return OCR_STAGE_DISPLAY.get(normalized_stage or "queued", ("uploaded", "已上傳"))
 
 
+def create_job_state(
+    job_dir_path: Path,
+    *,
+    job_type: str,
+    stage: str,
+    status: str = "queued",
+    progress: float = 0.0,
+    job_name: str | None = None,
+    owner_work_id: str | None = None,
+    target_lang: str | None = None,
+    document_mode: str | None = None,
+    payload: dict[str, Any] | None = None,
+    meta: dict[str, Any] | None = None,
+    started_at: float | None = None,
+    completed_at: float | None = None,
+) -> None:
+    job_id = job_dir_path.name
+    job_store.create_job(
+        job_id=job_id,
+        job_type=job_type,
+        stage=stage,
+        status=status,
+        progress=progress,
+        job_name=job_name,
+        owner_work_id=owner_work_id,
+        target_lang=target_lang,
+        document_mode=document_mode,
+        payload=payload,
+        started_at=datetime_from_timestamp(started_at),
+        completed_at=datetime_from_timestamp(completed_at),
+    )
+    snapshot = dict(meta or {})
+    if snapshot:
+        _write_json_snapshot(
+            job_meta_path(job_dir_path),
+            snapshot,
+            job_id=job_id,
+            snapshot_name="job_meta",
+        )
+
+
 def set_job_state(
     job_dir_path: Path,
     *,
@@ -322,7 +401,10 @@ def set_job_state(
 ) -> None:
     job_id = job_dir_path.name
     meta = load_job_meta(job_dir_path) or {}
-    job_type = str(meta.get("job_type") or get_job_type(job_dir_path))
+    record = job_store.get_job(job_id)
+    job_type = str(
+        meta.get("job_type") or getattr(record, "job_type", None) or get_job_type(job_dir_path)
+    )
     legacy_stage_key = LEGACY_STAGE_KEY_BY_TYPE.get(job_type)
     if legacy_stage_key:
         meta[legacy_stage_key] = stage
@@ -335,46 +417,51 @@ def set_job_state(
     if completed_at is not None:
         meta["processing_completed_at"] = completed_at
     if extra_meta:
-        meta.update({k: v for k, v in extra_meta.items() if v is not None})
+        meta.update(_without_none(extra_meta))
     if status == "completed":
         meta.pop("last_warning", None)
         meta.pop("last_warning_at", None)
-    job_meta_path(job_dir_path).write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+
+    payload = job_store.deserialize_payload(record)
+    if extra_meta:
+        payload.update(_without_none(extra_meta))
+    if status == "completed":
+        payload.pop("last_warning", None)
+        payload.pop("last_warning_at", None)
+
     store_updates: dict[str, Any] = {
         "job_type": job_type,
         "status": status,
         "stage": stage,
-        "progress": float(progress) if progress is not None else float(meta.get("progress") or 0.0),
+        "progress": (
+            float(progress)
+            if progress is not None
+            else float(meta.get("progress") or getattr(record, "progress", 0.0) or 0.0)
+        ),
         "error_message": error_message,
         "started_at": datetime_from_timestamp(started_at or meta.get("processing_started_at")),
         "completed_at": datetime_from_timestamp(completed_at or meta.get("processing_completed_at")),
-        "job_name": normalize_job_name(meta.get("job_name")),
-        "target_lang": str(meta.get("target_lang") or "") or None,
-        "document_mode": str(meta.get("document_mode") or "") or None,
+        "job_name": normalize_job_name(meta.get("job_name"))
+        or normalize_job_name(getattr(record, "job_name", None)),
+        "target_lang": str(
+            meta.get("target_lang") or getattr(record, "target_lang", "") or ""
+        )
+        or None,
+        "document_mode": str(
+            meta.get("document_mode") or getattr(record, "document_mode", "") or ""
+        )
+        or None,
     }
-    if extra_meta:
-        try:
-            record = job_store.get_job(job_id)
-            payload = job_store.deserialize_payload(record)
-            payload.update({k: v for k, v in extra_meta.items() if v is not None})
-            if status == "completed":
-                payload.pop("last_warning", None)
-                payload.pop("last_warning_at", None)
-            store_updates["payload_json"] = json.dumps(payload, ensure_ascii=False)
-        except Exception:
-            pass
-    elif status == "completed":
-        try:
-            record = job_store.get_job(job_id)
-            payload = job_store.deserialize_payload(record)
-            payload.pop("last_warning", None)
-            payload.pop("last_warning_at", None)
-            store_updates["payload_json"] = json.dumps(payload, ensure_ascii=False)
-        except Exception:
-            pass
-    _safe_update_job_store(job_id, **store_updates)
+    if extra_meta or status == "completed":
+        store_updates["payload_json"] = json.dumps(payload, ensure_ascii=False)
+
+    job_store.update_job(job_id, **store_updates)
+    _write_json_snapshot(
+        job_meta_path(job_dir_path),
+        meta,
+        job_id=job_id,
+        snapshot_name="job_meta",
+    )
     notify_jobs_update()
 
 
@@ -407,6 +494,63 @@ def _safe_update_job_store(job_id: str, **updates: Any) -> None:
         job_store.update_job(job_id, **updates)
     except Exception:
         return
+
+
+def queue_batch_translation(
+    job_dir_path: Path,
+    *,
+    model: Any = None,
+    target_lang: Any = None,
+    translate_mode: Any = None,
+    extra_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    job_id = job_dir_path.name
+    record = job_store.get_job(job_id)
+    payload = job_store.deserialize_payload(record)
+    normalized_translate_mode = normalize_translate_mode(
+        translate_mode or payload.get("translate_mode")
+    )
+    payload["resume_translate_only"] = True
+    payload["translate_mode"] = normalized_translate_mode
+    if extra_meta:
+        payload.update(_without_none(extra_meta))
+
+    job_store.update_job(
+        job_id,
+        status="queued",
+        stage="translate",
+        payload_json=json.dumps(payload, ensure_ascii=False),
+        error_message=None,
+        completed_at=None,
+    )
+
+    meta = load_job_meta(job_dir_path) or {}
+    meta.pop("error", None)
+    meta.pop("processing_completed_at", None)
+    meta["translate_mode"] = normalized_translate_mode
+    if extra_meta:
+        meta.update(_without_none(extra_meta))
+    batch_status_payload = _batch_status_payload(
+        "queued",
+        job_id=job_id,
+        model=model,
+        target_lang=target_lang,
+        translate_mode=normalized_translate_mode,
+    )
+    _write_json_snapshot(
+        job_meta_path(job_dir_path),
+        meta,
+        job_id=job_id,
+        snapshot_name="job_meta",
+    )
+    _write_json_snapshot(
+        batch_status_path(job_dir_path),
+        batch_status_payload,
+        job_id=job_id,
+        snapshot_name="batch_status",
+    )
+    notify_jobs_update()
+    return {"status": "queued"}
 
 
 def _job_store_status_for_doc_stage(doc_stage: str) -> str:
@@ -520,7 +664,7 @@ def build_jobs_list(
                 current_job_type, record.status, record.stage or "queued"
             )
             doc_status = load_doc_status(job_dir(job_id)) or {}
-            error_message = record.error_message or payload.get("error") or doc_status.get("error")
+            error_message = _job_error_message(record, payload.get("error"), doc_status.get("error"))
             jobs.append(
                 {
                     "job_id": job_id,
@@ -542,7 +686,7 @@ def build_jobs_list(
                     "last_warning": sanitize_job_message(payload.get("last_warning")),
                     "last_warning_at": payload.get("last_warning_at"),
                     "recent_warnings": recent_warnings,
-                    "error": sanitize_job_message(error_message),
+                    "error": error_message,
                     "download_name": build_docx_name(job_id, job_name),
                     "structure_download_name": build_doc_markdown_name(job_id, job_name, translated=False),
                     "source_pdf_url": _artifact_url(job_id, artifacts, "source_pdf"),
@@ -581,7 +725,7 @@ def build_jobs_list(
                     "last_warning": sanitize_job_message(payload.get("last_warning")),
                     "last_warning_at": payload.get("last_warning_at"),
                     "recent_warnings": recent_warnings,
-                    "error": sanitize_job_message(record.error_message or payload.get("error")),
+                    "error": _job_error_message(record, payload.get("error")),
                     "target_lang": record.target_lang or payload.get("target_lang"),
                     "download_name": build_docx_name(job_id, job_name),
                     "source_docx_url": _artifact_url(job_id, artifacts, "source_docx"),
@@ -607,8 +751,8 @@ def build_jobs_list(
         status_code, status_label = map_status_display(
             current_job_type, record.status, record.stage or "queued"
         )
-        batch_status = load_batch_status(job_dir(job_id)) or {}
-        error_message = record.error_message or payload.get("error") or batch_status.get("error")
+        batch_status = build_batch_status(job_dir(job_id))
+        error_message = _job_error_message(record, payload.get("error"), batch_status.get("error"))
 
         jobs.append(
             {
@@ -638,7 +782,7 @@ def build_jobs_list(
                 "last_warning": sanitize_job_message(payload.get("last_warning")),
                 "last_warning_at": payload.get("last_warning_at"),
                 "recent_warnings": recent_warnings,
-                "error": sanitize_job_message(error_message),
+                "error": error_message,
                 "download_name": download_name,
                 "editor_url": url_for("editor.editor", job_id=job_id),
                 "debug_pdf_url": _artifact_url(job_id, artifacts, "debug_pdf"),
@@ -762,29 +906,36 @@ def load_batch_config(job_dir_path: Path) -> dict[str, Any] | None:
         return None
 
 
-def write_batch_status(job_dir_path: Path, status: str, **meta: Any) -> None:
-    payload = {
+def _batch_stage_for_status(status: str) -> str:
+    normalized = status.lower()
+    if normalized == "completed":
+        return "completed"
+    return "translate"
+
+
+def _batch_status_payload(status: str, **meta: Any) -> dict[str, Any]:
+    return {
         "status": status,
         "updated_at": time.time(),
         **meta,
     }
-    batch_status_path(job_dir_path).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+
+
+def write_batch_status(job_dir_path: Path, status: str, **meta: Any) -> None:
+    job_id = job_dir_path.name
+    payload = _batch_status_payload(status, **meta)
     normalized = status.lower()
-    if normalized == "completed":
-        stage = "completed"
-    elif normalized in {"failed", "canceled", "cancelled"}:
-        stage = "translate"
-    elif normalized == "queued":
-        stage = "translate"
-    else:
-        stage = "translate"
-    _safe_update_job_store(
-        job_dir_path.name,
+    job_store.update_job(
+        job_id,
         status=DB_STATUS_BY_BATCH.get(normalized, "running"),
-        stage=stage,
+        stage=_batch_stage_for_status(normalized),
         error_message=str(meta.get("error") or "") or None,
+    )
+    _write_json_snapshot(
+        batch_status_path(job_dir_path),
+        payload,
+        job_id=job_id,
+        snapshot_name="batch_status",
     )
     notify_jobs_update()
 
@@ -797,6 +948,41 @@ def load_batch_status(job_dir_path: Path) -> dict[str, Any] | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
+
+
+def _batch_status_from_record(record: Any) -> str:
+    record_status = str(getattr(record, "status", "") or "").lower()
+    record_stage = str(getattr(record, "stage", "") or "").lower()
+    if record_stage == "translate":
+        return record_status or "not_started"
+    if record_status in {"completed", "failed", "cancelled", "cancel_requested"}:
+        return record_status
+    return "not_started"
+
+
+def build_batch_status(job_dir_path: Path) -> dict[str, Any]:
+    job_id = job_dir_path.name
+    status = dict(load_batch_status(job_dir_path) or {"status": "not_started"})
+    record = job_store.get_job(job_id)
+    if record is None:
+        return status
+    status["status"] = _batch_status_from_record(record)
+    status["job_status"] = record.status
+    status["job_stage"] = record.stage
+    status["progress"] = record.progress
+    if record.error_message:
+        status["error"] = sanitize_job_message(record.error_message)
+    elif status["status"] in {"completed", "queued", "not_started"}:
+        status.pop("error", None)
+    return status
+
+
+def batch_translation_active(job_dir_path: Path) -> bool:
+    record = job_store.get_job(job_dir_path.name)
+    if record is not None:
+        return record.status in {"running", "queued"} and record.stage == "translate"
+    status = load_batch_status(job_dir_path)
+    return bool(status and status.get("status") in {"running", "queued"})
 
 
 def doc_status_path(job_dir_path: Path) -> Path:
@@ -1058,6 +1244,13 @@ def delete_job_dir(job_id: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def request_job_cancel(job_id: str) -> bool:
+    cancelled = job_store.request_cancel(job_id)
+    if cancelled:
+        notify_jobs_update()
+    return cancelled
+
+
 def retry_job(job_id: str) -> tuple[bool, str | None]:
     record = job_store.get_job(job_id)
     if record is None:
@@ -1078,15 +1271,9 @@ def retry_job(job_id: str) -> tuple[bool, str | None]:
             payload["resume_translate_only"] = True
             stage = "translate"
             config = load_batch_config(job_dir_path) or {}
-            write_batch_status(
-                job_dir_path,
-                "queued",
-                job_id=job_id,
-                model=config.get("model"),
-                target_lang=config.get("target_lang"),
-                translate_mode=normalize_translate_mode(config.get("translate_mode")),
-            )
+            payload["translate_mode"] = normalize_translate_mode(config.get("translate_mode"))
         else:
+            config = {}
             payload.pop("resume_translate_only", None)
     else:
         payload.pop("resume_translate_only", None)
@@ -1104,7 +1291,31 @@ def retry_job(job_id: str) -> tuple[bool, str | None]:
     meta["progress"] = 0.0
     meta.pop("error", None)
     meta.pop("processing_completed_at", None)
-    write_job_meta(job_dir_path, meta)
+    if stage == "translate":
+        meta["translate_mode"] = payload.get("translate_mode")
+        batch_status_payload = _batch_status_payload(
+            "queued",
+            job_id=job_id,
+            model=config.get("model"),
+            target_lang=config.get("target_lang"),
+            translate_mode=payload.get("translate_mode"),
+        )
+    else:
+        batch_status_payload = None
+
+    _write_json_snapshot(
+        job_meta_path(job_dir_path),
+        meta,
+        job_id=job_id,
+        snapshot_name="job_meta",
+    )
+    if batch_status_payload is not None:
+        _write_json_snapshot(
+            batch_status_path(job_dir_path),
+            batch_status_payload,
+            job_id=job_id,
+            snapshot_name="batch_status",
+        )
     notify_jobs_update()
     return True, None
 

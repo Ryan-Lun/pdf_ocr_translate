@@ -141,12 +141,7 @@ def run_worker_loop(worker_id: str | None = None, poll_seconds: float | None = N
                 detail={"worker_id": worker_name},
             )
             if job_id:
-                job_store.update_job(
-                    job_id,
-                    status="failed",
-                    error_message=str(exc),
-                    completed_at=job_store.utcnow(),
-                )
+                jobs.fail_job(jobs.job_dir(job_id), error_message=str(exc))
         finally:
             jobs.notify_jobs_update()
         if record is None and not processed_active_batch:

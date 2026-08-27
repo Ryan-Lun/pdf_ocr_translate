@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import json
 import shutil
 import threading
 import time
@@ -130,31 +129,12 @@ def run_ocr_pipeline_job(
             "document_mode": normalized_document_mode,
         }
         jobs.write_batch_config(job_dir, batch_config)
-        jobs.set_job_state(
+        jobs.queue_batch_translation(
             job_dir,
-            status="queued",
-            stage="translate",
-            extra_meta={"ocr_completed_at": time.time()},
-        )
-        record = jobs.job_store.get_job(job_id)
-        payload = jobs.job_store.deserialize_payload(record)
-        payload["resume_translate_only"] = True
-        payload["translate_mode"] = batch_config["translate_mode"]
-        jobs.job_store.update_job(
-            job_id,
-            status="queued",
-            stage="translate",
-            payload_json=json.dumps(payload, ensure_ascii=False),
-            error_message=None,
-            completed_at=None,
-        )
-        jobs.write_batch_status(
-            job_dir,
-            "queued",
-            job_id=job_id,
             model=batch_config.get("model"),
             target_lang=batch_config.get("target_lang"),
             translate_mode=batch_config.get("translate_mode"),
+            extra_meta={"ocr_completed_at": time.time()},
         )
 
 
@@ -183,44 +163,46 @@ def enqueue_job_from_upload(
     job_name = display_name
     now_ts = time.time()
     normalized_document_mode = jobs.normalize_document_mode(document_mode)
-    jobs.write_job_meta(
+    normalized_translate_mode = jobs.normalize_translate_mode(translate_mode)
+    owner = str(owner_work_id or "").strip()
+    meta = {
+        "job_name": job_name,
+        "creator_name": creator_name,
+        "owner_work_id": owner,
+        "job_type": job_type,
+        "document_mode": normalized_document_mode,
+        "translate_mode": normalized_translate_mode,
+        "processing_started_at": now_ts,
+        "ocr_started_at": now_ts,
+    }
+    payload = {
+        "dpi": dpi,
+        "start_page": start_page,
+        "end_page": end_page,
+        "page_numbers": page_numbers or None,
+        "translate_source_lang": translate_source_lang,
+        "translate_target_lang": translate_target_lang,
+        "translate_model": translate_model,
+        "translate_mode": normalized_translate_mode,
+        "keep_lang": keep_lang,
+        "enable_translate": enable_translate,
+        "document_mode": normalized_document_mode,
+        "creator_name": creator_name,
+        "owner_work_id": owner,
+        "processing_started_at": now_ts,
+        "ocr_started_at": now_ts,
+    }
+    jobs.create_job_state(
         job_dir,
-        {
-            "job_name": job_name,
-            "creator_name": creator_name,
-            "owner_work_id": str(owner_work_id or "").strip(),
-            "job_type": job_type,
-            "document_mode": normalized_document_mode,
-            "translate_mode": jobs.normalize_translate_mode(translate_mode),
-            "processing_started_at": now_ts,
-            "ocr_started_at": now_ts,
-        },
-    )
-    jobs.job_store.create_job(
-        job_id=job_id,
         job_type=job_type,
         stage="queued",
         job_name=job_name,
-        owner_work_id=str(owner_work_id or "").strip() or None,
+        owner_work_id=owner or None,
         target_lang=translate_target_lang if enable_translate else None,
         document_mode=normalized_document_mode,
-        payload={
-            "dpi": dpi,
-            "start_page": start_page,
-            "end_page": end_page,
-            "page_numbers": page_numbers or None,
-            "translate_source_lang": translate_source_lang,
-            "translate_target_lang": translate_target_lang,
-            "translate_model": translate_model,
-            "translate_mode": jobs.normalize_translate_mode(translate_mode),
-            "keep_lang": keep_lang,
-            "enable_translate": enable_translate,
-            "document_mode": normalized_document_mode,
-            "creator_name": creator_name,
-            "owner_work_id": str(owner_work_id or "").strip(),
-            "processing_started_at": now_ts,
-            "ocr_started_at": now_ts,
-        },
+        payload=payload,
+        meta=meta,
+        started_at=now_ts,
     )
 
     pdf_filename = secure_filename(f"{job_id}.pdf")

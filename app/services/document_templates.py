@@ -467,8 +467,8 @@ def restore_template_source_jobs() -> int:
             "source_filename": meta.get("source_filename") or "",
             "job_type": "template_source",
         }
-        job_store.create_job(
-            job_id=source_job_id,
+        jobs.create_job_state(
+            job_dir,
             job_type="template_source",
             status=status,
             stage=stage,
@@ -478,8 +478,8 @@ def restore_template_source_jobs() -> int:
             target_lang=str(meta.get("target_lang") or "") or None,
             document_mode=str(meta.get("document_mode") or "") or None,
             payload=payload,
-            started_at=jobs.datetime_from_timestamp(meta.get("processing_started_at")),
-            completed_at=jobs.datetime_from_timestamp(meta.get("processing_completed_at")),
+            started_at=meta.get("processing_started_at"),
+            completed_at=meta.get("processing_completed_at"),
         )
         rebuilt += 1
     return rebuilt

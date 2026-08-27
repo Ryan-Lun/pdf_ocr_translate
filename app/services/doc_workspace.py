@@ -189,35 +189,35 @@ def enqueue_doc_job_from_upload(
     job_dir.mkdir(parents=True, exist_ok=True)
     now_ts = time.time()
     custom_system_prompt = str(system_prompt or "").strip()
-    jobs.write_job_meta(
+    owner = str(owner_work_id or "").strip()
+    meta = {
+        "job_name": display_name,
+        "job_type": "doc_workspace",
+        "processing_started_at": now_ts,
+        "doc_stage": "uploaded",
+        "source_lang": source_lang,
+        "target_lang": target_lang,
+        "system_prompt": custom_system_prompt,
+        "creator_name": creator_name,
+        "owner_work_id": owner,
+    }
+    payload = {
+        "source_lang": source_lang,
+        "target_lang": target_lang,
+        "system_prompt": custom_system_prompt,
+        "creator_name": creator_name,
+        "owner_work_id": owner,
+    }
+    jobs.create_job_state(
         job_dir,
-        {
-            "job_name": display_name,
-            "job_type": "doc_workspace",
-            "processing_started_at": now_ts,
-            "doc_stage": "uploaded",
-            "source_lang": source_lang,
-            "target_lang": target_lang,
-            "system_prompt": custom_system_prompt,
-            "creator_name": creator_name,
-            "owner_work_id": str(owner_work_id or "").strip(),
-            "processing_started_at": now_ts,
-        },
-    )
-    jobs.job_store.create_job(
-        job_id=job_id,
         job_type="doc_workspace",
         stage="queued",
         job_name=display_name,
-        owner_work_id=str(owner_work_id or "").strip() or None,
+        owner_work_id=owner or None,
         target_lang=target_lang,
-        payload={
-            "source_lang": source_lang,
-            "target_lang": target_lang,
-            "system_prompt": custom_system_prompt,
-            "creator_name": creator_name,
-            "owner_work_id": str(owner_work_id or "").strip(),
-        },
+        payload=payload,
+        meta=meta,
+        started_at=now_ts,
     )
 
     pdf_path = job_dir / "source.pdf"
