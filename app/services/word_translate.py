@@ -954,6 +954,31 @@ class EnhancedWordTranslator:
         doc.save(output_path)
 
 
+def run_word_translate_job(
+    *,
+    job_id: str,
+    job_dir: Path,
+    source_path: Path,
+    processing_source_path: Path,
+    output_path: Path,
+    source_lang: str,
+    target_lang: str,
+    retain_terms: list[str],
+    system_prompt: str = "",
+) -> None:
+    _run_word_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        source_path=source_path,
+        processing_source_path=processing_source_path,
+        output_path=output_path,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        retain_terms=retain_terms,
+        system_prompt=system_prompt,
+    )
+
+
 def _run_word_job(
     job_id: str,
     job_dir: Path,
