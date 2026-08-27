@@ -27,3 +27,17 @@ Recent history uses short, task-focused commit messages in Traditional Chinese, 
 
 ## Security & Configuration Tips
 Keep secrets in `.env` and avoid committing real credentials or generated job data. Database schema helpers live in `scripts/`, including `scripts/init_sqlserver_schema.sql`; review schema changes alongside application code before merging.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs for this repo are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+This repo uses the default five-label triage vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repo uses a single-context domain doc layout. See `docs/agents/domain.md`.
