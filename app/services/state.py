@@ -93,6 +93,13 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+TEAMS_ALERT_ENABLED = os.getenv("TEAMS_ALERT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+TEAMS_ALERT_WEBHOOK_URL = os.getenv("TEAMS_ALERT_WEBHOOK_URL", "").strip()
+TEAMS_ALERT_TIMEOUT_SECONDS = max(0.1, _float_env("TEAMS_ALERT_TIMEOUT_SECONDS", 2.0))
+TEAMS_ALERT_DEDUP_SECONDS = max(0.0, _float_env("TEAMS_ALERT_DEDUP_SECONDS", 900.0))
+TEAMS_ALERT_HOST = os.getenv("TEAMS_ALERT_HOST", "").strip()
+
+
 TABLE_RECOGNTION_V2TIMEOUT_SECONDS = max(
     0.1,
     _float_env("TABLE_RECOGNTION_V2TIMEOUT_SECONDS", _float_env("OCR_API_TIMEOUT_SECONDS", 120.0)),
