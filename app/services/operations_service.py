@@ -4,7 +4,7 @@ import click
 from flask import current_app
 from sqlalchemy import func, select
 
-from . import auth_store, job_store, jobs
+from . import alerts, auth_store, job_store, jobs
 from .schema_control import missing_columns, missing_schema_groups, required_schema_groups
 
 
@@ -52,6 +52,32 @@ def run_job_state_sync(app, *, dry_run: bool = False) -> dict[str, object]:
 
 
 def register_operations_cli(app) -> None:
+
+    @app.cli.group("alerts")
+    def alerts_group() -> None:
+        """Alert operations."""
+
+    @alerts_group.command("test-teams")
+    def test_teams_alert_command() -> None:
+        result = alerts.send_teams_alert(
+            current_app.config,
+            source="alerts.test",
+            message="Teams Alert test",
+            bypass_dedup=True,
+        )
+        if not result.sent:
+            if result.reason == "disabled":
+                raise click.ClickException(
+                    "Teams Alert is disabled or TEAMS_ALERT_WEBHOOK_URL is empty."
+                )
+            parts = [f"Teams Alert test failed reason={result.reason or 'unknown'}"]
+            if result.status_code is not None:
+                parts.append(f"status_code={result.status_code}")
+            if result.response_text:
+                parts.append(f"response={result.response_text[:200]}")
+            raise click.ClickException(" ".join(parts))
+        click.echo(f"teams_alert_test ok=1 status_code={result.status_code}")
+
     @app.cli.command("schema-preflight")
     def schema_preflight_command() -> None:
         result = run_schema_preflight(current_app._get_current_object())

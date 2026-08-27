@@ -7,7 +7,7 @@ from .config import CONFIG_BY_NAME, BaseConfig
 from .errors import register_error_handlers
 from .extensions import init_app as init_extensions
 from .hooks import register_before_request
-from .services import state
+from .services import alerts, state
 from .services.auth_service import init_auth
 from .services.startup_validation import validate_startup_config
 from .services.operations_service import register_operations_cli
@@ -23,6 +23,7 @@ def create_app(config_name: str | None = None) -> Flask:
         static_url_path="/static",
     )
     app.config.from_object(config_cls)
+    alerts.log_startup_warning(app.config)
     validate_startup_config(app.config)
 
     init_extensions(app)

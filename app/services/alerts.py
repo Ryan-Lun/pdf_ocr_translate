@@ -137,9 +137,27 @@ def send_teams_alert(
             status_code=status_code,
             response_text=response_text,
         )
+    except requests.exceptions.Timeout as exc:
+        error_text = _clean_text(f"{type(exc).__name__}: {exc}")[:500]
+        logger.warning("Teams Alert delivery timed out error=%s", exc)
+        return AlertResult(sent=False, reason="timeout", response_text=error_text)
+    except requests.exceptions.RequestException as exc:
+        error_text = _clean_text(f"{type(exc).__name__}: {exc}")[:500]
+        logger.warning("Teams Alert delivery request failed error=%s", exc)
+        return AlertResult(sent=False, reason="request_failed", response_text=error_text)
     except Exception as exc:
         logger.warning("Teams Alert delivery failed error=%s", exc)
         return AlertResult(sent=False, reason="delivery_failed")
+
+
+def log_startup_warning(config: Mapping[str, Any]) -> None:
+    if _bool_config(config, "TEAMS_ALERT_ENABLED", False) and not _clean_text(
+        config.get("TEAMS_ALERT_WEBHOOK_URL")
+    ):
+        logger.warning(
+            "Teams Alert is enabled but TEAMS_ALERT_WEBHOOK_URL is empty; "
+            "Teams Alert delivery is disabled."
+        )
 
 
 def teams_alert_enabled(config: Mapping[str, Any]) -> bool:
