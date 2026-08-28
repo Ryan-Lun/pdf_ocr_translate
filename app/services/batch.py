@@ -14,7 +14,17 @@ from lang_utils import (
     traditional_chinese_instruction,
 )
 
-from . import document_terms, glossary, jobs, ocr, openai_config, state, translation_memory
+from . import (
+    audit_service,
+    document_terms,
+    external_failures,
+    glossary,
+    jobs,
+    ocr,
+    openai_config,
+    state,
+    translation_memory,
+)
 
 logger = logging.getLogger(__name__)
 TERMINAL_BATCH_STATUSES = {"completed", "failed", "canceled", "cancelled"}
@@ -1217,6 +1227,17 @@ def run_batch_translate_job(
                 completed_at=now_ts,
                 extra_meta={"translate_completed_at": now_ts},
             )
+            audit_service.record_system_error(
+                "batch.translate",
+                "Batch translate poll failed",
+                exc=exc,
+                job_id=job_id,
+                detail=external_failures.openai_system_error_detail(
+                    stage="translate",
+                    deployment=model_name,
+                    failure_kind=external_failures.classify_failure_kind(exc),
+                ),
+            )
             return False
 
     if poll_only:
@@ -1317,6 +1338,17 @@ def run_batch_translate_job(
             completed_at=now_ts,
             extra_meta={"translate_completed_at": now_ts},
         )
+        audit_service.record_system_error(
+            "batch.translate",
+            "Batch translate failed",
+            exc=exc,
+            job_id=job_id,
+            detail=external_failures.openai_system_error_detail(
+                stage="translate",
+                deployment=model_name,
+                failure_kind=external_failures.classify_failure_kind(exc),
+            ),
+        )
         return False
 
 
@@ -1380,6 +1412,18 @@ def _poll_batch_translate_job(
                 error_message=error_message,
                 completed_at=now_ts,
                 extra_meta={"translate_completed_at": now_ts},
+            )
+            exc = RuntimeError(error_message)
+            audit_service.record_system_error(
+                "batch.translate",
+                "Batch translate batch failed",
+                exc=exc,
+                job_id=job_id,
+                detail=external_failures.openai_system_error_detail(
+                    stage="translate",
+                    deployment=str(status_meta.get("model") or ""),
+                    failure_kind=external_failures.classify_failure_kind(exc),
+                ),
             )
         else:
             jobs.set_job_state(

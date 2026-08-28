@@ -10,7 +10,15 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from . import batch, jobs, openai_config, rate_limiter, state
+from . import (
+    audit_service,
+    batch,
+    external_failures,
+    jobs,
+    openai_config,
+    rate_limiter,
+    state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -755,5 +763,16 @@ def run_realtime_translate_job(
             error_message=str(exc),
             completed_at=now_ts,
             extra_meta={"translate_completed_at": now_ts},
+        )
+        audit_service.record_system_error(
+            "realtime.translate",
+            "Realtime translate failed",
+            exc=exc,
+            job_id=job_id,
+            detail=external_failures.openai_system_error_detail(
+                stage="translate",
+                deployment=model_name,
+                failure_kind=external_failures.classify_failure_kind(exc),
+            ),
         )
         return False
