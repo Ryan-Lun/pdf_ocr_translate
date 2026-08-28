@@ -85,6 +85,50 @@ def test_teams_alert_posts_safe_payload_when_enabled():
     ]
 
 
+def test_teams_alert_includes_external_service_safe_fields_only():
+    calls = []
+
+    def fake_post(url, *, json, timeout):
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return FakeResponse(202, "accepted")
+
+    config = {
+        "APP_ENV": "production",
+        "TEAMS_ALERT_ENABLED": True,
+        "TEAMS_ALERT_WEBHOOK_URL": "https://teams.example/webhook",
+    }
+
+    result = alerts.send_teams_alert(
+        config,
+        source="batch.translate",
+        message="Batch translate failed",
+        detail={
+            "external_service": "openai",
+            "deployment": "batch-prod-deployment",
+            "failure_kind": "timeout",
+            "api_key": "secret",
+            "credential": "secret",
+            "raw_request_body": "secret",
+            "traceback": "secret stack",
+            "query_string": "token=secret",
+        },
+        post=fake_post,
+        dedup_cache=alerts.AlertDedupCache(),
+        now=lambda: 1000.0,
+    )
+
+    assert result.sent is True
+    payload = calls[0]["json"]
+    assert payload["external_service"] == "openai"
+    assert payload["deployment"] == "batch-prod-deployment"
+    assert payload["failure_kind"] == "timeout"
+    assert "api_key" not in payload
+    assert "credential" not in payload
+    assert "raw_request_body" not in payload
+    assert "traceback" not in payload
+    assert "query_string" not in payload
+
+
 def test_teams_alert_is_disabled_without_webhook_url():
     calls = []
     config = {

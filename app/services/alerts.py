@@ -17,7 +17,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_TEAMS_ALERT_SERVICE = "pdf-ocr-translate"
 DEFAULT_TEAMS_ALERT_TIMEOUT_SECONDS = 2.0
 DEFAULT_TEAMS_ALERT_DEDUP_SECONDS = 900.0
-SAFE_DETAIL_FIELDS = ("stage", "job_type", "path", "method", "endpoint", "worker_id")
+SAFE_DETAIL_FIELDS = (
+    "stage",
+    "job_type",
+    "path",
+    "method",
+    "endpoint",
+    "worker_id",
+    "external_service",
+    "deployment",
+    "failure_kind",
+)
 
 
 @dataclass(frozen=True)
