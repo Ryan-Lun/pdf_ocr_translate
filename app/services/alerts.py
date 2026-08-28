@@ -14,7 +14,6 @@ from . import state
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TEAMS_ALERT_SERVICE = "pdf-ocr-translate"
 DEFAULT_TEAMS_ALERT_TIMEOUT_SECONDS = 2.0
 DEFAULT_TEAMS_ALERT_DEDUP_SECONDS = 900.0
 SAFE_DETAIL_FIELDS = (
@@ -201,7 +200,6 @@ def build_teams_alert_payload(
     timestamp = datetime.fromtimestamp(_default_now() if now_ts is None else now_ts)
     payload: dict[str, Any] = {
         "status": "ERROR",
-        "service": _clean_text(config.get("TEAMS_ALERT_SERVICE")) or DEFAULT_TEAMS_ALERT_SERVICE,
         "host": _clean_text(config.get("TEAMS_ALERT_HOST")) or socket.gethostname(),
         "time": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
         "message": _clean_text(message)[:500],

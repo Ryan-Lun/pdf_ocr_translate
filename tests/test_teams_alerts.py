@@ -66,7 +66,6 @@ def test_teams_alert_posts_safe_payload_when_enabled():
             "timeout": 2.5,
             "json": {
                 "status": "ERROR",
-                "service": "pdf-ocr-translate",
                 "host": "translate-prod-01",
                 "time": "1970-01-01 08:16:40",
                 "message": "OCR API 請求連續失敗 3 次",
