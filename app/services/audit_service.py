@@ -12,7 +12,7 @@ from flask import current_app, has_app_context, has_request_context, request
 from flask_login import current_user
 from sqlalchemy import func, or_, select
 
-from . import job_store, state
+from . import alerts, job_store, state
 
 _SYSTEM_ERROR_LEVEL_ORDER = {
     "DEBUG": 10,
@@ -97,23 +97,33 @@ def record_system_error(
     if exc is not None:
         error_type = exc.__class__.__name__
         payload.setdefault("exception_message", str(exc))
-        payload.setdefault("traceback", "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip())
+        payload.setdefault(
+            "traceback",
+            "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip(),
+        )
+
+    cleaned_component = _clean_text(component) or "unknown"
+    cleaned_message = (_clean_text(message) or "System error")[:500]
+    cleaned_job_id = _clean_job_id(job_id)
+    request_path = _request_path()
+    remote_addr = _remote_addr()
 
     record = job_store.SystemErrorLogRecord(
         created_at=job_store.utcnow(),
         level=normalized_level,
-        component=_clean_text(component) or "unknown",
-        message=(_clean_text(message) or "System error")[:500],
+        component=cleaned_component,
+        message=cleaned_message,
         error_type=error_type or None,
         detail_json=_json_dumps(payload),
-        job_id=_clean_job_id(job_id),
-        request_path=_request_path(),
-        remote_addr=_remote_addr(),
+        job_id=cleaned_job_id,
+        request_path=request_path,
+        remote_addr=remote_addr,
     )
+    persisted = False
     try:
         with job_store.session_scope() as session:
             session.add(record)
-        return True
+        persisted = True
     except Exception:
         _logger_exception("Failed to persist system error log")
         _append_fallback_jsonl(
@@ -121,17 +131,25 @@ def record_system_error(
             {
                 "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "level": normalized_level,
-                "component": record.component,
-                "message": record.message,
+                "component": cleaned_component,
+                "message": cleaned_message,
                 "error_type": error_type,
                 "detail": payload,
-                "job_id": _clean_job_id(job_id),
-                "request_path": _request_path(),
-                "remote_addr": _remote_addr(),
+                "job_id": cleaned_job_id,
+                "request_path": request_path,
+                "remote_addr": remote_addr,
                 "fallback": True,
             },
         )
-        return False
+
+    _send_system_error_alert(
+        component=cleaned_component,
+        message=cleaned_message,
+        error_type=error_type,
+        job_id=cleaned_job_id,
+        detail=payload,
+    )
+    return persisted
 
 
 def list_audit_logs(
@@ -251,6 +269,28 @@ def register_audit_cli(app) -> None:
 
 def should_persist_system_error(level: str) -> bool:
     return _system_error_level_value(level) >= _system_error_level_value(_system_error_db_min_level())
+
+
+def _send_system_error_alert(
+    *,
+    component: str,
+    message: str,
+    error_type: str,
+    job_id: str | None,
+    detail: dict[str, Any],
+) -> None:
+    config = current_app.config if has_app_context() else alerts.state_alert_config()
+    try:
+        alerts.send_teams_alert(
+            config,
+            source=component,
+            message=message,
+            exception_type=error_type,
+            job_id=job_id,
+            detail=detail,
+        )
+    except Exception:
+        _logger_exception("Failed to send Teams Alert for system error")
 
 
 def _cleanup_records(model, *, retention_days: int, dry_run: bool) -> dict[str, Any]:

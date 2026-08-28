@@ -10,6 +10,8 @@ from urllib.parse import urlsplit
 
 import requests
 
+from . import state
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TEAMS_ALERT_SERVICE = "pdf-ocr-translate"
@@ -158,6 +160,16 @@ def log_startup_warning(config: Mapping[str, Any]) -> None:
             "Teams Alert is enabled but TEAMS_ALERT_WEBHOOK_URL is empty; "
             "Teams Alert delivery is disabled."
         )
+
+
+def state_alert_config() -> dict[str, Any]:
+    return {
+        "TEAMS_ALERT_ENABLED": state.TEAMS_ALERT_ENABLED,
+        "TEAMS_ALERT_WEBHOOK_URL": state.TEAMS_ALERT_WEBHOOK_URL,
+        "TEAMS_ALERT_TIMEOUT_SECONDS": state.TEAMS_ALERT_TIMEOUT_SECONDS,
+        "TEAMS_ALERT_DEDUP_SECONDS": state.TEAMS_ALERT_DEDUP_SECONDS,
+        "TEAMS_ALERT_HOST": state.TEAMS_ALERT_HOST,
+    }
 
 
 def teams_alert_enabled(config: Mapping[str, Any]) -> bool:

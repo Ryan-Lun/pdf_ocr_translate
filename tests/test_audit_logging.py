@@ -7,7 +7,7 @@ from sqlalchemy import delete
 
 from app import create_app
 from app.config import TestingConfig
-from app.services import audit_service, job_store
+from app.services import alerts, audit_service, job_store
 from tests.db_safety import configure_test_database
 
 
@@ -50,6 +50,16 @@ def _login_admin(client) -> None:
         follow_redirects=False,
     )
     assert resp.status_code == 302
+
+
+def _enable_teams_alerts(app, **overrides) -> None:
+    config = {
+        "TEAMS_ALERT_ENABLED": True,
+        "TEAMS_ALERT_WEBHOOK_URL": "https://teams.example/webhook",
+        "SYSTEM_ERROR_DB_MIN_LEVEL": "ERROR",
+    }
+    config.update(overrides)
+    app.config.update(config)
 
 
 def test_testing_config_disables_file_logging(audit_app):
@@ -170,3 +180,95 @@ def test_audit_cleanup_cli_removes_old_rows(audit_app):
 
     assert audit_count == 0
     assert error_count == 0
+
+
+def test_record_system_error_sends_teams_alert_and_persists_row(audit_app, monkeypatch):
+    calls = []
+    _enable_teams_alerts(
+        audit_app,
+        TEAMS_ALERT_TIMEOUT_SECONDS=2.0,
+        TEAMS_ALERT_DEDUP_SECONDS=900.0,
+        TEAMS_ALERT_HOST="test-host",
+    )
+
+    def fake_post(url, *, json, timeout):
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return type("Response", (), {"status_code": 204, "text": ""})()
+
+    monkeypatch.setattr(alerts.requests, "post", fake_post)
+
+    with audit_app.app_context():
+        assert audit_service.record_system_error(
+            "worker.loop",
+            "Worker loop failure",
+            detail={"worker_id": "worker-test", "stage": "failed"},
+            exc=RuntimeError("boom"),
+            job_id="c" * 32,
+            level="ERROR",
+        ) is True
+
+    with job_store.session_scope() as session:
+        rows = session.query(job_store.SystemErrorLogRecord).all()
+
+    assert len(rows) == 1
+    assert rows[0].component == "worker.loop"
+    assert rows[0].message == "Worker loop failure"
+    assert len(calls) == 1
+    assert calls[0]["url"] == "https://teams.example/webhook"
+    assert calls[0]["timeout"] == 2.0
+    assert calls[0]["json"]["source"] == "worker.loop"
+    assert calls[0]["json"]["message"] == "Worker loop failure"
+    assert calls[0]["json"]["exception_type"] == "RuntimeError"
+    assert calls[0]["json"]["job_id"] == "c" * 32
+    assert calls[0]["json"]["worker_id"] == "worker-test"
+    assert calls[0]["json"]["stage"] == "failed"
+
+
+def test_record_system_error_persists_row_when_teams_alert_fails(audit_app, monkeypatch):
+    _enable_teams_alerts(audit_app)
+
+    def fail_post(*args, **kwargs):
+        raise alerts.requests.exceptions.RequestException("connection failed")
+
+    monkeypatch.setattr(alerts.requests, "post", fail_post)
+
+    with audit_app.app_context():
+        assert audit_service.record_system_error(
+            "pipeline.ocr",
+            "OCR pipeline failed",
+            detail={"stage": "ocr"},
+            job_id="d" * 32,
+            level="ERROR",
+        ) is True
+
+    with job_store.session_scope() as session:
+        rows = session.query(job_store.SystemErrorLogRecord).all()
+
+    assert len(rows) == 1
+    assert rows[0].component == "pipeline.ocr"
+    assert rows[0].message == "OCR pipeline failed"
+
+
+def test_record_system_error_below_persistence_threshold_does_not_send_teams_alert(
+    audit_app, monkeypatch
+):
+    calls = []
+    _enable_teams_alerts(audit_app)
+    monkeypatch.setattr(
+        alerts.requests,
+        "post",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    with audit_app.app_context():
+        assert audit_service.record_system_error(
+            "worker.loop",
+            "Worker warning",
+            level="WARNING",
+        ) is False
+
+    with job_store.session_scope() as session:
+        error_count = session.query(job_store.SystemErrorLogRecord).count()
+
+    assert error_count == 0
+    assert calls == []
