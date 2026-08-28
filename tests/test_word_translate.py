@@ -15,7 +15,6 @@ from docx.oxml.ns import qn
 from app.services import job_store, jobs, state, translation_memory
 from app.services.word_translate import (
     EnhancedWordTranslator,
-    build_word_quality_prompt,
     build_word_system_prompt,
     build_word_system_prompt_with_source,
     enqueue_word_job_from_upload,
@@ -47,7 +46,7 @@ async def _consume_translation(
     target_language: str = "en",
     system_prompt: str | None = None,
 ) -> None:
-    async for _progress, _legacy_quality in translator.process_translation(
+    async for _progress, _unused_quality in translator.process_translation(
         source_path=source_path,
         output_path=output_path,
         source_language=source_language,
@@ -177,26 +176,19 @@ def test_ensure_docx_source_converts_doc_with_word_converter(tmp_path, monkeypat
 
 def test_word_zh_prompt_requires_traditional_chinese():
     system_prompt = build_word_system_prompt("zh")
-    quality_prompt = build_word_quality_prompt("source", "translated", "zh")
-
     assert "Traditional Chinese" in system_prompt
     assert "Never use Simplified Chinese characters" in system_prompt
     assert "Mixed-Language Input" in system_prompt
     assert "Do not produce unnecessary bilingual output" in system_prompt
     assert "resolve genuine ambiguity by guessing" in system_prompt
     assert "Approved glossary translations and protected terms are mandatory" in system_prompt
-    assert "Traditional Chinese" in quality_prompt
-    assert "unnecessary source-language leakage is avoided" in quality_prompt
 
 
 def test_word_zh_cn_prompt_requires_simplified_chinese():
     system_prompt = build_word_system_prompt("zh-cn")
-    quality_prompt = build_word_quality_prompt("source", "translated", "zh-cn")
-
     assert "Simplified Chinese" in system_prompt
     assert "Use Simplified Chinese characters only" in system_prompt
     assert "Never use Traditional Chinese characters" in system_prompt
-    assert "Simplified Chinese" in quality_prompt
 
 
 def test_word_prompt_can_include_explicit_source_language():
@@ -487,7 +479,7 @@ def test_run_word_translate_job_cancel_does_not_write_avg_quality_metadata(app, 
     assert "avg_quality" not in payload
 
 
-def test_historical_word_job_avg_quality_metadata_remains_readable(app):
+def test_historical_word_job_with_avg_quality_metadata_remains_listable(app):
     job_id = uuid.uuid4().hex
     job_store.create_job(
         job_id=job_id,
@@ -503,7 +495,6 @@ def test_historical_word_job_avg_quality_metadata_remains_readable(app):
         word_jobs = jobs.build_jobs_list(job_type="word_translate", include_all=True)
 
     job = next(item for item in word_jobs if item["job_id"] == job_id)
-    assert job["avg_quality"] == 31.5
     assert job["job_status"] == "completed"
 
 
