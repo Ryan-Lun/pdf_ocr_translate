@@ -1427,10 +1427,9 @@ def _run_word_job(
                 },
             )
 
-        async def _runner() -> tuple[float, float]:
+        async def _runner() -> float:
             last_progress = 0.0
-            last_quality = 0.0
-            async for progress, avg_quality in translator.process_translation(
+            async for progress, _legacy_quality in translator.process_translation(
                 source_path=processing_source_path,
                 output_path=output_path,
                 target_language=target_lang,
@@ -1442,24 +1441,22 @@ def _run_word_job(
                 warning_callback=record_warning,
             ):
                 last_progress = float(progress)
-                last_quality = float(avg_quality)
                 jobs.set_job_state(
                     job_dir,
                     status="running",
                     stage="translate",
                     progress=round(last_progress, 2),
-                    extra_meta={"avg_quality": round(last_quality, 2)},
                 )
-            return last_progress, last_quality
+            return last_progress
 
-        last_progress, last_quality = asyncio.run(_runner())
+        last_progress = asyncio.run(_runner())
         if cancel_event.is_set():
             jobs.set_job_state(
                 job_dir,
                 status="cancelled",
                 stage="cancelled",
                 completed_at=time.time(),
-                extra_meta={"translate_completed_at": time.time(), "avg_quality": round(last_quality, 2)},
+                extra_meta={"translate_completed_at": time.time()},
             )
             return
         jobs.set_job_state(
@@ -1467,7 +1464,6 @@ def _run_word_job(
             status="running",
             stage="save",
             progress=max(100.0, round(last_progress, 2)),
-            extra_meta={"avg_quality": round(last_quality, 2)},
         )
         now_done = time.time()
         jobs.set_job_state(
@@ -1478,7 +1474,6 @@ def _run_word_job(
             completed_at=now_done,
             extra_meta={
                 "translate_completed_at": now_done,
-                "avg_quality": round(last_quality, 2),
             },
         )
         jobs.job_store.register_artifact(job_id, "docx", "output/output.docx")
@@ -1563,7 +1558,6 @@ def enqueue_word_job_from_upload(
         "system_prompt": custom_system_prompt,
         "source_filename": safe_name,
         "progress": 0.0,
-        "avg_quality": 0.0,
     }
     payload = {
         "source_lang": source_lang,
@@ -1574,7 +1568,6 @@ def enqueue_word_job_from_upload(
         "system_prompt": custom_system_prompt,
         "source_filename": safe_name,
         "processing_started_at": now_ts,
-        "avg_quality": 0.0,
     }
     jobs.create_job_state(
         job_dir,

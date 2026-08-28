@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -11,7 +12,7 @@ import pytest
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-from app.services import jobs, state, translation_memory
+from app.services import job_store, jobs, state, translation_memory
 from app.services.word_translate import (
     EnhancedWordTranslator,
     build_word_quality_prompt,
@@ -19,6 +20,8 @@ from app.services.word_translate import (
     build_word_system_prompt_with_source,
     enqueue_word_job_from_upload,
     ensure_docx_source,
+    cancel_word_job,
+    run_word_translate_job,
 )
 
 
@@ -44,7 +47,7 @@ async def _consume_translation(
     target_language: str = "en",
     system_prompt: str | None = None,
 ) -> None:
-    async for _progress, _quality in translator.process_translation(
+    async for _progress, _legacy_quality in translator.process_translation(
         source_path=source_path,
         output_path=output_path,
         source_language=source_language,
@@ -325,7 +328,9 @@ def test_enqueue_word_job_from_upload_stores_creator_name(tmp_path, monkeypatch)
     meta = jobs.load_job_meta(state.JOB_ROOT / job_id)
     assert meta is not None
     assert meta["creator_name"] == "alice"
+    assert "avg_quality" not in meta
     assert captured["payload"]["creator_name"] == "alice"
+    assert "avg_quality" not in captured["payload"]
 
 
 def test_enqueue_word_job_from_upload_stores_system_prompt(tmp_path, monkeypatch):
@@ -354,6 +359,160 @@ def test_enqueue_word_job_from_upload_stores_system_prompt(tmp_path, monkeypatch
     assert meta is not None
     assert meta["system_prompt"] == "Use concise legal wording."
     assert captured["payload"]["system_prompt"] == "Use concise legal wording."
+
+
+def test_run_word_translate_job_does_not_write_avg_quality_metadata(app, tmp_path, monkeypatch):
+    job_id = uuid.uuid4().hex
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    source_path = job_dir / "source.docx"
+    output_path = job_dir / "output" / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("表格內容")
+    source_doc.save(source_path)
+    jobs.create_job_state(
+        job_dir,
+        job_type="word_translate",
+        stage="queued",
+        job_name="sample",
+        target_lang="en",
+        payload={"target_lang": "en"},
+        meta={
+            "job_name": "sample",
+            "job_type": "word_translate",
+            "target_lang": "en",
+            "source_filename": "source.docx",
+        },
+    )
+
+    class _ModelCompletions:
+        async def create(self, **kwargs):
+            message = type("Message", (), {"content": "translated table content"})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _ModelChat:
+        completions = _ModelCompletions()
+
+    class _ModelClient:
+        chat = _ModelChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _ModelClient(),
+    )
+
+    run_word_translate_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        source_path=source_path,
+        processing_source_path=source_path,
+        output_path=output_path,
+        source_lang="auto",
+        target_lang="en",
+        retain_terms=[],
+    )
+
+    record = job_store.get_job(job_id)
+    payload = job_store.deserialize_payload(record)
+    meta = jobs.load_job_meta(job_dir)
+    assert record is not None
+    assert record.status == "completed"
+    assert record.progress == 100.0
+    assert meta is not None
+    assert "avg_quality" not in meta
+    assert "avg_quality" not in payload
+    assert output_path.exists()
+
+
+def test_run_word_translate_job_cancel_does_not_write_avg_quality_metadata(app, tmp_path, monkeypatch):
+    job_id = uuid.uuid4().hex
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    source_path = job_dir / "source.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("表格內容")
+    source_doc.save(source_path)
+    jobs.create_job_state(
+        job_dir,
+        job_type="word_translate",
+        stage="queued",
+        job_name="sample",
+        target_lang="en",
+        payload={"target_lang": "en"},
+        meta={
+            "job_name": "sample",
+            "job_type": "word_translate",
+            "target_lang": "en",
+            "source_filename": "source.docx",
+        },
+    )
+
+    class _CancellingCompletions:
+        async def create(self, **kwargs):
+            assert cancel_word_job(job_id) is True
+            message = type("Message", (), {"content": "translated table content"})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _CancellingChat:
+        completions = _CancellingCompletions()
+
+    class _CancellingClient:
+        chat = _CancellingChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _CancellingClient(),
+    )
+
+    run_word_translate_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        source_path=source_path,
+        processing_source_path=source_path,
+        output_path=job_dir / "output" / "output.docx",
+        source_lang="auto",
+        target_lang="en",
+        retain_terms=[],
+    )
+
+    record = job_store.get_job(job_id)
+    payload = job_store.deserialize_payload(record)
+    meta = jobs.load_job_meta(job_dir)
+    assert record is not None
+    assert record.status == "cancelled"
+    assert meta is not None
+    assert "avg_quality" not in meta
+    assert "avg_quality" not in payload
+
+
+def test_historical_word_job_avg_quality_metadata_remains_readable(app):
+    job_id = uuid.uuid4().hex
+    job_store.create_job(
+        job_id=job_id,
+        job_type="word_translate",
+        stage="completed",
+        status="completed",
+        job_name="legacy-word",
+        payload={"avg_quality": 31.5, "target_lang": "en"},
+        target_lang="en",
+    )
+
+    with app.test_request_context():
+        word_jobs = jobs.build_jobs_list(job_type="word_translate", include_all=True)
+
+    job = next(item for item in word_jobs if item["job_id"] == job_id)
+    assert job["avg_quality"] == 31.5
+    assert job["job_status"] == "completed"
+
+
+def test_word_workspace_page_does_not_render_quality_score(client):
+    resp = client.get("/workspace/word")
+
+    assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+    assert "品質:" not in html
 
 
 def test_word_translation_with_system_prompt_includes_prompt(tmp_path, monkeypatch):
