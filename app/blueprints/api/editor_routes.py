@@ -265,8 +265,9 @@ def batch_restore(job_id: str):
             raw_text = batch.build_jsonl_text_from_translations(debug_translations)
             if not raw_text and not prefilled:
                 return jsonify({"ok": False, "error": "Batch output not found."}), 400
+        key_map = batch._load_batch_key_map(job_dir)
         translations = batch.build_translations_from_jsonl_text(
-            raw_text, alias_map=alias_map, prefilled=prefilled
+            raw_text, alias_map=alias_map, prefilled=prefilled, key_map=key_map
         )
         ocr_pages = ocr.load_ocr_pages(job_dir)
         pp_pages = ocr.load_pp_pages(job_dir)

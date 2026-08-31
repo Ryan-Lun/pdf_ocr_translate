@@ -6,6 +6,7 @@ import time
 from app.services.batch import (
     build_batch_items,
     build_edits_payload_from_translations,
+    build_translations_from_jsonl_text,
     resolve_batch_prompt,
     translate_texts_for_region,
 )
@@ -1682,11 +1683,11 @@ def test_build_edits_payload_keeps_source_text_metadata_for_general_force():
     assert box["tm_document_mode"] == "general_force"
 
 
-def test_translate_texts_for_region_adds_glossary_and_protected_token_instructions(monkeypatch):
+def test_translate_texts_for_region_adds_required_glossary_term_instructions(monkeypatch):
     captured: dict[str, str] = {}
 
     class FakeResponse:
-        output_text = "translated"
+        output_text = "<term id=\"0001\">Regulation</term>"
 
     class FakeResponses:
         @staticmethod
@@ -1710,19 +1711,23 @@ def test_translate_texts_for_region_adds_glossary_and_protected_token_instructio
         glossary_entries=[("品質系統規範", "Quality System Regulation")],
     )
 
-    assert outputs == ["translated"]
+    assert outputs == ["Quality System Regulation"]
     assert captured["model"] == "fake-model"
     assert "Use the following terminology when applicable:" in captured["instructions"]
     assert "品質系統規範 -> Quality System Regulation" in captured["instructions"]
-    assert "[[[GLOSSARY_TERM_0001::TERM]]]" in captured["instructions"]
-    assert "[[[GLOSSARY_TERM_" in captured["input"]
+    assert "Required glossary terms use this format" in captured["instructions"]
+    assert "The approved glossary term must be used exactly as written" in captured["instructions"]
+    assert "You may reposition the entire required glossary term" in captured["instructions"]
+    assert "Legacy protected glossary tokens may also appear" in captured["instructions"]
+    assert captured["input"] == '<term id="0001">Quality System Regulation</term>'
+    assert "[[[GLOSSARY_TERM_" not in captured["input"]
 
 
 def test_translate_texts_for_region_reverses_glossary_for_chinese_target(monkeypatch):
     captured: dict[str, str] = {}
 
     class FakeResponse:
-        output_text = "[[[GLOSSARY_TERM_0001::批號]]]"
+        output_text = '<term id="0001">批号</term>'
 
     class FakeResponses:
         @staticmethod
@@ -1748,7 +1753,103 @@ def test_translate_texts_for_region_reverses_glossary_for_chinese_target(monkeyp
     assert outputs == ["批號"]
     assert "Batch No. -> 批號" in captured["instructions"]
     assert "批號 -> Batch No." not in captured["instructions"]
-    assert "[[[GLOSSARY_TERM_0001::批號]]]" in captured["input"]
+    assert captured["input"] == '<term id="0001">批號</term>'
+
+
+def test_build_batch_items_records_required_glossary_term_metadata():
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": ["外觀形狀", "製程規範"],
+            "rec_polys": [
+                [[0, 0], [10, 0], [10, 10], [0, 10]],
+                [[20, 0], [30, 0], [30, 10], [20, 10]],
+            ],
+        }
+    ]
+
+    items, _, key_map, _ = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[("外觀", "Appearance"), ("製程規範", "Process Specification")],
+        source_lang="zh",
+        target_lang="en",
+        document_mode="scanned",
+    )
+
+    assert items[0]["body"]["messages"][1]["content"] == '<term id="0001">Appearance</term>形狀'
+    assert items[1]["body"]["messages"][1]["content"] == '<term id="0001">Process Specification</term>'
+    assert key_map["p0000-l0000"]["required_glossary_terms"] == [
+        {"id": "0001", "source": "外觀", "target": "Appearance"}
+    ]
+    assert key_map["p0000-l0001"]["required_glossary_terms"] == [
+        {"id": "0001", "source": "製程規範", "target": "Process Specification"}
+    ]
+
+
+def test_build_translations_from_jsonl_text_restores_required_glossary_with_key_map():
+    raw_text = "\n".join(
+        [
+            json.dumps(
+                {
+                    "custom_id": "p0000-l0000",
+                    "response": {
+                        "body": {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": 'The <term id="0001">Visual Appearance</term> shape was checked.'
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                }
+            )
+        ]
+    )
+
+    translations = build_translations_from_jsonl_text(
+        raw_text,
+        key_map={
+            "p0000-l0000": {
+                "source_text": "外觀形狀",
+                "source_normalized": "外觀形狀",
+                "required_glossary_terms": [
+                    {"id": "0001", "source": "外觀", "target": "Appearance"}
+                ],
+            }
+        },
+    )
+
+    assert translations == {"p0000-l0000": "The Appearance shape was checked."}
+
+
+def test_build_translations_from_jsonl_text_rejects_missing_required_glossary_term():
+    raw_text = json.dumps(
+        {
+            "custom_id": "p0000-l0000",
+            "response": {"body": {"output_text": "The shape was checked."}},
+        }
+    )
+
+    try:
+        build_translations_from_jsonl_text(
+            raw_text,
+            key_map={
+                "p0000-l0000": {
+                    "required_glossary_terms": [
+                        {"id": "0001", "source": "外觀", "target": "Appearance"}
+                    ],
+                }
+            },
+        )
+    except RuntimeError as exc:
+        assert "missing required glossary terms" in str(exc)
+        assert "Appearance" in str(exc)
+    else:
+        raise AssertionError("missing required glossary term should fail")
 
 
 def test_translate_texts_for_region_auto_source_uses_english_for_simplified_chinese_target(monkeypatch):

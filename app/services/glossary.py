@@ -751,6 +751,18 @@ def restore_protected_glossary_terms(
     return restored
 
 
+def required_term_targets_from_text(text: str) -> dict[str, str]:
+    if not text:
+        return {}
+    targets: dict[str, str] = {}
+    for match in _REQUIRED_TERM_PATTERN.finditer(text):
+        term_id = str(match.group(1) or "").strip()
+        target = _unescape_required_term_target(match.group(2))
+        if term_id and target:
+            targets[term_id] = target
+    return targets
+
+
 def find_missing_required_glossary_terms(
     text: str,
     required_terms: RequiredTermContext,

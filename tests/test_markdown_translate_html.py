@@ -29,8 +29,46 @@ def _load_module():
     fake_glossary.glossary_pairs_for_translation = (
         lambda entries=None, **kwargs: list(entries or [])
     )
+    class FakeRequiredGlossaryTerm:
+        def __init__(self, id, source, target):
+            self.id = id
+            self.source = source
+            self.target = target
+
+    class FakeGlossaryApplication:
+        def __init__(self, text, required_terms=()):
+            self.text = text
+            self.required_terms = tuple(required_terms)
+
+    def fake_apply_required_glossary_terms(text, entries=None, **kwargs):
+        protected = text
+        terms = []
+        for index, (source, target) in enumerate(entries or [], start=1):
+            term_id = f"{index:04d}"
+            if source in protected:
+                protected = protected.replace(source, f'<term id="{term_id}">{target}</term>')
+                terms.append(FakeRequiredGlossaryTerm(term_id, source, target))
+        return FakeGlossaryApplication(protected, terms)
+
+    def fake_restore_protected_glossary_terms(text, required_terms=None):
+        targets = {}
+        if isinstance(required_terms, FakeGlossaryApplication):
+            targets = {term.id: term.target for term in required_terms.required_terms}
+        def repl(match):
+            return targets.get(match.group(1), match.group(2))
+        import re
+        return re.sub(r'<term id="(\d{4})">(.*?)</term>', repl, text)
+
+    def fake_find_missing_required_glossary_terms(text, required_terms=None):
+        if isinstance(required_terms, FakeGlossaryApplication):
+            return [term.target for term in required_terms.required_terms if term.target not in text]
+        return []
+
+    fake_glossary.RequiredTermContext = object
+    fake_glossary.apply_required_glossary_terms = fake_apply_required_glossary_terms
     fake_glossary.apply_glossary_with_protection = lambda text, entries=None, **kwargs: text
-    fake_glossary.restore_protected_glossary_terms = lambda text: text
+    fake_glossary.restore_protected_glossary_terms = fake_restore_protected_glossary_terms
+    fake_glossary.find_missing_required_glossary_terms = fake_find_missing_required_glossary_terms
     fake_openai_config = types.ModuleType("app.services.openai_config")
     fake_openai_config.get_openai_timeout_seconds = lambda: max(
         0.1,
@@ -117,24 +155,21 @@ def test_translate_html_file_preserves_tags_and_image_src(tmp_path: Path):
     assert "<table>" in translated
 
 
-def test_translate_html_file_applies_glossary_protection(tmp_path: Path):
+def test_translate_html_file_applies_required_glossary_term_protection(tmp_path: Path):
     module = _load_module()
     source = tmp_path / "doc.html"
     output = tmp_path / "doc.translated.html"
-    source.write_text("<p>髖臼杯</p>", encoding="utf-8")
+    source.write_text("<p>髖臼杯 shape</p>", encoding="utf-8")
 
     module.glossary.load_combined_glossary = lambda: [("髖臼杯", "Acetabular Cup")]
-    module.glossary.apply_glossary_with_protection = (
-        lambda text, entries=None, **kwargs: text.replace("髖臼杯", "[[[GLOSSARY_TERM_0001::Acetabular Cup]]]")
-    )
-    module.glossary.restore_protected_glossary_terms = (
-        lambda text: text.replace("[[[GLOSSARY_TERM_0001::Acetabular Cup]]]", "Acetabular Cup")
-    )
+    requests: list[dict] = []
 
     class FakeCompletions:
         def create(self, **kwargs):
+            requests.append(kwargs)
             text = kwargs["messages"][-1]["content"].split("\n")[-1]
-            message = types.SimpleNamespace(content=text)
+            assert text == '<term id="0001">Acetabular Cup</term> shape'
+            message = types.SimpleNamespace(content='The <term id="0001">Cup</term> shape')
             choice = types.SimpleNamespace(message=message)
             return types.SimpleNamespace(choices=[choice])
 
@@ -149,7 +184,44 @@ def test_translate_html_file_applies_glossary_protection(tmp_path: Path):
     module.translate_html_file(source, output, target_lang="en")
     translated = output.read_text(encoding="utf-8")
 
-    assert "<p>Acetabular Cup</p>" in translated
+    assert "<p>The Acetabular Cup shape</p>" in translated
+    system_prompt = requests[0]["messages"][0]["content"]
+    assert "Required glossary terms use this format" in system_prompt
+    assert "The approved glossary term must be used exactly as written" in system_prompt
+    assert "You may reposition the entire required glossary term" in system_prompt
+
+
+def test_translate_html_file_retries_missing_required_glossary_term(tmp_path: Path):
+    module = _load_module()
+    source = tmp_path / "doc.html"
+    output = tmp_path / "doc.translated.html"
+    source.write_text("<p>外觀</p>", encoding="utf-8")
+
+    module.glossary.load_combined_glossary = lambda: [("外觀", "Appearance")]
+    responses = ["The shape", '<term id="0001">Appearance</term>']
+    requests: list[dict] = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            requests.append(kwargs)
+            message = types.SimpleNamespace(content=responses.pop(0))
+            choice = types.SimpleNamespace(message=message)
+            return types.SimpleNamespace(choices=[choice])
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    module._get_translation_client = lambda: (FakeClient(), "fake-model")
+
+    module.translate_html_file(source, output, target_lang="en")
+
+    assert output.read_text(encoding="utf-8") == "<p>Appearance</p>"
+    assert len(requests) == 2
+    assert "Missing Required Glossary Terms" in requests[1]["messages"][-1]["content"]
+    assert "* Appearance" in requests[1]["messages"][-1]["content"]
 
 
 def test_translate_html_file_with_system_prompt_includes_prompt(tmp_path: Path):

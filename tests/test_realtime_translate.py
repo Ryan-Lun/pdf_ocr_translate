@@ -287,6 +287,107 @@ def test_normalize_realtime_translation_restores_terms_and_numbered_items():
     )
 
 
+def test_parse_translation_chunk_output_restores_required_glossary_terms():
+    output = '<<<p0000-l0000>>>\nThe <term id="0001">Visual Appearance</term> shape'
+
+    translations = realtime_translate._parse_translation_chunk_output(
+        output,
+        ["p0000-l0000"],
+        {"p0000-l0000": {"0001": "Appearance"}},
+    )
+
+    assert translations == {"p0000-l0000": "The Appearance shape"}
+
+
+def test_parse_translation_chunk_output_rejects_missing_required_glossary_terms():
+    output = "<<<p0000-l0000>>>\nThe shape"
+
+    with pytest.raises(RuntimeError, match="missing required glossary terms"):
+        realtime_translate._parse_translation_chunk_output(
+            output,
+            ["p0000-l0000"],
+            {"p0000-l0000": {"0001": "Appearance"}},
+        )
+
+
+def test_realtime_translate_item_retries_missing_required_glossary_term(tmp_path, monkeypatch):
+    calls = {"count": 0}
+    responses = ["The shape", '<term id="0001">Appearance</term>']
+
+    async def fake_acquire_async(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        realtime_translate.rate_limiter.REALTIME_RATE_LIMITER,
+        "acquire_async",
+        fake_acquire_async,
+    )
+    monkeypatch.setattr(
+        realtime_translate.rate_limiter.REALTIME_RATE_LIMITER,
+        "update_from_headers",
+        lambda *args, **kwargs: None,
+    )
+
+    class _FakeParsed:
+        def __init__(self, content):
+            self.choices = [
+                type(
+                    "Choice",
+                    (),
+                    {"message": type("Message", (), {"content": content})()},
+                )()
+            ]
+
+    class _FakeRawResponse:
+        headers = {}
+
+        def __init__(self, content):
+            self._content = content
+
+        def parse(self):
+            return _FakeParsed(self._content)
+
+    class _FakeWithRawResponse:
+        async def create(self, **kwargs):
+            calls["count"] += 1
+            return _FakeRawResponse(responses.pop(0))
+
+    class _FakeCompletions:
+        with_raw_response = _FakeWithRawResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    item = {
+        "custom_id": "p0000-l0000",
+        "body": {
+            "messages": [
+                {"role": "system", "content": "translate"},
+                {"role": "user", "content": '<term id="0001">Appearance</term>形狀'},
+            ]
+        },
+    }
+
+    custom_id, translated = __import__("asyncio").run(
+        realtime_translate._translate_item(
+            _FakeClient(),
+            job_dir=tmp_path,
+            chunk_label="chunk_0001",
+            item=item,
+            model_name="fake-model",
+            request_delay=0,
+            max_retries=2,
+        )
+    )
+
+    assert custom_id == "p0000-l0000"
+    assert translated == "Appearance"
+    assert calls["count"] == 2
+
+
 def test_extract_merge_notice_candidates_from_missing_delimiter():
     items = [
         {
@@ -368,6 +469,7 @@ def test_finalize_translation_job_writes_realtime_restore_snapshot(tmp_path, mon
         pp_pages={},
         document_mode="general_force",
         target_lang="en",
+        source_lang="auto",
         key_map={},
         translations={"p0000-b0001": "Header", "p0000-c0000": "Cell"},
         status_meta={},
@@ -418,6 +520,7 @@ def test_finalize_translation_job_skips_tm_write_when_overlay_tm_disabled(tmp_pa
         pp_pages={},
         document_mode="general_force",
         target_lang="en",
+        source_lang="auto",
         key_map={
             "p0000-b0001": {
                 "source_text": "標題",

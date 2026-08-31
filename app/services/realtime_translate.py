@@ -180,9 +180,12 @@ def _normalize_numbered_item_breaks(text: str) -> str:
     return "\n".join(normalized_lines)
 
 
-def _normalize_realtime_translation(text: str) -> str:
+def _normalize_realtime_translation(
+    text: str,
+    required_terms: batch.glossary.RequiredTermContext = None,
+) -> str:
     normalized = batch.normalize_text(str(text or ""))
-    normalized = batch.glossary.restore_protected_glossary_terms(normalized)
+    normalized = batch.glossary.restore_protected_glossary_terms(normalized, required_terms)
     return _normalize_numbered_item_breaks(normalized)
 
 
@@ -226,15 +229,22 @@ def _editor_box_id_from_custom_id(custom_id: str) -> int | None:
     return None
 
 
-def _extract_chunk_segments(output: str) -> tuple[str, list[tuple[str, str]]]:
+def _extract_chunk_segments(
+    output: str,
+    required_terms_by_id: dict[str, batch.glossary.RequiredTermContext] | None = None,
+) -> tuple[str, list[tuple[str, str]]]:
     cleaned = _unwrap_code_fences(output)
     matches = list(_REALTIME_DELIMITER_RE.finditer(cleaned))
     segments: list[tuple[str, str]] = []
+    required_terms_by_id = required_terms_by_id or {}
     for idx, match in enumerate(matches):
         custom_id = str(match.group(1) or "").strip()
         start = match.end()
         end = matches[idx + 1].start() if idx + 1 < len(matches) else len(cleaned)
-        text = _normalize_realtime_translation(cleaned[start:end].strip())
+        text = _normalize_realtime_translation(
+            cleaned[start:end].strip(),
+            required_terms_by_id.get(custom_id),
+        )
         segments.append((custom_id, text))
     return cleaned, segments
 
@@ -260,7 +270,8 @@ def _extract_merge_notice_candidates(output: str, items: list[dict[str, Any]]) -
             "page_index_0based": page_idx,
             "kind": kind,
             "source_text": batch.glossary.restore_protected_glossary_terms(
-                batch.normalize_text(user_text)
+                batch.normalize_text(user_text),
+                batch.glossary.required_term_targets_from_text(user_text),
             ),
             "editor_box_id": _editor_box_id_from_custom_id(custom_id),
         }
@@ -372,8 +383,13 @@ def _serialize_translation_chunk(items: list[dict[str, Any]]) -> str:
     return "\n\n".join(parts)
 
 
-def _parse_translation_chunk_output(output: str, expected_ids: list[str]) -> dict[str, str]:
-    _, segments = _extract_chunk_segments(output)
+def _parse_translation_chunk_output(
+    output: str,
+    expected_ids: list[str],
+    required_terms_by_id: dict[str, batch.glossary.RequiredTermContext] | None = None,
+) -> dict[str, str]:
+    required_terms_by_id = required_terms_by_id or {}
+    _, segments = _extract_chunk_segments(output, required_terms_by_id)
     if len(segments) != len(expected_ids):
         raise RuntimeError(
             f"Expected {len(expected_ids)} delimiters but received {len(segments)}."
@@ -385,6 +401,14 @@ def _parse_translation_chunk_output(output: str, expected_ids: list[str]) -> dic
         found_ids.append(custom_id)
         if not text:
             raise RuntimeError(f"Empty translation for {custom_id}.")
+        missing_terms = batch.glossary.find_missing_required_glossary_terms(
+            text,
+            required_terms_by_id.get(custom_id),
+        )
+        if missing_terms:
+            raise RuntimeError(
+                f"Translation for {custom_id} is missing required glossary terms: {missing_terms}"
+            )
         translations[custom_id] = text
 
     if found_ids != expected_ids:
@@ -448,6 +472,7 @@ async def _translate_item(
 ) -> tuple[str, str]:
     retry_count = max(1, int(max_retries))
     custom_id, system_prompt, user_text = _extract_batch_item_payload(item)
+    required_terms = batch.glossary.required_term_targets_from_text(user_text)
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_text},
@@ -484,7 +509,15 @@ async def _translate_item(
                 attempt=attempt + 1,
                 content=raw_content,
             )
-            content = _normalize_realtime_translation(raw_content)
+            content = _normalize_realtime_translation(raw_content, required_terms)
+            missing_terms = batch.glossary.find_missing_required_glossary_terms(
+                content,
+                required_terms,
+            )
+            if missing_terms:
+                raise RuntimeError(
+                    f"Translation for {custom_id} is missing required glossary terms: {missing_terms}"
+                )
             if content:
                 _record_chunk_parsed(
                     job_dir=job_dir,
@@ -526,6 +559,10 @@ async def _translate_chunk(
     expected_ids = [_extract_batch_item_payload(item)[0] for item in items]
     prompt = _build_chunk_prompt(system_prompt=system_prompt)
     payload = _serialize_translation_chunk(items)
+    required_terms_by_id = {
+        custom_id: batch.glossary.required_term_targets_from_text(_extract_batch_item_payload(item)[2])
+        for custom_id, item in zip(expected_ids, items)
+    }
     _record_chunk_request(
         job_dir=job_dir,
         chunk_label=chunk_label,
@@ -564,7 +601,7 @@ async def _translate_chunk(
                 attempt=attempt + 1,
                 content=content,
             )
-            translations = _parse_translation_chunk_output(content, expected_ids)
+            translations = _parse_translation_chunk_output(content, expected_ids, required_terms_by_id)
             if translations:
                 _record_chunk_parsed(
                     job_dir=job_dir,

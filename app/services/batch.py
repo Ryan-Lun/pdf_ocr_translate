@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import datetime
 import json
@@ -27,6 +27,33 @@ from . import (
 )
 
 logger = logging.getLogger(__name__)
+REQUIRED_GLOSSARY_TERMS_INSTRUCTION = """
+Required glossary terms use this format:
+<term id="0001">TERM</term>
+
+TERM is the approved glossary translation.
+The approved glossary term must be used exactly as written.
+Do not replace it with a synonym.
+Do not change its spelling or capitalization.
+Do not remove it.
+You may reposition the entire required glossary term when natural target-language syntax requires it.
+Preserving the term does not require preserving its source-language position or surrounding source-language structure.
+Integrate the approved term naturally into the surrounding sentence.
+
+Legacy protected glossary tokens may also appear in this format:
+[[[GLOSSARY_TERM_0001::TERM]]]
+
+Copy legacy protected glossary tokens EXACTLY as provided.
+Do not translate, rewrite, split, remove, or change legacy protected glossary tokens.
+""".strip()
+MISSING_REQUIRED_GLOSSARY_TERMS_INSTRUCTION = """
+
+Missing Required Glossary Terms:
+The previous translation omitted these approved glossary terms:
+{missing_terms}
+
+Use each listed approved glossary term exactly as written in the revised translation.
+""".strip()
 TERMINAL_BATCH_STATUSES = {"completed", "failed", "canceled", "cancelled"}
 
 
@@ -56,14 +83,68 @@ def _batch_key_map_path(job_dir: Path) -> Path:
     return job_dir / "batch_key_map.json"
 
 
-def _write_batch_key_map(job_dir: Path, key_map: dict[str, dict[str, str]]) -> None:
+def _write_batch_key_map(job_dir: Path, key_map: dict[str, dict[str, Any]]) -> None:
     _batch_key_map_path(job_dir).write_text(
         json.dumps(key_map, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
 
-def _load_batch_key_map(job_dir: Path) -> dict[str, dict[str, str]]:
+def _serialize_required_glossary_terms(
+    application: glossary.GlossaryApplication,
+) -> list[dict[str, str]]:
+    return [
+        {"id": term.id, "source": term.source, "target": term.target}
+        for term in application.required_terms
+    ]
+
+
+def _deserialize_required_glossary_terms(value: Any) -> tuple[glossary.RequiredGlossaryTerm, ...]:
+    if not isinstance(value, list):
+        return tuple()
+    terms: list[glossary.RequiredGlossaryTerm] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        term_id = str(item.get("id") or "").strip()
+        source = str(item.get("source") or "").strip()
+        target = str(item.get("target") or "").strip()
+        if term_id and target:
+            terms.append(glossary.RequiredGlossaryTerm(id=term_id, source=source, target=target))
+    return tuple(terms)
+
+
+def _required_glossary_terms_from_key_meta(
+    key_meta: dict[str, Any] | None,
+) -> tuple[glossary.RequiredGlossaryTerm, ...]:
+    if not key_meta:
+        return tuple()
+    return _deserialize_required_glossary_terms(key_meta.get("required_glossary_terms"))
+
+
+def _build_missing_required_terms_prompt(missing_terms: list[str]) -> str:
+    if not missing_terms:
+        return ""
+    lines = "\n".join(f"* {term}" for term in missing_terms)
+    return MISSING_REQUIRED_GLOSSARY_TERMS_INSTRUCTION.format(missing_terms=lines)
+
+
+def _restore_and_validate_required_glossary_terms(
+    text: str,
+    required_terms: glossary.RequiredTermContext,
+    *,
+    context_label: str,
+) -> str:
+    restored = glossary.restore_protected_glossary_terms(text, required_terms)
+    missing = glossary.find_missing_required_glossary_terms(restored, required_terms)
+    if missing:
+        raise RuntimeError(
+            f"Translation output for {context_label} is missing required glossary terms: {missing}"
+        )
+    return restored
+
+
+def _load_batch_key_map(job_dir: Path) -> dict[str, dict[str, Any]]:
     path = _batch_key_map_path(job_dir)
     if not path.exists():
         return {}
@@ -73,14 +154,20 @@ def _load_batch_key_map(job_dir: Path) -> dict[str, dict[str, str]]:
         return {}
     if not isinstance(data, dict):
         return {}
-    result: dict[str, dict[str, str]] = {}
+    result: dict[str, dict[str, Any]] = {}
     for custom_id, item in data.items():
         if not isinstance(custom_id, str) or not isinstance(item, dict):
             continue
-        result[custom_id] = {
+        meta: dict[str, Any] = {
             "source_text": str(item.get("source_text") or ""),
             "source_normalized": str(item.get("source_normalized") or ""),
         }
+        required_terms = _deserialize_required_glossary_terms(item.get("required_glossary_terms"))
+        if required_terms:
+            meta["required_glossary_terms"] = _serialize_required_glossary_terms(
+                glossary.GlossaryApplication(text="", required_terms=required_terms)
+            )
+        result[custom_id] = meta
     return result
 
 
@@ -455,13 +542,7 @@ def translate_texts_for_region(
         source_lang=source_lang,
         target_lang=target_lang,
     )
-    protected_term_prompt = ""
-    if glossary_entries:
-        protected_term_prompt = (
-            "If the input contains tokens in the form "
-            "[[[GLOSSARY_TERM_0001::TERM]]], copy those tokens EXACTLY unchanged "
-            "into the output and keep TERM verbatim."
-        )
+    protected_term_prompt = REQUIRED_GLOSSARY_TERMS_INSTRUCTION if glossary_entries else ""
 
     client = get_azure_client()
     final_prompt = "\n\n".join(
@@ -490,21 +571,42 @@ def translate_texts_for_region(
         if not should_translate:
             outputs.append(source_text)
             continue
-        protected_source = glossary.apply_glossary_with_protection(
+        glossary_application = glossary.apply_required_glossary_terms(
             source_text,
             glossary_entries,
             source_lang=source_lang,
             target_lang=target_lang,
         )
-        response = client.responses.create(
-            model=model_name,
-            instructions=final_prompt,
-            input=protected_source,
-        )
-        translated = glossary.restore_protected_glossary_terms(
-            str(response.output_text or "").strip()
-        )
-        outputs.append(normalize_text(translated) or source_text)
+        protected_source = glossary_application.text
+        attempt_prompt = final_prompt
+        last_missing_required_terms: list[str] = []
+        for attempt in range(3):
+            if last_missing_required_terms:
+                attempt_prompt = "\n\n".join(
+                    [final_prompt, _build_missing_required_terms_prompt(last_missing_required_terms)]
+                ).strip()
+            response = client.responses.create(
+                model=model_name,
+                instructions=attempt_prompt,
+                input=protected_source,
+            )
+            translated = glossary.restore_protected_glossary_terms(
+                str(response.output_text or "").strip(),
+                glossary_application,
+            )
+            normalized_translated = normalize_text(translated)
+            missing_required_terms = glossary.find_missing_required_glossary_terms(
+                normalized_translated,
+                glossary_application,
+            )
+            if not missing_required_terms:
+                outputs.append(normalized_translated or source_text)
+                break
+            last_missing_required_terms = missing_required_terms
+            if attempt == 2:
+                raise RuntimeError(
+                    f"PDF region translation is missing required glossary terms: {missing_required_terms}"
+                )
     return outputs
 
 
@@ -586,10 +688,10 @@ def build_batch_items(
     target_lang: str = "en",
     source_lang: str = "auto",
     document_mode: str = "form",
-) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, dict[str, str]], dict[str, str]]:
+) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, dict[str, Any]], dict[str, str]]:
     items: list[dict[str, Any]] = []
     alias_map: dict[str, str] = {}
-    key_map: dict[str, dict[str, str]] = {}
+    key_map: dict[str, dict[str, Any]] = {}
     prefilled: dict[str, str] = {}
     seen: dict[str, str] = {}
     pp_pages = pp_pages or {}
@@ -653,12 +755,13 @@ def build_batch_items(
                         )
                     tm_dirty = True
                     return
-        clean = glossary.apply_glossary_with_protection(
+        glossary_application = glossary.apply_required_glossary_terms(
             normalize_source_for_prompt(canonical_source_text),
             glossary_entries,
             source_lang=source_lang,
             target_lang=target_lang,
         )
+        clean = glossary_application.text
         if not clean:
             return
         dedupe_key = canonical_source_normalized
@@ -666,10 +769,14 @@ def build_batch_items(
             alias_map[custom_id] = seen[dedupe_key]
             return
         seen[dedupe_key] = custom_id
-        key_map[custom_id] = {
+        key_meta: dict[str, Any] = {
             "source_text": canonical_source_text,
             "source_normalized": canonical_source_normalized,
         }
+        required_terms = _serialize_required_glossary_terms(glossary_application)
+        if required_terms:
+            key_meta["required_glossary_terms"] = required_terms
+        key_map[custom_id] = key_meta
         items.append(
             {
                 "custom_id": custom_id,
@@ -845,6 +952,7 @@ def build_translations_from_jsonl_text(
     raw_text: str,
     alias_map: dict[str, str] | None = None,
     prefilled: dict[str, str] | None = None,
+    key_map: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, str]:
     translations: dict[str, str] = {}
     if prefilled:
@@ -861,7 +969,14 @@ def build_translations_from_jsonl_text(
         custom_id = item.get("custom_id", "")
         translated = extract_batch_translation(item)
         if translated:
-            translations[custom_id] = glossary.restore_protected_glossary_terms(translated)
+            required_terms = _required_glossary_terms_from_key_meta(
+                (key_map or {}).get(custom_id)
+            )
+            translations[custom_id] = _restore_and_validate_required_glossary_terms(
+                translated,
+                required_terms,
+                context_label=custom_id or "batch item",
+            )
     if alias_map:
         for alias_id, canonical_id in alias_map.items():
             if alias_id in translations:
@@ -1130,7 +1245,7 @@ def finalize_translation_job(
     document_mode: str,
     target_lang: str,
     source_lang: str,
-    key_map: dict[str, dict[str, str]],
+    key_map: dict[str, dict[str, Any]],
     translations: dict[str, str],
     status_meta: dict[str, Any],
     backend_id: str,
@@ -1478,7 +1593,7 @@ def _finalize_batch_translate_job(
     document_mode: str,
     target_lang: str,
     source_lang: str,
-    key_map: dict[str, dict[str, str]],
+    key_map: dict[str, dict[str, Any]],
     alias_map: dict[str, str],
     prefilled: dict[str, str],
     raw_text: str,
@@ -1486,7 +1601,7 @@ def _finalize_batch_translate_job(
     batch_id: str,
 ) -> None:
     translations = build_translations_from_jsonl_text(
-        raw_text, alias_map=alias_map, prefilled=prefilled
+        raw_text, alias_map=alias_map, prefilled=prefilled, key_map=key_map
     )
     finalize_translation_job(
         job_id=job_id,

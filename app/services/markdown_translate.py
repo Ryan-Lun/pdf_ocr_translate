@@ -22,6 +22,35 @@ logger = logging.getLogger(__name__)
 DOC_TRANSLATE_MAX_RETRIES = 3
 
 
+REQUIRED_GLOSSARY_TERMS_INSTRUCTION = """
+Required glossary terms use this format:
+<term id="0001">TERM</term>
+
+TERM is the approved glossary translation.
+The approved glossary term must be used exactly as written.
+Do not replace it with a synonym.
+Do not change its spelling or capitalization.
+Do not remove it.
+You may reposition the entire required glossary term when natural target-language syntax requires it.
+Preserving the term does not require preserving its source-language position or surrounding source-language structure.
+Integrate the approved term naturally into the surrounding sentence.
+
+Legacy protected glossary tokens may also appear in this format:
+[[[GLOSSARY_TERM_0001::TERM]]]
+
+Copy legacy protected glossary tokens EXACTLY as provided.
+Do not translate, rewrite, split, remove, or change legacy protected glossary tokens.
+""".strip()
+
+MISSING_REQUIRED_GLOSSARY_TERMS_INSTRUCTION = """
+Missing Required Glossary Terms:
+The previous translation omitted these approved glossary terms:
+{missing_terms}
+
+Use each listed approved glossary term exactly as written in the revised translation.
+""".strip()
+
+
 def _run_pandoc(text: str, from_format: str, to_format: str) -> str:
     completed = subprocess.run(
         ["pandoc", "-f", from_format, "-t", to_format],
@@ -153,9 +182,7 @@ def _build_system_prompt(
         glossary_lines = "\n".join(
             f"- {src} => {dst}" for src, dst in glossary_pairs[:50]
         )
-        prompt.append(
-            "If the input contains tokens in the form [[[GLOSSARY_TERM_0001::TERM]]], copy those tokens exactly unchanged and keep TERM verbatim."
-        )
+        prompt.append(REQUIRED_GLOSSARY_TERMS_INSTRUCTION)
         prompt.append("Use the following glossary when applicable:")
         prompt.append(glossary_lines)
     if state.TRANSLATION_SOURCE_FIDELITY_GUARD not in "\n".join(prompt):
@@ -179,6 +206,13 @@ def _extract_message_text(response: Any) -> str:
     return str(content or "").strip()
 
 
+def _build_missing_required_terms_prompt(missing_terms: list[str]) -> str:
+    if not missing_terms:
+        return ""
+    lines = "\n".join(f"* {term}" for term in missing_terms)
+    return MISSING_REQUIRED_GLOSSARY_TERMS_INSTRUCTION.format(missing_terms=lines)
+
+
 def _doc_translate_request(
     *,
     client: Any,
@@ -188,12 +222,23 @@ def _doc_translate_request(
     debug_custom_id: str | None,
     empty_error: str,
     warning_callback: Callable[[str], None] | None = None,
+    required_terms: glossary.RequiredTermContext = None,
 ) -> str:
+    previous_missing_required_terms: list[str] = []
     for attempt in range(DOC_TRANSLATE_MAX_RETRIES):
         try:
+            attempt_messages = messages
+            if previous_missing_required_terms:
+                attempt_messages = [dict(message) for message in messages]
+                attempt_messages[-1]["content"] = "\n\n".join(
+                    [
+                        attempt_messages[-1]["content"],
+                        _build_missing_required_terms_prompt(previous_missing_required_terms),
+                    ]
+                ).strip()
             response = client.chat.completions.create(
                 model=model,
-                messages=messages,
+                messages=attempt_messages,
             )
             translated = _extract_message_text(response)
             if debug_job_dir is not None and debug_custom_id:
@@ -204,7 +249,20 @@ def _doc_translate_request(
                     content=translated,
                 )
             if translated:
-                return translated
+                restored = glossary.restore_protected_glossary_terms(
+                    translated,
+                    required_terms,
+                )
+                missing_required_terms = glossary.find_missing_required_glossary_terms(
+                    restored,
+                    required_terms,
+                )
+                if not missing_required_terms:
+                    return translated
+                previous_missing_required_terms = missing_required_terms
+                raise RuntimeError(
+                    f"PDF 翻譯重建回傳缺少指定 Glossary 術語：{missing_required_terms}"
+                )
             raise RuntimeError(empty_error)
         except Exception as exc:
             error_detail = openai_config.format_request_error(exc)
@@ -238,12 +296,13 @@ def _translate_snippet(
 ) -> str:
     if not snippet.strip():
         return snippet
-    protected_snippet = glossary.apply_glossary_with_protection(
+    glossary_application = glossary.apply_required_glossary_terms(
         snippet,
         glossary_entries,
         source_lang=source_lang,
         target_lang=target_lang,
     )
+    protected_snippet = glossary_application.text
     if debug_job_dir is not None and debug_custom_id:
         translation_debug.record_request(
             job_dir=debug_job_dir,
@@ -264,8 +323,9 @@ def _translate_snippet(
         debug_custom_id=debug_custom_id,
         empty_error="PDF 翻譯重建回傳空白內容。",
         warning_callback=warning_callback,
+        required_terms=glossary_application,
     )
-    restored = glossary.restore_protected_glossary_terms(translated)
+    restored = glossary.restore_protected_glossary_terms(translated, glossary_application)
     if debug_job_dir is not None and debug_custom_id and restored:
         translation_debug.record_parsed(
             job_dir=debug_job_dir,
@@ -289,12 +349,13 @@ def _translate_text(
 ) -> str:
     if not text.strip():
         return text
-    protected_text = glossary.apply_glossary_with_protection(
+    glossary_application = glossary.apply_required_glossary_terms(
         text,
         glossary_entries,
         source_lang=source_lang,
         target_lang=target_lang,
     )
+    protected_text = glossary_application.text
     payload = (
         "Translate the following source text from an HTML text node.\n"
         "Return only the translated text. Do not add tags or explanations.\n"
@@ -320,8 +381,9 @@ def _translate_text(
         debug_custom_id=debug_custom_id,
         empty_error="PDF 翻譯重建回傳空白內容。",
         warning_callback=warning_callback,
+        required_terms=glossary_application,
     )
-    restored = glossary.restore_protected_glossary_terms(translated)
+    restored = glossary.restore_protected_glossary_terms(translated, glossary_application)
     if debug_job_dir is not None and debug_custom_id and restored:
         translation_debug.record_parsed(
             job_dir=debug_job_dir,
