@@ -630,6 +630,72 @@ def test_word_translation_batches_short_segments(tmp_path, monkeypatch):
     assert plan[0]["size"] == 3
     assert plan[0]["ids"] == ["item_0001", "item_0002", "item_0003"]
 
+
+def test_word_translation_preserves_decimal_prefix_before_required_glossary(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [("雷射雕刻", "Laser Marking"), ("外觀", "Appearance")],
+    )
+    requests: list[dict] = []
+
+    class _NumberedCompletions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            payload = kwargs["messages"][-1]["content"]
+            raw_items = payload.split("<SOURCE_ITEMS_JSON>\n", 1)[1].split(
+                "\n</SOURCE_ITEMS_JSON>",
+                1,
+            )[0]
+            items = json.loads(raw_items)
+            content = json.dumps(
+                {
+                    items[0]["id"]: 'The content of <term id="0001">Laser Marking</term>',
+                    items[1]["id"]: 'Check the <term id="0001">Appearance</term>',
+                },
+                ensure_ascii=False,
+            )
+            message = type("Message", (), {"content": content})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _NumberedChat:
+        completions = _NumberedCompletions()
+
+    class _NumberedClient:
+        chat = _NumberedChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _NumberedClient(),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("3.1雷射雕刻內容")
+    source_doc.add_paragraph("3.2外觀檢查")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    translator.batch_size = 20
+    asyncio.run(_consume_translation(translator, source_path, output_path))
+
+    payload = requests[0]["messages"][-1]["content"]
+    raw_items = payload.split("<SOURCE_ITEMS_JSON>\n", 1)[1].split(
+        "\n</SOURCE_ITEMS_JSON>",
+        1,
+    )[0]
+    items = json.loads(raw_items)
+    assert items[0]["text"] == '<term id="0001">Laser Marking</term>內容'
+    assert items[1]["text"] == '<term id="0001">Appearance</term>檢查'
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "3.1 The content of Laser Marking",
+        "3.2 Check the Appearance",
+    ]
+
+
 def test_word_translate_returns_text_without_quality_runtime(monkeypatch):
     requests: list[dict] = []
 

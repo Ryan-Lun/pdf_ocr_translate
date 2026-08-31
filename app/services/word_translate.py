@@ -1193,7 +1193,7 @@ class EnhancedWordTranslator:
         glossary_entries = glossary.load_combined_glossary()
         if debug_job_dir is None:
             debug_job_dir = output_path.parent.parent if output_path.parent.name == "output" else output_path.parent
-        prefix_pattern = re.compile(r"^\s*(?:\d+\.\s*|\(\d+\)\s*|[a-zA-Z]\.\s*|\([a-zA-Z]\)\s*)")
+        prefix_pattern = re.compile(r"^\s*(?:(?:\d+(?:\.\d+)+|\d+\.)\s*|\(\d+\)\s*|[a-zA-Z]\.\s*|\([a-zA-Z]\)\s*)")
         texts_for_translation: dict[str, dict[str, Any]] = {}
         for paragraph in all_paragraphs:
             if self.is_table_of_contents_paragraph(paragraph):
@@ -1286,7 +1286,15 @@ class EnhancedWordTranslator:
             translated_core_text = translated_cache.get(core_text)
             if translated_core_text is None:
                 continue
-            final_text = prefix + translated_core_text
+            separator = ""
+            if (
+                prefix
+                and translated_core_text
+                and not prefix[-1].isspace()
+                and not translated_core_text[0].isspace()
+            ):
+                separator = " "
+            final_text = f"{prefix}{separator}{translated_core_text}"
             if self.paragraph_contains_drawing(paragraph):
                 self.replace_paragraph_text_preserving_drawings(paragraph, final_text)
             else:
