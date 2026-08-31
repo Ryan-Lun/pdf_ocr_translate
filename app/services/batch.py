@@ -90,6 +90,18 @@ def _write_batch_key_map(job_dir: Path, key_map: dict[str, dict[str, Any]]) -> N
     )
 
 
+def _write_required_glossary_hits_from_key_map(
+    job_dir: Path,
+    key_map: dict[str, dict[str, Any]],
+) -> Path:
+    hits_by_location = [
+        (custom_id, _required_glossary_terms_from_key_meta(key_meta))
+        for custom_id, key_meta in key_map.items()
+        if isinstance(key_meta, dict)
+    ]
+    return glossary.write_required_glossary_hits_artifact(job_dir, hits_by_location)
+
+
 def _serialize_required_glossary_terms(
     application: glossary.GlossaryApplication,
 ) -> list[dict[str, str]]:
@@ -1388,6 +1400,7 @@ def run_batch_translate_job(
         jobs.write_batch_alias_map(job_dir, alias_map)
         jobs.write_batch_prefill_map(job_dir, prefilled)
         _write_batch_key_map(job_dir, key_map)
+        _write_required_glossary_hits_from_key_map(job_dir, key_map)
         logger.info(
             "Batch translate collected pages=%s unique=%s dup_alias=%s tm_prefill=%s",
             len(ocr_pages),

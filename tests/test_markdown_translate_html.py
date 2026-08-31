@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import types
@@ -64,11 +65,35 @@ def _load_module():
             return [term.target for term in required_terms.required_terms if term.target not in text]
         return []
 
+    def fake_write_required_glossary_hits_artifact(job_dir, hits_by_location, filename="glossary_hits.json"):
+        payload = []
+        by_pair = {}
+        for location, application in hits_by_location:
+            for term in getattr(application, "required_terms", ()):
+                key = (term.source, term.target)
+                item = by_pair.setdefault(
+                    key,
+                    {
+                        "source_term": term.source,
+                        "approved_term": term.target,
+                        "count": 0,
+                        "locations": [],
+                    },
+                )
+                item["count"] += 1
+                if location not in item["locations"]:
+                    item["locations"].append(location)
+        payload = list(by_pair.values())
+        path = Path(job_dir) / filename
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
     fake_glossary.RequiredTermContext = object
     fake_glossary.apply_required_glossary_terms = fake_apply_required_glossary_terms
     fake_glossary.apply_glossary_with_protection = lambda text, entries=None, **kwargs: text
     fake_glossary.restore_protected_glossary_terms = fake_restore_protected_glossary_terms
     fake_glossary.find_missing_required_glossary_terms = fake_find_missing_required_glossary_terms
+    fake_glossary.write_required_glossary_hits_artifact = fake_write_required_glossary_hits_artifact
     fake_openai_config = types.ModuleType("app.services.openai_config")
     fake_openai_config.get_openai_timeout_seconds = lambda: max(
         0.1,
@@ -181,7 +206,10 @@ def test_translate_html_file_applies_required_glossary_term_protection(tmp_path:
 
     module._get_translation_client = lambda: (FakeClient(), "fake-model")
 
-    module.translate_html_file(source, output, target_lang="en")
+    debug_job_dir = tmp_path / "job"
+    debug_job_dir.mkdir()
+
+    module.translate_html_file(source, output, target_lang="en", debug_job_dir=debug_job_dir)
     translated = output.read_text(encoding="utf-8")
 
     assert "<p>The Acetabular Cup shape</p>" in translated
@@ -189,6 +217,14 @@ def test_translate_html_file_applies_required_glossary_term_protection(tmp_path:
     assert "Required glossary terms use this format" in system_prompt
     assert "The approved glossary term must be used exactly as written" in system_prompt
     assert "You may reposition the entire required glossary term" in system_prompt
+    assert json.loads((debug_job_dir / "glossary_hits.json").read_text(encoding="utf-8")) == [
+        {
+            "source_term": "髖臼杯",
+            "approved_term": "Acetabular Cup",
+            "count": 1,
+            "locations": ["chunk_0001"],
+        }
+    ]
 
 
 def test_translate_html_file_retries_missing_required_glossary_term(tmp_path: Path):
@@ -273,7 +309,7 @@ def test_translate_html_file_writes_realtime_debug(tmp_path: Path):
 
     def _write_json(path: Path, payload):
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(__import__("json").dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _write_text(path: Path, payload: str):
         path.parent.mkdir(parents=True, exist_ok=True)

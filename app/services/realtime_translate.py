@@ -443,6 +443,7 @@ def _prepare_realtime_plan(
     jobs.write_batch_alias_map(job_dir, alias_map)
     jobs.write_batch_prefill_map(job_dir, prefilled)
     batch._write_batch_key_map(job_dir, key_map)
+    batch._write_required_glossary_hits_from_key_map(job_dir, key_map)
     return {
         "document_mode": document_mode,
         "source_lang": source_lang,

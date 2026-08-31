@@ -4,6 +4,7 @@ import json
 import time
 
 from app.services.batch import (
+    _write_required_glossary_hits_from_key_map,
     build_batch_items,
     build_edits_payload_from_translations,
     build_translations_from_jsonl_text,
@@ -1785,6 +1786,41 @@ def test_build_batch_items_records_required_glossary_term_metadata():
     ]
     assert key_map["p0000-l0001"]["required_glossary_terms"] == [
         {"id": "0001", "source": "製程規範", "target": "Process Specification"}
+    ]
+
+
+
+def test_write_required_glossary_hits_from_batch_key_map(tmp_path):
+    key_map = {
+        "p0000-l0000": {
+            "required_glossary_terms": [
+                {"id": "0001", "source": "外觀", "target": "Appearance"},
+                {"id": "0002", "source": "製程規範", "target": "Process Specification"},
+            ]
+        },
+        "p0000-l0001": {
+            "required_glossary_terms": [
+                {"id": "0001", "source": "外觀", "target": "Appearance"},
+            ]
+        },
+    }
+
+    path = _write_required_glossary_hits_from_key_map(tmp_path, key_map)
+
+    assert path.name == "glossary_hits.json"
+    assert json.loads(path.read_text(encoding="utf-8")) == [
+        {
+            "source_term": "外觀",
+            "approved_term": "Appearance",
+            "count": 2,
+            "locations": ["p0000-l0000", "p0000-l0001"],
+        },
+        {
+            "source_term": "製程規範",
+            "approved_term": "Process Specification",
+            "count": 1,
+            "locations": ["p0000-l0000"],
+        },
     ]
 
 

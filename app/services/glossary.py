@@ -67,13 +67,70 @@ def _unescape_required_term_target(value: str) -> str:
 
 
 def _required_term_target_map(required_terms: RequiredTermContext) -> dict[str, str]:
-    if required_terms is None:
-        return {}
-    if isinstance(required_terms, GlossaryApplication):
-        required_terms = required_terms.required_terms
+    terms = _required_terms_tuple(required_terms)
+    if terms is not None:
+        return {term.id: term.target for term in terms}
     if isinstance(required_terms, Mapping):
         return {str(term_id): str(target) for term_id, target in required_terms.items()}
-    return {term.id: term.target for term in required_terms}
+    return {}
+
+
+def _required_terms_tuple(
+    required_terms: RequiredTermContext,
+) -> tuple[RequiredGlossaryTerm, ...] | None:
+    if required_terms is None:
+        return tuple()
+    if isinstance(required_terms, GlossaryApplication):
+        return tuple(required_terms.required_terms)
+    if isinstance(required_terms, Mapping):
+        return None
+    return tuple(required_terms)
+
+
+def summarize_required_glossary_hits(
+    hits_by_location: Iterable[tuple[str, RequiredTermContext]],
+) -> list[dict[str, object]]:
+    summary: dict[tuple[str, str], dict[str, object]] = {}
+    for raw_location, required_terms in hits_by_location:
+        terms = _required_terms_tuple(required_terms)
+        if not terms:
+            continue
+        location = str(raw_location or "").strip()
+        for term in terms:
+            key = (term.source, term.target)
+            item = summary.get(key)
+            if item is None:
+                item = {
+                    "source_term": term.source,
+                    "approved_term": term.target,
+                    "count": 0,
+                    "locations": [],
+                }
+                summary[key] = item
+            item["count"] = int(item["count"]) + 1
+            locations = item["locations"]
+            if isinstance(locations, list) and location and location not in locations:
+                locations.append(location)
+    return list(summary.values())
+
+
+def write_required_glossary_hits_artifact(
+    job_dir: Path,
+    hits_by_location: Iterable[tuple[str, RequiredTermContext]],
+    *,
+    filename: str = "glossary_hits.json",
+) -> Path:
+    path = Path(job_dir) / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            summarize_required_glossary_hits(hits_by_location),
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 def global_glossary_path() -> Path:

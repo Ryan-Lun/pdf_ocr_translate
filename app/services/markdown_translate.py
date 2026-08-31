@@ -293,6 +293,7 @@ def _translate_snippet(
     debug_job_dir: Path | None = None,
     debug_custom_id: str | None = None,
     warning_callback: Callable[[str], None] | None = None,
+    glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
 ) -> str:
     if not snippet.strip():
         return snippet
@@ -302,6 +303,8 @@ def _translate_snippet(
         source_lang=source_lang,
         target_lang=target_lang,
     )
+    if glossary_hit_collector is not None:
+        glossary_hit_collector.append((debug_custom_id or "snippet", glossary_application))
     protected_snippet = glossary_application.text
     if debug_job_dir is not None and debug_custom_id:
         translation_debug.record_request(
@@ -346,6 +349,7 @@ def _translate_text(
     debug_job_dir: Path | None = None,
     debug_custom_id: str | None = None,
     warning_callback: Callable[[str], None] | None = None,
+    glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
 ) -> str:
     if not text.strip():
         return text
@@ -355,6 +359,8 @@ def _translate_text(
         source_lang=source_lang,
         target_lang=target_lang,
     )
+    if glossary_hit_collector is not None:
+        glossary_hit_collector.append((debug_custom_id or "text", glossary_application))
     protected_text = glossary_application.text
     payload = (
         "Translate the following source text from an HTML text node.\n"
@@ -403,6 +409,7 @@ def _translate_pandoc_doc(
     text_to_blocks,
     debug_job_dir: Path | None = None,
     warning_callback: Callable[[str], None] | None = None,
+    glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
 ) -> dict[str, Any]:
     api_version = doc.get("pandoc-api-version", [])
     blocks = doc.get("blocks", []) or []
@@ -440,6 +447,7 @@ def _translate_pandoc_doc(
             debug_job_dir=debug_job_dir,
             debug_custom_id=chunk_label,
             warning_callback=warning_callback,
+            glossary_hit_collector=glossary_hit_collector,
         )
         parsed_blocks = text_to_blocks(translated_snippet)
         translated_blocks.extend(parsed_blocks or pending)
@@ -490,6 +498,7 @@ def translate_markdown_file(
 ) -> Path:
     markdown_text = source_path.read_text(encoding="utf-8")
     doc = markdown_to_doc(markdown_text)
+    glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] = []
     translated_doc = _translate_pandoc_doc(
         doc,
         source_lang=source_lang,
@@ -499,7 +508,13 @@ def translate_markdown_file(
         text_to_blocks=markdown_to_blocks,
         debug_job_dir=debug_job_dir,
         warning_callback=warning_callback,
+        glossary_hit_collector=glossary_hit_collector,
     )
+    if debug_job_dir is not None:
+        glossary.write_required_glossary_hits_artifact(
+            debug_job_dir,
+            glossary_hit_collector,
+        )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(doc_to_markdown(translated_doc), encoding="utf-8")
     return out_path
@@ -540,6 +555,7 @@ def _translate_html_text_nodes(
     system_prompt: str | None = None,
     debug_job_dir: Path | None = None,
     warning_callback: Callable[[str], None] | None = None,
+    glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
 ) -> str:
     parts = re.split(r"(<[^>]+>)", html_text)
     client, model = _get_translation_client()
@@ -595,6 +611,7 @@ def _translate_html_text_nodes(
                 debug_job_dir=debug_job_dir,
                 debug_custom_id=debug_custom_id,
                 warning_callback=warning_callback,
+                glossary_hit_collector=glossary_hit_collector,
             )
             translated_cache[core] = translated_core
         translated_parts.append(f"{leading}{escape(translated_core, quote=False)}{trailing}")
@@ -614,6 +631,7 @@ def translate_html_file(
     warning_callback: Callable[[str], None] | None = None,
 ) -> Path:
     html_text = source_path.read_text(encoding="utf-8")
+    glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] = []
     out_path.parent.mkdir(parents=True, exist_ok=True)
     translated_html = _translate_html_text_nodes(
         html_text,
@@ -622,6 +640,12 @@ def translate_html_file(
         system_prompt=system_prompt,
         debug_job_dir=debug_job_dir,
         warning_callback=warning_callback,
+        glossary_hit_collector=glossary_hit_collector,
     )
+    if debug_job_dir is not None:
+        glossary.write_required_glossary_hits_artifact(
+            debug_job_dir,
+            glossary_hit_collector,
+        )
     out_path.write_text(_unwrap_html_code_fences(translated_html), encoding="utf-8")
     return out_path

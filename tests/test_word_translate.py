@@ -694,6 +694,20 @@ def test_word_translation_preserves_decimal_prefix_before_required_glossary(tmp_
         "3.1 The content of Laser Marking",
         "3.2 Check the Appearance",
     ]
+    assert json.loads((tmp_path / "glossary_hits.json").read_text(encoding="utf-8")) == [
+        {
+            "source_term": "雷射雕刻",
+            "approved_term": "Laser Marking",
+            "count": 1,
+            "locations": ["item_0001"],
+        },
+        {
+            "source_term": "外觀",
+            "approved_term": "Appearance",
+            "count": 1,
+            "locations": ["item_0002"],
+        },
+    ]
 
 
 def test_word_translate_returns_text_without_quality_runtime(monkeypatch):
