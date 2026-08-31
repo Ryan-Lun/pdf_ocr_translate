@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from html import escape as _html_escape, unescape as _html_unescape
+from typing import TypeAlias
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -19,6 +23,10 @@ except Exception:  # pragma: no cover - optional dependency in runtime env
 
 _PROTECTED_TERM_PREFIX = "[[[GLOSSARY_TERM_"
 _PROTECTED_TERM_PATTERN = re.compile(r"\[{3,}GLOSSARY_TERM_\d+::(.*?)\]{3,}")
+_REQUIRED_TERM_PATTERN = re.compile(
+    r"<term\s+id=[\"\'](\d{4})[\"\']>(.*?)</term>",
+    re.DOTALL,
+)
 _SPREADSHEET_NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 _GLOSSARY_CACHE_LOCK = threading.Lock()
 _GLOBAL_GLOSSARY_CACHE: tuple[Path, float | None, list[dict[str, str]]] | None = None
@@ -30,6 +38,42 @@ _SYSTEM_GLOSSARY_CACHE: tuple[
     tuple[tuple[str, float | None], ...],
     list[dict[str, str]],
 ] | None = None
+
+
+@dataclass(frozen=True)
+class RequiredGlossaryTerm:
+    id: str
+    source: str
+    target: str
+
+
+@dataclass(frozen=True)
+class GlossaryApplication:
+    text: str
+    required_terms: tuple[RequiredGlossaryTerm, ...]
+
+
+RequiredTermContext: TypeAlias = (
+    GlossaryApplication | Iterable[RequiredGlossaryTerm] | Mapping[str, str] | None
+)
+
+
+def _escape_required_term_target(value: str) -> str:
+    return _html_escape(value, quote=True).replace("&#x27;", "&apos;")
+
+
+def _unescape_required_term_target(value: str) -> str:
+    return _html_unescape(value)
+
+
+def _required_term_target_map(required_terms: RequiredTermContext) -> dict[str, str]:
+    if required_terms is None:
+        return {}
+    if isinstance(required_terms, GlossaryApplication):
+        required_terms = required_terms.required_terms
+    if isinstance(required_terms, Mapping):
+        return {str(term_id): str(target) for term_id, target in required_terms.items()}
+    return {term.id: term.target for term in required_terms}
 
 
 def global_glossary_path() -> Path:
@@ -588,6 +632,62 @@ def apply_glossary(
     return out
 
 
+def apply_required_glossary_terms(
+    text: str,
+    entries: list[tuple[str, str]] | None = None,
+    *,
+    source_lang: str = "auto",
+    target_lang: str = "en",
+) -> GlossaryApplication:
+    if not text:
+        return GlossaryApplication(text=text, required_terms=tuple())
+    pairs = glossary_pairs_for_translation(
+        entries,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    if not pairs:
+        return GlossaryApplication(text=text, required_terms=tuple())
+
+    out_parts: list[str] = []
+    hits: list[tuple[str, str]] = []
+    required_terms: list[RequiredGlossaryTerm] = []
+    i = 0
+    term_index = 1
+    while i < len(text):
+        matched = False
+        for src, dst in pairs:
+            if text.startswith(src, i):
+                term_id = f"{term_index:04d}"
+                required_terms.append(
+                    RequiredGlossaryTerm(id=term_id, source=src, target=dst)
+                )
+                protected = (
+                    f'<term id="{term_id}">'
+                    f"{_escape_required_term_target(dst)}"
+                    "</term>"
+                )
+                out_parts.append(protected)
+                hits.append((src, dst))
+                i += len(src)
+                term_index += 1
+                matched = True
+                break
+        if matched:
+            continue
+        out_parts.append(text[i])
+        i += 1
+
+    if hits:
+        preview = ", ".join([f"{src}->{dst}" for src, dst in hits[:6]])
+        more = f" (+{len(hits) - 6})" if len(hits) > 6 else ""
+        print(f"[GLOSSARY] required_hits={len(hits)} {preview}{more}")
+    return GlossaryApplication(
+        text="".join(out_parts),
+        required_terms=tuple(required_terms),
+    )
+
+
 def apply_glossary_with_protection(
     text: str,
     entries: list[tuple[str, str]] | None = None,
@@ -632,7 +732,36 @@ def apply_glossary_with_protection(
     return "".join(out_parts)
 
 
-def restore_protected_glossary_terms(text: str) -> str:
-    if not text or _PROTECTED_TERM_PREFIX not in text:
+def restore_protected_glossary_terms(
+    text: str,
+    required_terms: RequiredTermContext = None,
+) -> str:
+    if not text:
         return text
-    return _PROTECTED_TERM_PATTERN.sub(lambda match: match.group(1), text)
+    term_targets = _required_term_target_map(required_terms)
+
+    def restore_required_term(match: re.Match[str]) -> str:
+        term_id = match.group(1)
+        wrapped_target = _unescape_required_term_target(match.group(2))
+        return term_targets.get(term_id, wrapped_target)
+
+    restored = _REQUIRED_TERM_PATTERN.sub(restore_required_term, text)
+    if _PROTECTED_TERM_PREFIX in restored:
+        restored = _PROTECTED_TERM_PATTERN.sub(lambda match: match.group(1), restored)
+    return restored
+
+
+def find_missing_required_glossary_terms(
+    text: str,
+    required_terms: RequiredTermContext,
+) -> list[str]:
+    term_targets = _required_term_target_map(required_terms)
+    missing: list[str] = []
+    seen: set[str] = set()
+    for target in term_targets.values():
+        if not target or target in seen:
+            continue
+        seen.add(target)
+        if target not in text:
+            missing.append(target)
+    return missing

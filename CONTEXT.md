@@ -20,3 +20,10 @@ _Avoid_: Single timeout, Transient warning
 A worker or background job orchestration failure that prevents queued work from being claimed, recovered, dispatched, or completed correctly. It is distinct from a user-facing validation failure or cancellation.
 _Avoid_: User cancellation, Upload error
 
+**Required Glossary Term**:
+An approved glossary translation that must appear exactly as the chosen target-language term while allowing the surrounding sentence syntax to be translated naturally.
+_Avoid_: Hint, synonym, protected content
+
+**Exact Protected Content**:
+Source content that must remain byte-for-byte unchanged in the translated output, such as user-defined do-not-translate terms, identifiers, model numbers, URLs, and email addresses.
+_Avoid_: Required glossary term, terminology preference

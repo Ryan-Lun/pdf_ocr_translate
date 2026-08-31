@@ -78,3 +78,108 @@ def test_restore_protected_glossary_terms_tolerates_extra_brackets():
         glossary.restore_protected_glossary_terms(text)
         == "The purpose is artificial hip joint replacement."
     )
+
+
+def test_apply_required_glossary_terms_returns_structured_hits():
+    result = glossary.apply_required_glossary_terms(
+        "外觀形狀與製程規範",
+        [("外觀", "Appearance"), ("製程規範", "Process Specification")],
+    )
+
+    assert result.text == (
+        '<term id="0001">Appearance</term>形狀與'
+        '<term id="0002">Process Specification</term>'
+    )
+    assert result.required_terms == (
+        glossary.RequiredGlossaryTerm(
+            id="0001",
+            source="外觀",
+            target="Appearance",
+        ),
+        glossary.RequiredGlossaryTerm(
+            id="0002",
+            source="製程規範",
+            target="Process Specification",
+        ),
+    )
+
+
+def test_required_glossary_terms_escape_and_restore_targets():
+    result = glossary.apply_required_glossary_terms(
+        "特殊詞",
+        [("特殊詞", "A&B <Spec> \"Prime\" 'Core'")],
+    )
+
+    assert result.text == (
+        '<term id="0001">A&amp;B &lt;Spec&gt; &quot;Prime&quot; '
+        "&apos;Core&apos;</term>"
+    )
+    assert (
+        glossary.restore_protected_glossary_terms(result.text, result.required_terms)
+        == "A&B <Spec> \"Prime\" 'Core'"
+    )
+
+
+def test_restore_required_glossary_terms_without_context_uses_wrapped_target():
+    text = 'The <term id="0001">Appearance</term> shape was checked.'
+
+    assert (
+        glossary.restore_protected_glossary_terms(text)
+        == "The Appearance shape was checked."
+    )
+
+
+def test_restore_required_glossary_terms_accepts_target_map():
+    text = 'The <term id="0002">Visual Appearance</term> shape was checked.'
+
+    assert (
+        glossary.restore_protected_glossary_terms(text, {"0002": "Appearance"})
+        == "The Appearance shape was checked."
+    )
+
+
+def test_restore_required_glossary_terms_uses_approved_target_from_context():
+    result = glossary.apply_required_glossary_terms(
+        "外觀",
+        [("外觀", "Appearance")],
+    )
+    model_output = result.text.replace("Appearance", "Visual Appearance")
+
+    assert (
+        glossary.restore_protected_glossary_terms(model_output, result.required_terms)
+        == "Appearance"
+    )
+
+
+def test_find_missing_required_glossary_terms_only_checks_matched_terms():
+    result = glossary.apply_required_glossary_terms(
+        "外觀",
+        [("外觀", "Appearance"), ("製程規範", "Process Specification")],
+    )
+
+    assert glossary.find_missing_required_glossary_terms(
+        "The Appearance shape was checked.",
+        result.required_terms,
+    ) == []
+    assert glossary.find_missing_required_glossary_terms(
+        "The shape was checked.",
+        result.required_terms,
+    ) == ["Appearance"]
+
+
+def test_required_glossary_terms_preserve_longest_match_and_reversal():
+    entries = [("批號", "Batch No."), ("批號格式", "Batch No. Format")]
+
+    result = glossary.apply_required_glossary_terms("批號格式: 批號", entries)
+    assert result.text == (
+        '<term id="0001">Batch No. Format</term>: '
+        '<term id="0002">Batch No.</term>'
+    )
+
+    reversed_result = glossary.apply_required_glossary_terms(
+        "Batch No. Format",
+        entries,
+        source_lang="en",
+        target_lang="zh",
+    )
+    assert reversed_result.text == '<term id="0001">批號格式</term>'
