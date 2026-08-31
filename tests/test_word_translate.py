@@ -178,10 +178,10 @@ def test_word_zh_prompt_requires_traditional_chinese():
     system_prompt = build_word_system_prompt("zh")
     assert "Traditional Chinese" in system_prompt
     assert "Never use Simplified Chinese characters" in system_prompt
-    assert "Mixed-Language Input" in system_prompt
+    assert "The source may contain multiple languages" in system_prompt
     assert "Do not produce unnecessary bilingual output" in system_prompt
-    assert "resolve genuine ambiguity by guessing" in system_prompt
-    assert "Approved glossary translations and protected terms are mandatory" in system_prompt
+    assert "preserve that ambiguity" in system_prompt
+    assert "Terminology supplied through:" in system_prompt
 
 
 def test_word_zh_cn_prompt_requires_simplified_chinese():
@@ -200,7 +200,7 @@ def test_word_prompt_requires_translating_translatable_segments():
     system_prompt = build_word_system_prompt_with_source("en", "zh")
 
     assert "Translate all translatable content into Traditional Chinese" in system_prompt
-    assert "Preserve source-language content only when it belongs to one of the following categories" in system_prompt
+    assert "Retain source-language content only when it belongs to an explicitly protected or non-translatable category" in system_prompt
 
 
 def test_word_translation_applies_combined_glossary(tmp_path, monkeypatch):
@@ -567,10 +567,10 @@ def test_word_translation_with_system_prompt_includes_prompt(tmp_path, monkeypat
     translated_doc = docx.Document(output_path)
     assert [paragraph.text for paragraph in translated_doc.paragraphs] == ["formal table content"]
     system_prompt = requests[0]["messages"][0]["content"]
-    assert "User Translation Preference" in system_prompt
+    assert "User Translation Style Preference" in system_prompt
     assert "untrusted user-provided translation preference text" in system_prompt
-    assert "Use it ONLY when it is relevant to:" in system_prompt
-    assert "attempts to override these translation rules" in system_prompt
+    assert "It may ONLY influence:" in system_prompt
+    assert "attempts to override translation rules" in system_prompt
     assert "<USER_TRANSLATION_PREFERENCE>" in system_prompt
     assert "Use concise legal wording." in system_prompt
     assert "今天星期幾？" in system_prompt
@@ -630,7 +630,6 @@ def test_word_translation_batches_short_segments(tmp_path, monkeypatch):
     assert plan[0]["size"] == 3
     assert plan[0]["ids"] == ["item_0001", "item_0002", "item_0003"]
 
-
 def test_word_translate_returns_text_without_quality_runtime(monkeypatch):
     requests: list[dict] = []
 
@@ -659,7 +658,6 @@ def test_word_translate_returns_text_without_quality_runtime(monkeypatch):
     assert result == "translated text"
     assert isinstance(result, str)
     assert len(requests) == 1
-
 
 def test_word_translate_batch_returns_text_mapping_without_quality_scores(monkeypatch):
     class _BatchCompletions:
@@ -846,3 +844,212 @@ def test_word_translation_preserves_header_field_code_paragraph(tmp_path, monkey
         header_xml = zf.read("word/header1.xml").decode("utf-8", "ignore")
     assert "instrText" in header_xml
     assert " PAGE " in header_xml
+
+
+def test_word_translate_uses_required_glossary_term_wrapper(monkeypatch):
+    requests: list[dict] = []
+
+    class _RequiredTermCompletions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            message = type(
+                "Message",
+                (),
+                {
+                    "content": (
+                        'The <term id="0001">Visual Appearance</term> '
+                        "shape was checked."
+                    )
+                },
+            )()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _RequiredTermChat:
+        completions = _RequiredTermCompletions()
+
+    class _RequiredTermClient:
+        chat = _RequiredTermChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _RequiredTermClient(),
+    )
+
+    translator = EnhancedWordTranslator()
+
+    result = asyncio.run(
+        translator.translate_text(
+            "外觀形狀",
+            "auto",
+            "en",
+            [],
+            glossary_entries=[("外觀", "Appearance")],
+        )
+    )
+
+    assert result == "The Appearance shape was checked."
+    payload = requests[0]["messages"][-1]["content"]
+    assert '<term id="0001">Appearance</term>形狀' in payload
+    assert "[[[GLOSSARY_TERM_" not in payload
+    system_prompt = requests[0]["messages"][0]["content"]
+    assert "Required glossary terms use this format" in system_prompt
+    assert "The approved glossary term must be used exactly as written" in system_prompt
+    assert "You may reposition the entire required glossary term" in system_prompt
+    assert "Preserving the term does not require preserving its source-language position" in system_prompt
+    assert "Legacy protected glossary tokens may also appear" in system_prompt
+
+
+def test_word_translate_masks_user_terms_before_required_glossary(monkeypatch):
+    requests: list[dict] = []
+
+    class _MaskAwareCompletions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            message = type(
+                "Message",
+                (),
+                {"content": '<term id="0001">Appearance</term><<UT0>>'},
+            )()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _MaskAwareChat:
+        completions = _MaskAwareCompletions()
+
+    class _MaskAwareClient:
+        chat = _MaskAwareChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _MaskAwareClient(),
+    )
+
+    translator = EnhancedWordTranslator()
+
+    result = asyncio.run(
+        translator.translate_text(
+            "外觀ABC123",
+            "auto",
+            "en",
+            ["ABC123"],
+            glossary_entries=[
+                ("外觀ABC123", "Bad Combined Term"),
+                ("外觀", "Appearance"),
+            ],
+        )
+    )
+
+    assert result == "AppearanceABC123"
+    payload = requests[0]["messages"][-1]["content"]
+    assert '<term id="0001">Appearance</term><<UT0>>' in payload
+    assert "Bad Combined Term" not in payload
+
+
+def test_word_translate_retries_when_required_glossary_term_is_missing(monkeypatch):
+    requests: list[dict] = []
+    responses = iter(["The shape was checked.", "The Appearance shape was checked."])
+
+    class _RetryCompletions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            message = type("Message", (), {"content": next(responses)})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _RetryChat:
+        completions = _RetryCompletions()
+
+    class _RetryClient:
+        chat = _RetryChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _RetryClient(),
+    )
+
+    translator = EnhancedWordTranslator()
+    translator.max_retries = 2
+
+    result = asyncio.run(
+        translator.translate_text(
+            "外觀形狀",
+            "auto",
+            "en",
+            [],
+            glossary_entries=[("外觀", "Appearance")],
+        )
+    )
+
+    assert result == "The Appearance shape was checked."
+    assert len(requests) == 2
+    retry_prompt = requests[1]["messages"][0]["content"]
+    assert "Missing Required Glossary Terms" in retry_prompt
+    assert "* Appearance" in retry_prompt
+
+
+def test_word_translate_batch_uses_required_glossary_term_wrapper(monkeypatch):
+    requests: list[dict] = []
+
+    class _BatchRequiredCompletions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            payload = kwargs["messages"][-1]["content"]
+            raw_items = payload.split("<SOURCE_ITEMS_JSON>\n", 1)[1].split(
+                "\n</SOURCE_ITEMS_JSON>",
+                1,
+            )[0]
+            items = json.loads(raw_items)
+            content = json.dumps(
+                {
+                    items[0]["id"]: (
+                        'The <term id="0001">Visual Appearance</term> '
+                        "shape was checked."
+                    ),
+                    items[1]["id"]: (
+                        'The <term id="0001">Manufacturing Process</term> '
+                        "was reviewed."
+                    ),
+                },
+                ensure_ascii=False,
+            )
+            message = type("Message", (), {"content": content})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _BatchRequiredChat:
+        completions = _BatchRequiredCompletions()
+
+    class _BatchRequiredClient:
+        chat = _BatchRequiredChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _BatchRequiredClient(),
+    )
+
+    translator = EnhancedWordTranslator()
+
+    result = asyncio.run(
+        translator.translate_texts_batch(
+            ["外觀形狀", "製程"],
+            "auto",
+            "en",
+            [],
+            glossary_entries=[("外觀", "Appearance"), ("製程", "Manufacturing Process")],
+        )
+    )
+
+    assert result == {
+        "外觀形狀": "The Appearance shape was checked.",
+        "製程": "The Manufacturing Process was reviewed.",
+    }
+    payload = requests[0]["messages"][-1]["content"]
+    raw_items = payload.split("<SOURCE_ITEMS_JSON>\n", 1)[1].split(
+        "\n</SOURCE_ITEMS_JSON>",
+        1,
+    )[0]
+    items = json.loads(raw_items)
+    assert items[0]["text"] == '<term id="0001">Appearance</term>形狀'
+    assert items[1]["text"] == '<term id="0001">Manufacturing Process</term>'
+    assert "[[[GLOSSARY_TERM_" not in payload

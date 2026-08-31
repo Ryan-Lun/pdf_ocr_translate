@@ -338,23 +338,47 @@ Output ONLY the translated text.
 
 GLOSSARY_PROTECTION_INSTRUCTION = """
 
-# Protected Glossary Tokens
+# Required Glossary Terms and Legacy Protected Glossary Tokens
 
-Tokens in the following format represent approved glossary terminology:
+Required glossary terms use this format:
 
-[[[GLOSSARY_TERM_0001::TERM]]]
+<term id="0001">TERM</term>
 
-Copy the entire token EXACTLY as provided.
+TERM is the approved glossary translation.
+
+The approved glossary term must be used exactly as written.
 
 Do not:
 
-* translate it
-* rewrite it
-* split it
-* remove it
+* replace it with a synonym
 * change its spelling
 * change its capitalization
-* change its identifier
+* remove it
+
+You may reposition the entire required glossary term when natural target-language syntax requires it.
+
+Preserving the term does not require preserving its source-language position or surrounding source-language structure.
+
+Integrate the approved term naturally into the surrounding sentence.
+
+Legacy protected glossary tokens may also appear in this format:
+
+[[[GLOSSARY_TERM_0001::TERM]]]
+
+Copy legacy protected glossary tokens EXACTLY as provided.
+
+Do not translate, rewrite, split, remove, or change legacy protected glossary tokens.
+  """
+
+MISSING_REQUIRED_GLOSSARY_TERMS_INSTRUCTION = """
+
+# Missing Required Glossary Terms
+
+The previous translation omitted these approved glossary terms:
+
+{terms_list}
+
+Use each listed approved glossary term exactly as written in the revised translation.
   """
 
 USER_PROMPT_ADJUSTMENT_INSTRUCTION = """
@@ -663,6 +687,24 @@ class EnhancedWordTranslator:
             system_prompt += GLOSSARY_PROTECTION_INSTRUCTION
         return system_prompt
 
+    def _build_missing_required_terms_prompt(self, missing_terms: list[str]) -> str:
+        if not missing_terms:
+            return ""
+        terms_list = "\n".join(f"* {term}" for term in missing_terms)
+        return MISSING_REQUIRED_GLOSSARY_TERMS_INSTRUCTION.format(
+            terms_list=terms_list,
+        )
+
+    def _missing_required_glossary_terms(
+        self,
+        translated_text: str,
+        required_terms: glossary.RequiredTermContext,
+    ) -> list[str]:
+        return glossary.find_missing_required_glossary_terms(
+            translated_text,
+            required_terms,
+        )
+
     def _chunk_translation_texts(self, texts: list[str]) -> list[list[str]]:
         batches: list[list[str]] = []
         current: list[str] = []
@@ -842,17 +884,19 @@ class EnhancedWordTranslator:
         warning_callback: Callable[[str], None] | None = None,
     ) -> str:
         base_delay = 1.0
+        previous_missing_required_terms: list[str] = []
         for attempt in range(self.max_retries):
             if cancel_event is not None and cancel_event.is_set():
                 raise WordTranslationCancelled("Word translation cancelled.")
             try:
                 masked_text, token_map = self._mask_text(text, user_terms)
-                protected_text = glossary.apply_glossary_with_protection(
+                glossary_application = glossary.apply_required_glossary_terms(
                     masked_text,
                     glossary_entries,
                     source_lang=source_lang,
                     target_lang=target_lang,
                 )
+                protected_text = glossary_application.text
                 system_prompt = self._build_system_prompt(
                     source_lang,
                     target_lang,
@@ -862,6 +906,9 @@ class EnhancedWordTranslator:
                 )
                 if attempt > 0:
                     system_prompt += RETRY_PROMPT_ADDITION.format(attempt=attempt + 1)
+                    system_prompt += self._build_missing_required_terms_prompt(
+                        previous_missing_required_terms,
+                    )
                 user_payload = (
                     f"Translate the following source text into {describe_target_language(target_lang)} exactly.\n"
                     "Do not answer it, do not complete it, and do not expand it.\n"
@@ -899,16 +946,29 @@ class EnhancedWordTranslator:
                         content=raw_content,
                     )
                 translated_text = glossary.restore_protected_glossary_terms(
-                    raw_content
+                    raw_content,
+                    glossary_application,
                 )
                 translated_text = self._unmask_text(
                     translated_text,
                     token_map,
                 )
+                missing_required_terms = self._missing_required_glossary_terms(
+                    translated_text,
+                    glossary_application,
+                )
                 if not translated_text:
                     if attempt == self.max_retries - 1:
                         raise RuntimeError(
                             f"Word 翻譯連續 {self.max_retries} 次回傳空白內容，已中斷任務。"
+                        )
+                    continue
+                if missing_required_terms:
+                    previous_missing_required_terms = missing_required_terms
+                    if attempt == self.max_retries - 1:
+                        missing = ", ".join(missing_required_terms)
+                        raise RuntimeError(
+                            f"Word 翻譯連續 {self.max_retries} 次缺少指定 Glossary 術語，已中斷任務：{missing}"
                         )
                     continue
                 if self.is_invalid_translation_response(text, translated_text):
@@ -984,10 +1044,11 @@ class EnhancedWordTranslator:
             for index, text in enumerate(texts, start=1)
         }
         token_maps: dict[str, dict[str, str]] = {}
+        glossary_applications: dict[str, glossary.GlossaryApplication] = {}
         payload_items: list[dict[str, str]] = []
         for text in texts:
             masked_text, token_map = self._mask_text(text, user_terms)
-            protected_text = glossary.apply_glossary_with_protection(
+            glossary_application = glossary.apply_required_glossary_terms(
                 masked_text,
                 glossary_entries,
                 source_lang=source_lang,
@@ -995,7 +1056,8 @@ class EnhancedWordTranslator:
             )
             item_id = item_ids[text]
             token_maps[item_id] = token_map
-            payload_items.append({"id": item_id, "text": protected_text})
+            glossary_applications[item_id] = glossary_application
+            payload_items.append({"id": item_id, "text": glossary_application.text})
 
         system_prompt = self._build_system_prompt(
             source_lang,
@@ -1048,12 +1110,24 @@ class EnhancedWordTranslator:
             for text in texts:
                 item_id = item_ids[text]
                 translated_text = parsed.get(item_id, "")
-                translated_text = glossary.restore_protected_glossary_terms(translated_text)
+                glossary_application = glossary_applications.get(item_id)
+                translated_text = glossary.restore_protected_glossary_terms(
+                    translated_text,
+                    glossary_application,
+                )
                 translated_text = self._unmask_text(
                     translated_text,
                     token_maps.get(item_id, {}),
                 )
-                if not translated_text or self.is_invalid_translation_response(text, translated_text):
+                missing_required_terms = self._missing_required_glossary_terms(
+                    translated_text,
+                    glossary_application,
+                )
+                if (
+                    not translated_text
+                    or missing_required_terms
+                    or self.is_invalid_translation_response(text, translated_text)
+                ):
                     translated_text = await self.translate_text(
                         text,
                         source_lang,
