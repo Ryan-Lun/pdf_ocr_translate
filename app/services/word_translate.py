@@ -1513,6 +1513,7 @@ class EnhancedWordTranslator:
         debug_job_dir: Path | None = None,
         cancel_event: threading.Event | None = None,
         warning_callback: Callable[[str], None] | None = None,
+        record_tm_usage_on_save: bool = True,
     ):
         doc = docx.Document(source_path)
         self.mark_update_fields_on_open(doc)
@@ -1540,9 +1541,12 @@ class EnhancedWordTranslator:
 
         unique_texts = list(texts_for_translation.keys())
         translated_cache: dict[str, str] = {}
-        exact_reuse_entry_ids: list[int] = []
-        reference_entry_ids: list[int] = []
         tm_reference_map: dict[str, list[translation_memory.TranslationMemoryMatch]] = {}
+        tm_artifact_collector = translation_memory.create_artifact_collector()
+        item_ids = {
+            text: f"item_{index:04d}"
+            for index, text in enumerate(unique_texts, start=1)
+        }
         texts_for_llm: list[str] = []
         for text in unique_texts:
             tm_result = _retrieve_word_translation_memory(
@@ -1550,11 +1554,18 @@ class EnhancedWordTranslator:
                 source_lang=source_language,
                 target_lang=target_language,
             )
+            source_normalized = translation_memory.normalize_source_text(text)
             exact_match = tm_result.exact_match if tm_result else None
             translated_text = str(exact_match.target_text or "").strip() if exact_match else ""
             if translated_text:
                 translated_cache[text] = translated_text
-                exact_reuse_entry_ids.append(exact_match.entry_id)
+                translation_memory.add_artifact_match(
+                    tm_artifact_collector,
+                    segment_id=item_ids[text],
+                    source_text=text,
+                    source_normalized=source_normalized,
+                    match=exact_match,
+                )
                 continue
             if tm_result:
                 references = [
@@ -1563,17 +1574,17 @@ class EnhancedWordTranslator:
                 ]
                 if references:
                     tm_reference_map[text] = references
-                    reference_entry_ids.extend(reference.entry_id for reference in references)
+                    translation_memory.add_artifact_references(
+                        tm_artifact_collector,
+                        segment_id=item_ids[text],
+                        source_text=text,
+                        source_normalized=source_normalized,
+                        references=references,
+                    )
             texts_for_llm.append(text)
-        if exact_reuse_entry_ids:
-            translation_memory.record_exact_reuse(exact_reuse_entry_ids)
-        if reference_entry_ids:
-            translation_memory.record_reference_use(reference_entry_ids)
+        if debug_job_dir is not None:
+            translation_memory.write_tm_artifacts(debug_job_dir, tm_artifact_collector)
         translation_batches = self._chunk_translation_texts(texts_for_llm)
-        item_ids = {
-            text: f"item_{index:04d}"
-            for index, text in enumerate(texts_for_llm, start=1)
-        }
         translation_debug.record_plan(
             debug_job_dir,
             [
@@ -1672,6 +1683,8 @@ class EnhancedWordTranslator:
             )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         doc.save(output_path)
+        if record_tm_usage_on_save:
+            translation_memory.record_artifact_usage(tm_artifact_collector)
 
 
 def run_word_translate_job(
@@ -1751,6 +1764,7 @@ def _run_word_job(
                 debug_job_dir=job_dir,
                 cancel_event=cancel_event,
                 warning_callback=record_warning,
+                record_tm_usage_on_save=False,
             ):
                 last_progress = float(progress)
                 jobs.set_job_state(
@@ -1789,6 +1803,7 @@ def _run_word_job(
             },
         )
         jobs.job_store.register_artifact(job_id, "docx", "output/output.docx")
+        translation_memory.record_artifact_usage_from_files(job_dir)
     except Exception as exc:
         if isinstance(exc, WordTranslationCancelled):
             jobs.set_job_state(

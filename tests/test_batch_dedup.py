@@ -2038,7 +2038,7 @@ def test_pdf_batch_uses_sql_tm_exact_match_as_prefill(monkeypatch):
     assert prefilled == {
         "p0000-l0000": "Confirm whether the equipment is operating normally."
     }
-    assert exact_reuse_ids == [[101]]
+    assert exact_reuse_ids == []
 
 
 def test_pdf_batch_auto_source_lang_can_match_imported_zh_tw_sql_tm(monkeypatch):
@@ -2195,7 +2195,119 @@ def test_pdf_batch_injects_sql_tm_fuzzy_reference_into_segment_payload(monkeypat
     assert "Required Glossary Term" in system_content
     tm_references = key_map["p0000-l0000"]["translation_memory_references"]
     assert tm_references[0]["entry_id"] == 202
-    assert reference_use_ids == [[202]]
+    assert reference_use_ids == []
+
+
+def test_pdf_batch_writes_tm_match_and_reference_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    exact = _tm_match(
+        entry_id=501,
+        match_type="byte_exact",
+        source_text="確認設備是否正常。",
+        target_text="Confirm whether the equipment is operating normally.",
+        score=1.0,
+    )
+    fuzzy = _tm_match(
+        entry_id=502,
+        match_type="fuzzy",
+        source_text="確認首件半成品尺寸是否符合製程規範。",
+        target_text="Confirm whether the first semi-finished product dimensions comply with the Process Specification.",
+        score=0.91,
+    )
+
+    def fake_retrieve_sql(source_text, **kwargs):
+        if str(source_text) == "確認設備是否正常。":
+            return _tm_result(str(source_text), exact_match=exact)
+        return _tm_result(str(source_text), fuzzy_references=[fuzzy])
+
+    monkeypatch.setattr(translation_memory, "retrieve_sql", fake_retrieve_sql)
+    monkeypatch.setattr(translation_memory, "record_exact_reuse", lambda entry_ids: None)
+    monkeypatch.setattr(translation_memory, "record_reference_use", lambda entry_ids: None)
+
+    collector = translation_memory.create_artifact_collector()
+    items, _, _, prefilled = build_batch_items(
+        [
+            {
+                "page_index_0based": 0,
+                "rec_texts": [
+                    "確認設備是否正常。",
+                    "確認首件成品尺寸是否符合製程規範。",
+                ],
+                "rec_polys": [],
+            }
+        ],
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        target_lang="en",
+        source_lang="zh",
+        document_mode="form",
+        tm_artifact_collector=collector,
+    )
+    translation_memory.write_tm_artifacts(job_dir, collector)
+
+    assert items[0]["custom_id"] == "p0000-l0001"
+    assert prefilled == {
+        "p0000-l0000": "Confirm whether the equipment is operating normally."
+    }
+    matches = json.loads((job_dir / "tm_matches.json").read_text(encoding="utf-8"))
+    references = json.loads((job_dir / "tm_references.json").read_text(encoding="utf-8"))
+    assert matches == [
+        {
+            "segment_id": "p0000-l0000",
+            "source_text": "確認設備是否正常。",
+            "source_normalized": "確認設備是否正常.",
+            "match_type": "byte_exact",
+            "entry_id": 501,
+            "score": 1.0,
+            "tm_source_text": "確認設備是否正常。",
+            "tm_source_normalized": "確認設備是否正常.",
+            "tm_target_text": "Confirm whether the equipment is operating normally.",
+            "source_lang": "zh-tw",
+            "target_lang": "en",
+            "document_mode": "form",
+        }
+    ]
+    assert references[0]["segment_id"] == "p0000-l0001"
+    assert references[0]["entry_id"] == 502
+    assert references[0]["match_type"] == "fuzzy"
+    assert references[0]["score"] == 0.91
+    assert references[0]["tm_target_text"].startswith("Confirm whether the first")
+    assert (job_dir / "output" / "tm_matches.json").exists()
+    assert (job_dir / "output" / "tm_references.json").exists()
+
+
+def test_tm_artifact_usage_updates_counters_from_written_artifacts(tmp_path, monkeypatch):
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "tm_matches.json").write_text(
+        json.dumps([{"entry_id": 601}, {"entry_id": 602}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (job_dir / "tm_references.json").write_text(
+        json.dumps([{"entry_id": 603}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    exact_reuse_ids: list[list[int]] = []
+    reference_use_ids: list[list[int]] = []
+    monkeypatch.setattr(
+        translation_memory,
+        "record_exact_reuse",
+        lambda entry_ids: exact_reuse_ids.append(list(entry_ids)),
+    )
+    monkeypatch.setattr(
+        translation_memory,
+        "record_reference_use",
+        lambda entry_ids: reference_use_ids.append(list(entry_ids)),
+    )
+
+    translation_memory.record_artifact_usage_from_files(job_dir)
+
+    assert exact_reuse_ids == [[601, 602]]
+    assert reference_use_ids == [[603]]
 
 
 def test_pdf_batch_keeps_glossary_priority_when_tm_reference_is_present(monkeypatch):

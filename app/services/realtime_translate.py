@@ -441,6 +441,7 @@ def _prepare_realtime_plan(
     ocr_pages = batch.ocr.load_ocr_pages(job_dir)
     pp_pages = batch.ocr.load_pp_pages(job_dir)
     glossary_entries = batch.glossary.load_combined_glossary()
+    tm_artifact_collector = batch.translation_memory.create_artifact_collector()
     batch_items, alias_map, key_map, prefilled = batch.build_batch_items(
         ocr_pages,
         model_name=model_name,
@@ -450,7 +451,9 @@ def _prepare_realtime_plan(
         target_lang=target_lang,
         source_lang=source_lang,
         document_mode=document_mode,
+        tm_artifact_collector=tm_artifact_collector,
     )
+    batch.translation_memory.write_tm_artifacts(job_dir, tm_artifact_collector)
     jobs.write_batch_alias_map(job_dir, alias_map)
     jobs.write_batch_prefill_map(job_dir, prefilled)
     batch._write_batch_key_map(job_dir, key_map)

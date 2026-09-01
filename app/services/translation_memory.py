@@ -137,6 +137,155 @@ class TranslationMemoryRetrievalResult:
     semantic_references: list[TranslationMemoryMatch]
 
 
+TM_MATCHES_ARTIFACT_NAME = "tm_matches.json"
+TM_REFERENCES_ARTIFACT_NAME = "tm_references.json"
+
+
+@dataclass
+class TranslationMemoryArtifactCollector:
+    matches: list[dict[str, Any]]
+    references: list[dict[str, Any]]
+    exact_entry_ids: list[int]
+    reference_entry_ids: list[int]
+
+
+def create_artifact_collector() -> TranslationMemoryArtifactCollector:
+    return TranslationMemoryArtifactCollector(
+        matches=[],
+        references=[],
+        exact_entry_ids=[],
+        reference_entry_ids=[],
+    )
+
+
+def _serialize_artifact_match(
+    *,
+    segment_id: str,
+    source_text: str,
+    source_normalized: str,
+    match: TranslationMemoryMatch,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "segment_id": str(segment_id or ""),
+        "source_text": str(source_text or ""),
+        "source_normalized": str(source_normalized or ""),
+        "match_type": match.match_type,
+        "entry_id": int(match.entry_id),
+        "score": round(float(match.score), 4),
+        "tm_source_text": match.source_text,
+        "tm_source_normalized": match.source_normalized,
+        "tm_target_text": match.target_text,
+        "source_lang": match.source_lang,
+        "target_lang": match.target_lang,
+        "document_mode": match.document_mode,
+    }
+    try:
+        entry = get_sql_entry(match.entry_id)
+    except RuntimeError:
+        entry = None
+    if entry is not None:
+        if entry.source:
+            payload["entry_source"] = entry.source
+        if entry.source_job_id:
+            payload["entry_source_job_id"] = entry.source_job_id
+        if entry.source_metadata:
+            payload["entry_source_metadata"] = entry.source_metadata
+    return payload
+
+
+def add_artifact_match(
+    collector: TranslationMemoryArtifactCollector | None,
+    *,
+    segment_id: str,
+    source_text: str,
+    source_normalized: str,
+    match: TranslationMemoryMatch,
+) -> None:
+    if collector is None:
+        return
+    collector.matches.append(
+        _serialize_artifact_match(
+            segment_id=segment_id,
+            source_text=source_text,
+            source_normalized=source_normalized,
+            match=match,
+        )
+    )
+    collector.exact_entry_ids.append(match.entry_id)
+
+
+def add_artifact_references(
+    collector: TranslationMemoryArtifactCollector | None,
+    *,
+    segment_id: str,
+    source_text: str,
+    source_normalized: str,
+    references: list[TranslationMemoryMatch],
+) -> None:
+    if collector is None:
+        return
+    for reference in references:
+        collector.references.append(
+            _serialize_artifact_match(
+                segment_id=segment_id,
+                source_text=source_text,
+                source_normalized=source_normalized,
+                match=reference,
+            )
+        )
+        collector.reference_entry_ids.append(reference.entry_id)
+
+
+def _record_artifact_usage_ids(
+    exact_entry_ids: list[int],
+    reference_entry_ids: list[int],
+) -> None:
+    if exact_entry_ids:
+        record_exact_reuse(exact_entry_ids)
+    if reference_entry_ids:
+        record_reference_use(reference_entry_ids)
+
+
+def record_artifact_usage(collector: TranslationMemoryArtifactCollector | None) -> None:
+    if collector is None:
+        return
+    _record_artifact_usage_ids(collector.exact_entry_ids, collector.reference_entry_ids)
+
+
+def record_artifact_usage_from_files(job_dir: Path) -> None:
+    matches_path = job_dir / TM_MATCHES_ARTIFACT_NAME
+    references_path = job_dir / TM_REFERENCES_ARTIFACT_NAME
+    exact_entry_ids: list[int] = []
+    reference_entry_ids: list[int] = []
+    if matches_path.exists():
+        for row in json.loads(matches_path.read_text(encoding="utf-8") or "[]"):
+            if isinstance(row, dict) and row.get("entry_id") is not None:
+                exact_entry_ids.append(int(row["entry_id"]))
+    if references_path.exists():
+        for row in json.loads(references_path.read_text(encoding="utf-8") or "[]"):
+            if isinstance(row, dict) and row.get("entry_id") is not None:
+                reference_entry_ids.append(int(row["entry_id"]))
+    _record_artifact_usage_ids(exact_entry_ids, reference_entry_ids)
+
+
+def write_tm_artifacts(
+    job_dir: Path,
+    collector: TranslationMemoryArtifactCollector | None,
+) -> tuple[Path, Path]:
+    collector = collector or create_artifact_collector()
+    matches = collector.matches
+    references = collector.references
+    match_paths = (job_dir / TM_MATCHES_ARTIFACT_NAME, job_dir / "output" / TM_MATCHES_ARTIFACT_NAME)
+    reference_paths = (job_dir / TM_REFERENCES_ARTIFACT_NAME, job_dir / "output" / TM_REFERENCES_ARTIFACT_NAME)
+    for path in match_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(matches, ensure_ascii=False, indent=2), encoding="utf-8")
+    for path in reference_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(references, ensure_ascii=False, indent=2), encoding="utf-8")
+    return match_paths[0], reference_paths[0]
+
+
 REQUIRED_IMPORT_COLUMNS = frozenset(
     {
         "source_text",

@@ -269,6 +269,113 @@ def test_word_translation_injects_fuzzy_tm_reference_without_direct_reuse(app, t
     ]
 
 
+def test_word_translation_writes_tm_match_and_reference_artifacts(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_FUZZY_THRESHOLD", 0.5)
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
+    exact_id = translation_memory.upsert_sql_entry(
+        source_text="表格內容",
+        target_text="approved table content",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="word",
+        status="approved",
+        source="test",
+        source_metadata={"origin": "unit"},
+    )
+    fuzzy_id = translation_memory.upsert_sql_entry(
+        source_text="確認首件半成品尺寸是否符合製程規範。",
+        target_text="Confirm whether the first semi-finished product dimensions comply with the Process Specification.",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="word",
+        status="approved",
+        source="test",
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+
+    class _ModelCompletions:
+        async def create(self, **kwargs):
+            message = type(
+                "Message",
+                (),
+                {"content": "Model translation for current finished product."},
+            )()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _ModelChat:
+        completions = _ModelCompletions()
+
+    class _ModelClient:
+        chat = _ModelChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _ModelClient(),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output" / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("表格內容")
+    source_doc.add_paragraph("確認首件成品尺寸是否符合製程規範。")
+    source_doc.save(source_path)
+
+    job_id = uuid.uuid4().hex
+    job_store.create_job(
+        job_id=job_id,
+        job_type="word_translate",
+        stage="queued",
+        status="queued",
+        job_name="sample",
+    )
+    exact_reuse_ids: list[list[int]] = []
+    reference_use_ids: list[list[int]] = []
+    monkeypatch.setattr(
+        translation_memory,
+        "record_exact_reuse",
+        lambda entry_ids: exact_reuse_ids.append(list(entry_ids)),
+    )
+    monkeypatch.setattr(
+        translation_memory,
+        "record_reference_use",
+        lambda entry_ids: reference_use_ids.append(list(entry_ids)),
+    )
+
+    run_word_translate_job(
+        job_id=job_id,
+        job_dir=tmp_path,
+        source_path=source_path,
+        processing_source_path=source_path,
+        output_path=output_path,
+        source_lang="zh",
+        target_lang="en",
+        retain_terms=[],
+    )
+
+    assert exact_reuse_ids == [[exact_id]]
+    assert reference_use_ids == [[fuzzy_id]]
+
+    job_dir = tmp_path
+    matches = json.loads((job_dir / "tm_matches.json").read_text(encoding="utf-8"))
+    references = json.loads((job_dir / "tm_references.json").read_text(encoding="utf-8"))
+    assert matches[0]["segment_id"] == "item_0001"
+    assert matches[0]["entry_id"] == exact_id
+    assert matches[0]["match_type"] == "byte_exact"
+    assert matches[0]["entry_source_metadata"] == {"origin": "unit"}
+    assert references[0]["segment_id"] == "item_0002"
+    assert references[0]["entry_id"] == fuzzy_id
+    assert references[0]["match_type"] == "fuzzy"
+    assert references[0]["tm_target_text"].startswith("Confirm whether the first")
+    assert (job_dir / "output" / "tm_matches.json").exists()
+    assert (job_dir / "output" / "tm_references.json").exists()
+
+
 def test_word_translation_does_not_write_tm_after_model_translation(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
     monkeypatch.setattr(

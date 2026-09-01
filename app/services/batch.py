@@ -831,6 +831,7 @@ def build_batch_items(
     target_lang: str = "en",
     source_lang: str = "auto",
     document_mode: str = "form",
+    tm_artifact_collector: translation_memory.TranslationMemoryArtifactCollector | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, dict[str, Any]], dict[str, str]]:
     items: list[dict[str, Any]] = []
     alias_map: dict[str, str] = {}
@@ -881,7 +882,13 @@ def build_batch_items(
             translated_text = str(exact_match.target_text or "").strip()
             if translated_text:
                 prefilled[custom_id] = translated_text
-                translation_memory.record_exact_reuse([exact_match.entry_id])
+                translation_memory.add_artifact_match(
+                    tm_artifact_collector,
+                    segment_id=custom_id,
+                    source_text=canonical_source_text,
+                    source_normalized=canonical_source_normalized,
+                    match=exact_match,
+                )
                 return
         if sql_tm_result:
             tm_references = [
@@ -889,8 +896,12 @@ def build_batch_items(
                 *sql_tm_result.semantic_references,
             ]
             if tm_references:
-                translation_memory.record_reference_use(
-                    [reference.entry_id for reference in tm_references]
+                translation_memory.add_artifact_references(
+                    tm_artifact_collector,
+                    segment_id=custom_id,
+                    source_text=canonical_source_text,
+                    source_normalized=canonical_source_normalized,
+                    references=tm_references,
                 )
 
         if translation_memory_enabled:
@@ -1465,6 +1476,7 @@ def finalize_translation_job(
         completed_at=now_ts,
         extra_meta={"translate_completed_at": now_ts},
     )
+    translation_memory.record_artifact_usage_from_files(job_dir)
 
 
 def run_batch_translate_job(
@@ -1542,6 +1554,7 @@ def run_batch_translate_job(
         ocr_pages = ocr.load_ocr_pages(job_dir)
         pp_pages = ocr.load_pp_pages(job_dir)
         glossary_entries = glossary.load_combined_glossary()
+        tm_artifact_collector = translation_memory.create_artifact_collector()
         batch_items, alias_map, key_map, prefilled = build_batch_items(
             ocr_pages,
             model_name=model_name,
@@ -1551,7 +1564,9 @@ def run_batch_translate_job(
             target_lang=target_lang,
             source_lang=source_lang,
             document_mode=document_mode,
+            tm_artifact_collector=tm_artifact_collector,
         )
+        translation_memory.write_tm_artifacts(job_dir, tm_artifact_collector)
         jobs.write_batch_alias_map(job_dir, alias_map)
         jobs.write_batch_prefill_map(job_dir, prefilled)
         _write_batch_key_map(job_dir, key_map)
