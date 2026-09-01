@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.services import state, translation_memory
+from app.services import job_store, state, translation_memory
 
 
 def test_apply_consistency_updates_matching_boxes_and_tm(client, tmp_path, monkeypatch):
@@ -12,9 +12,17 @@ def test_apply_consistency_updates_matching_boxes_and_tm(client, tmp_path, monke
     job_dir.mkdir(parents=True)
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
 
     (job_dir / "batch_config.json").write_text(
-        json.dumps({"document_mode": "form", "target_lang": "en"}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {"document_mode": "form", "source_lang": "zh-tw", "target_lang": "en"},
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -93,7 +101,15 @@ def test_apply_consistency_updates_matching_boxes_and_tm(client, tmp_path, monke
     assert boxes[1]["text"] == "Inspection frequency"
     assert boxes[2]["text"] == "Gamma"
 
-    memory = translation_memory.load_translation_memory()
-    entry = memory[translation_memory.make_tm_key("檢查頻率", "en", "form")]
-    assert entry["target_text"] == "Inspection frequency"
-    assert entry["source"] == "editor_consistency"
+    entry = translation_memory.find_sql_entry(
+        "檢查頻率",
+        source_lang="zh-tw",
+        target_lang="en",
+        document_mode="form",
+    )
+    assert entry is not None
+    assert entry.target_text == "Inspection frequency"
+    assert entry.source == "editor_consistency"
+    assert entry.source_job_id == job_id
+    assert entry.source_metadata == {"updated_count": 2}
+    assert not state.TRANSLATION_MEMORY_PATH.exists()

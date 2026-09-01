@@ -40,6 +40,75 @@ def test_sql_translation_memory_retrieves_approved_byte_exact_match(app, monkeyp
     assert result.semantic_references == []
 
 
+def test_sql_translation_memory_canonicalizes_traditional_chinese_to_supported_zh_code(app, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    _clear_tm_entries()
+
+    first_id = translation_memory.upsert_sql_entry(
+        source_text="確認設備是否正常。",
+        target_text="Confirm whether the equipment is operating normally.",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="form",
+        status="approved",
+        source="test",
+    )
+
+    second_id = translation_memory.upsert_sql_entry(
+        source_text="確認設備是否正常。",
+        target_text="Confirm whether the equipment is operating normally.",
+        source_lang="zh-TW",
+        target_lang="en",
+        document_mode="form",
+        status="approved",
+        source="test",
+    )
+
+    assert second_id == first_id
+    entry = translation_memory.get_sql_entry(first_id)
+    assert entry is not None
+    assert entry.source_lang == "zh"
+
+    result = translation_memory.retrieve_sql(
+        "確認設備是否正常。",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="form",
+    )
+
+    assert result.exact_match is not None
+    assert result.exact_match.entry_id == first_id
+
+
+def test_sql_translation_memory_preserves_other_document_mode_for_exact_match(app, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    _clear_tm_entries()
+
+    entry_id = translation_memory.upsert_sql_entry(
+        source_text="確認設備是否正常。",
+        target_text="Confirm whether the equipment is operating normally.",
+        source_lang="zh-TW",
+        target_lang="en",
+        document_mode="other",
+        status="approved",
+        source="test",
+    )
+
+    entry = translation_memory.get_sql_entry(entry_id)
+    assert entry is not None
+    assert entry.document_mode == "other"
+
+    result = translation_memory.retrieve_sql(
+        "確認設備是否正常。",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="other",
+    )
+
+    assert result.exact_match is not None
+    assert result.exact_match.entry_id == entry_id
+
+
 def test_sql_translation_memory_filters_disabled_entries(app, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
     _clear_tm_entries()

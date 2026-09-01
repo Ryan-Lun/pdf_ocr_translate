@@ -46,7 +46,9 @@ def clean_document_templates(request, monkeypatch, tmp_path):
     with job_store.session_scope() as session:
         session.execute(delete(job_store.EditorPresenceRecord))
         session.execute(delete(job_store.DocumentTemplateRecord))
+        session.execute(delete(job_store.TranslationMemoryEntryRecord))
     yield
     with job_store.session_scope() as session:
         session.execute(delete(job_store.EditorPresenceRecord))
         session.execute(delete(job_store.DocumentTemplateRecord))
+        session.execute(delete(job_store.TranslationMemoryEntryRecord))

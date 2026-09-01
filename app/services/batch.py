@@ -217,15 +217,15 @@ def _translation_memory_source_lang_candidates(
     target_lang: str,
 ) -> list[str]:
     normalized = translation_memory.normalize_source_lang(source_lang)
-    candidates = [normalized]
+    candidates = translation_memory.source_lang_lookup_candidates_for_tm(normalized)
     if normalized == "auto":
         inferred = translation_memory.normalize_source_lang(
             _infer_source_lang_for_target(target_lang)
         )
-        if inferred == "zh":
-            candidates.extend(["zh-tw", "zh", "zh-cn"])
-        elif inferred and inferred != "auto":
-            candidates.append(inferred)
+        if inferred and inferred != "auto":
+            candidates.extend(
+                translation_memory.source_lang_lookup_candidates_for_tm(inferred)
+            )
     unique: list[str] = []
     for candidate in candidates:
         if candidate and candidate not in unique:
@@ -1187,6 +1187,7 @@ def build_edits_payload_from_translations(
     target_lang: str = "en",
     source_lang: str = "auto",
     document_mode: str = "form",
+    prefilled_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     pages_payload: list[dict[str, Any]] = []
     pp_pages = pp_pages or {}
@@ -1194,8 +1195,9 @@ def build_edits_payload_from_translations(
     translate_merged_cells = use_merged_cells_for_mode(document_mode)
     use_structured_blocks = use_structured_blocks_for_mode(document_mode)
     document_term_map = document_terms.build_document_term_map(pp_pages)
+    prefilled_ids = prefilled_ids or set()
 
-    def build_tm_meta(source_text: str) -> dict[str, Any]:
+    def build_tm_meta(source_text: str, custom_id: str) -> dict[str, Any]:
         matched_term = document_terms.lookup_document_term(source_text, document_term_map)
         normalized_source = str((matched_term or {}).get("canonical_key") or normalize_for_translation(source_text))
         payload = {
@@ -1205,6 +1207,8 @@ def build_edits_payload_from_translations(
         }
         if normalized_source:
             payload["tm_source_normalized"] = normalized_source
+        if custom_id in prefilled_ids:
+            payload["tm_prefilled"] = True
         return payload
     
     for page in ocr_pages:
@@ -1238,7 +1242,7 @@ def build_edits_payload_from_translations(
                         "deleted": False,
                         "auto_generated": True,
                         "rotation": 0,
-                        **build_tm_meta(rec_texts[idx] if idx < len(rec_texts) else ""),
+                        **build_tm_meta(rec_texts[idx] if idx < len(rec_texts) else "", custom_id),
                     }
                 )
             pages_payload.append({"page_index_0based": page_idx, "boxes": boxes})
@@ -1322,7 +1326,7 @@ def build_edits_payload_from_translations(
                     "deleted": False,
                     "auto_generated": True,
                     "rotation": 0,
-                    **build_tm_meta(rec_texts[idx] if idx < len(rec_texts) else ""),
+                    **build_tm_meta(rec_texts[idx] if idx < len(rec_texts) else "", custom_id),
                 }
             )
 
@@ -1365,7 +1369,7 @@ def build_edits_payload_from_translations(
                         "no_clip": True,
                         "auto_generated": True,
                         "rotation": 0,
-                        **build_tm_meta(block.get("text", "")),
+                        **build_tm_meta(block.get("text", ""), custom_id),
                     }
                 )
 
@@ -1407,7 +1411,7 @@ def build_edits_payload_from_translations(
                         "deleted": False,
                         "auto_generated": True,
                         "rotation": 0,
-                        **build_tm_meta(cell.get("merged_text", "")),
+                        **build_tm_meta(cell.get("merged_text", ""), custom_id),
                     }
                 )
 
@@ -1429,30 +1433,12 @@ def finalize_translation_job(
     translations: dict[str, str],
     status_meta: dict[str, Any],
     backend_id: str,
+    prefilled_ids: set[str] | None = None,
 ) -> None:
     if str(backend_id).startswith("realtime"):
         raw_text = build_jsonl_text_from_translations(translations)
         if raw_text:
             (job_dir / state.BATCH_OUTPUT_NAME).write_text(raw_text, encoding="utf-8")
-    if state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY and key_map:
-        with state.TRANSLATION_MEMORY_LOCK:
-            memory = translation_memory.load_translation_memory()
-            now_ts = time.time()
-            source_name = "realtime" if str(backend_id).startswith("realtime") else "batch"
-            for custom_id, source_meta in key_map.items():
-                translated = translations.get(custom_id)
-                if translated:
-                    translation_memory.upsert_entry(
-                        memory,
-                        source_meta.get("source_text", ""),
-                        translated,
-                        target_lang,
-                        document_mode,
-                        source_normalized=source_meta.get("source_normalized"),
-                        source=source_name,
-                        now_ts=now_ts,
-                    )
-            translation_memory.write_translation_memory(memory)
     edits_payload = build_edits_payload_from_translations(
         ocr_pages,
         translations,
@@ -1460,6 +1446,7 @@ def finalize_translation_job(
         target_lang=target_lang,
         source_lang=source_lang,
         document_mode=document_mode,
+        prefilled_ids=prefilled_ids,
     )
     edits_path = job_dir / "edits.json"
     edits_path.write_text(
@@ -1796,6 +1783,7 @@ def _finalize_batch_translate_job(
         translations=translations,
         status_meta=status_meta,
         backend_id=batch_id,
+        prefilled_ids=set(prefilled),
     )
 
 

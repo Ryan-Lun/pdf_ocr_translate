@@ -27,6 +27,15 @@ from .shared import (
 )
 
 
+def _load_job_translation_context_with_source(
+    job_dir,
+    payload: dict | None = None,
+) -> tuple[str, str, str]:
+    config = jobs.load_batch_config(job_dir) or {}
+    document_mode, target_lang = _load_job_translation_context(job_dir, payload)
+    return document_mode, str(config.get("source_lang") or "auto"), target_lang
+
+
 @api_bp.route("/job/<job_id>/editor-presence", methods=["POST"], endpoint="editor_presence")
 def editor_presence(job_id: str):
     if not jobs.safe_job_id(job_id):
@@ -284,6 +293,7 @@ def batch_restore(job_id: str):
             target_lang=target_lang,
             source_lang=source_lang,
             document_mode=document_mode,
+            prefilled_ids=set(prefilled),
         )
         edits_path = job_dir / "edits.json"
         edits_path.write_text(
@@ -336,43 +346,23 @@ def save_job(job_id: str):
     )
     target_lang = str(config.get("target_lang") or "en")
     edits_path = job_dir / "edits.json"
+    previous_edits = (
+        json.loads(edits_path.read_text(encoding="utf-8"))
+        if edits_path.exists()
+        else {}
+    )
     edits_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    if document_mode == "form" and state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY:
-        tm_changed = False
-        with state.TRANSLATION_MEMORY_LOCK:
-            memory = translation_memory.load_translation_memory()
-            now_ts = None
-            for page in payload.get("pages", []):
-                if not isinstance(page, dict):
-                    continue
-                for box in page.get("boxes", []):
-                    if not isinstance(box, dict):
-                        continue
-                    if box.get("deleted") or not bool(box.get("auto_generated")):
-                        continue
-                    source_text = str(box.get("tm_source_text") or "").strip()
-                    translated_text = str(box.get("text") or "").strip()
-                    box_mode = str(box.get("tm_document_mode") or document_mode)
-                    box_target_lang = str(box.get("tm_target_lang") or target_lang)
-                    if not source_text or not translated_text:
-                        continue
-                    if translation_memory.normalize_document_mode(box_mode) != "form":
-                        continue
-                    translation_memory.upsert_entry(
-                        memory,
-                        source_text,
-                        translated_text,
-                        box_target_lang,
-                        box_mode,
-                        source_normalized=str(box.get("tm_source_normalized") or "") or None,
-                        source="editor",
-                        now_ts=now_ts,
-                    )
-                    tm_changed = True
-            if tm_changed:
-                translation_memory.write_translation_memory(memory)
+    source_lang = str(config.get("source_lang") or "auto")
+    translation_memory.upsert_approved_editor_save_entries(
+        job_id=job_id,
+        pages=payload.get("pages") if isinstance(payload, dict) else None,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        document_mode=document_mode,
+        previous_pages=previous_edits.get("pages") if isinstance(previous_edits, dict) else None,
+    )
     try:
         edited_pdf = ocr.apply_edits_to_pdf(job_id, job_dir, payload)
     except Exception as exc:
@@ -451,20 +441,21 @@ def apply_consistency(job_id: str):
         json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    if sync_to_tm and state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY:
-        document_mode, target_lang = _load_job_translation_context(job_dir, edits_payload)
-        with state.TRANSLATION_MEMORY_LOCK:
-            memory = translation_memory.load_translation_memory()
-            translation_memory.upsert_entry(
-                memory,
-                representative_source_text or source_normalized,
-                target_text,
-                target_lang,
-                document_mode,
-                source_normalized=source_normalized,
-                source="editor_consistency",
-            )
-            translation_memory.write_translation_memory(memory)
+    if sync_to_tm:
+        document_mode, source_lang, target_lang = _load_job_translation_context_with_source(
+            job_dir, edits_payload
+        )
+        translation_memory.upsert_approved_editor_entry(
+            job_id=job_id,
+            source_text=representative_source_text or source_normalized,
+            target_text=target_text,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            document_mode=document_mode,
+            source_normalized=source_normalized,
+            source="editor_consistency",
+            source_metadata={"updated_count": updated_count},
+        )
 
     try:
         edited_pdf = ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)
@@ -541,21 +532,6 @@ def apply_paragraph_term(job_id: str):
     edits_path.write_text(
         json.dumps(edits_payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-
-    if sync_to_tm and state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY:
-        document_mode, target_lang = _load_job_translation_context(job_dir, edits_payload)
-        with state.TRANSLATION_MEMORY_LOCK:
-            memory = translation_memory.load_translation_memory()
-            translation_memory.upsert_entry(
-                memory,
-                source_term,
-                replace_to,
-                target_lang,
-                document_mode,
-                source_normalized=normalized_source_term,
-                source="editor_paragraph_term",
-            )
-            translation_memory.write_translation_memory(memory)
 
     try:
         edited_pdf = ocr.apply_edits_to_pdf(job_id, job_dir, edits_payload)

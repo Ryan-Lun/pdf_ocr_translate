@@ -1861,7 +1861,10 @@ def test_save_job_writes_form_tm_from_editor_edits(client, tmp_path, monkeypatch
     job_dir.mkdir(parents=True)
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
     monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
 
     (job_dir / "batch_config.json").write_text(
         json.dumps({"document_mode": "form", "target_lang": "en"}, ensure_ascii=False, indent=2),
@@ -1905,14 +1908,130 @@ def test_save_job_writes_form_tm_from_editor_edits(client, tmp_path, monkeypatch
     assert saved["pages"][0]["boxes"][0]["text_align"] == "right"
     assert saved["pages"][0]["boxes"][0]["rotation"] == 90
 
-    memory = json.loads(state.TRANSLATION_MEMORY_PATH.read_text(encoding="utf-8"))
-    entry = memory["form|en|表格內容"]
-    assert entry["source_text"] == "表格內容"
-    assert entry["target_text"] == "Corrected translation"
-    assert entry["target_lang"] == "en"
-    assert entry["document_mode"] == "form"
-    assert entry["source"] == "editor"
+    entry = translation_memory.find_sql_entry(
+        "表格內容",
+        source_lang="auto",
+        target_lang="en",
+        document_mode="form",
+    )
+    assert entry is not None
+    assert entry.source_text == "表格內容"
+    assert entry.source_normalized == "表格內容"
+    assert entry.target_text == "Corrected translation"
+    assert entry.target_lang == "en"
+    assert entry.document_mode == "form"
+    assert entry.status == "approved"
+    assert entry.source == "editor"
+    assert entry.source_job_id == job_id
+    assert entry.source_metadata == {"box_id": 100000, "page_index_0based": 0}
+    assert not state.TRANSLATION_MEMORY_PATH.exists()
 
+
+
+def test_save_job_writes_only_changed_non_prefilled_tm_boxes(client, tmp_path, monkeypatch):
+    job_id = "b" * 32
+    job_dir = tmp_path / "jobs" / job_id
+    job_dir.mkdir(parents=True)
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
+
+    (job_dir / "batch_config.json").write_text(
+        json.dumps(
+            {"document_mode": "form", "source_lang": "zh-tw", "target_lang": "en"},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    existing_payload = {
+        "pages": [
+            {
+                "page_index_0based": 0,
+                "boxes": [
+                    {"id": 1, "text": "Unchanged translation", "auto_generated": True},
+                    {"id": 2, "text": "Prefilled translation", "auto_generated": True},
+                    {"id": 3, "text": "Old translation", "auto_generated": True},
+                ],
+            }
+        ]
+    }
+    (job_dir / "edits.json").write_text(
+        json.dumps(existing_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    payload = {
+        "pages": [
+            {
+                "page_index_0based": 0,
+                "boxes": [
+                    {
+                        "id": 1,
+                        "deleted": False,
+                        "text": "Unchanged translation",
+                        "auto_generated": True,
+                        "tm_source_text": "未變更原文",
+                        "tm_source_normalized": "未變更原文",
+                        "tm_target_lang": "en",
+                        "tm_document_mode": "form",
+                    },
+                    {
+                        "id": 2,
+                        "deleted": False,
+                        "text": "Prefilled translation",
+                        "auto_generated": True,
+                        "tm_prefilled": True,
+                        "tm_source_text": "已命中原文",
+                        "tm_source_normalized": "已命中原文",
+                        "tm_target_lang": "en",
+                        "tm_document_mode": "form",
+                    },
+                    {
+                        "id": 3,
+                        "deleted": False,
+                        "text": "Corrected translation",
+                        "auto_generated": True,
+                        "tm_source_text": "已修改原文",
+                        "tm_source_normalized": "已修改原文",
+                        "tm_target_lang": "en",
+                        "tm_document_mode": "form",
+                    },
+                ],
+            }
+        ]
+    }
+
+    monkeypatch.setattr(
+        "app.blueprints.api.routes.ocr.apply_edits_to_pdf",
+        lambda current_job_id, current_job_dir, edits: Path(current_job_dir) / "edited.pdf",
+    )
+
+    resp = client.post(f"/api/job/{job_id}/save", json=payload)
+    assert resp.status_code == 200
+
+    assert translation_memory.find_sql_entry(
+        "未變更原文",
+        source_lang="zh-tw",
+        target_lang="en",
+        document_mode="form",
+    ) is None
+    assert translation_memory.find_sql_entry(
+        "已命中原文",
+        source_lang="zh-tw",
+        target_lang="en",
+        document_mode="form",
+    ) is None
+    changed_entry = translation_memory.find_sql_entry(
+        "已修改原文",
+        source_lang="zh-tw",
+        target_lang="en",
+        document_mode="form",
+    )
+    assert changed_entry is not None
+    assert changed_entry.target_text == "Corrected translation"
 
 def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")

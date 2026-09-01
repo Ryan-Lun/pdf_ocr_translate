@@ -726,6 +726,7 @@ def run_realtime_translate_job(
                 translations=translations,
                 status_meta=status_meta,
                 backend_id="realtime_prefill_only",
+                prefilled_ids=set(prefilled),
             )
             return True
 
@@ -800,6 +801,7 @@ def run_realtime_translate_job(
             translations=translations,
             status_meta=status_meta,
             backend_id="realtime",
+            prefilled_ids=set(plan["prefilled"]),
         )
         return True
     except Exception as exc:

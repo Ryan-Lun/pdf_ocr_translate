@@ -201,6 +201,33 @@ def normalize_source_lang(source_lang: str | None) -> str:
     return cleaned or "auto"
 
 
+SUPPORTED_TM_LANGUAGE_CODES = frozenset({"auto", "en", "zh", "zh-cn"})
+
+
+def canonical_source_lang_for_tm(source_lang: str | None) -> str:
+    normalized = normalize_source_lang(source_lang)
+    if normalized == "zh-tw":
+        return "zh"
+    if normalized in SUPPORTED_TM_LANGUAGE_CODES:
+        return normalized
+    return normalized
+
+
+def source_lang_lookup_candidates_for_tm(source_lang: str | None) -> list[str]:
+    normalized = normalize_source_lang(source_lang)
+    canonical = canonical_source_lang_for_tm(normalized)
+    candidates = [canonical]
+    if normalized not in candidates:
+        candidates.append(normalized)
+    if canonical == "zh":
+        candidates.append("zh-tw")
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
 def normalize_status(status: str | None) -> str:
     cleaned = str(status or STATUS_APPROVED).strip().lower()
     if cleaned in {STATUS_APPROVED, STATUS_DISABLED}:
@@ -289,8 +316,9 @@ def _approved_candidates(
             select(job_store.TranslationMemoryEntryRecord)
             .where(job_store.TranslationMemoryEntryRecord.status == STATUS_APPROVED)
             .where(
-                job_store.TranslationMemoryEntryRecord.source_lang
-                == normalize_source_lang(source_lang)
+                job_store.TranslationMemoryEntryRecord.source_lang.in_(
+                    source_lang_lookup_candidates_for_tm(source_lang)
+                )
             )
             .where(
                 job_store.TranslationMemoryEntryRecord.target_lang
@@ -326,8 +354,9 @@ def _sql_entry_lookup_stmt(
         )
         .where(job_store.TranslationMemoryEntryRecord.source_normalized == source_normalized)
         .where(
-            job_store.TranslationMemoryEntryRecord.source_lang
-            == normalize_source_lang(source_lang)
+            job_store.TranslationMemoryEntryRecord.source_lang.in_(
+                source_lang_lookup_candidates_for_tm(source_lang)
+            )
         )
         .where(
             job_store.TranslationMemoryEntryRecord.target_lang
@@ -603,6 +632,134 @@ def register_translation_memory_cli(app) -> None:
             )
 
 
+def approved_sql_tm_write_enabled() -> bool:
+    return bool(
+        getattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+        and getattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", False)
+    )
+
+
+def upsert_approved_editor_entry(
+    *,
+    job_id: str,
+    source_text: str,
+    target_text: str,
+    source_lang: str,
+    target_lang: str,
+    document_mode: str,
+    source_normalized: str | None,
+    source: str,
+    source_metadata: dict[str, Any] | None = None,
+) -> int | None:
+    if not approved_sql_tm_write_enabled():
+        return None
+    return upsert_sql_entry_input(
+        TranslationMemoryEntryInput(
+            source_text=source_text,
+            target_text=target_text,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            document_mode=document_mode,
+            status=STATUS_APPROVED,
+            source_normalized=source_normalized,
+            source=source,
+            source_job_id=job_id,
+            source_metadata=source_metadata,
+        )
+    )
+
+
+def _editor_box_text_index(pages: object) -> dict[tuple[int, int], str]:
+    index: dict[tuple[int, int], str] = {}
+    if not isinstance(pages, list):
+        return index
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        try:
+            page_index = int(page.get("page_index_0based", 0))
+        except (TypeError, ValueError):
+            continue
+        boxes = page.get("boxes")
+        if not isinstance(boxes, list):
+            continue
+        for box in boxes:
+            if not isinstance(box, dict):
+                continue
+            try:
+                box_id = int(box.get("id"))
+            except (TypeError, ValueError):
+                continue
+            index[(page_index, box_id)] = str(box.get("text") or "")
+    return index
+
+
+def upsert_approved_editor_save_entries(
+    *,
+    job_id: str,
+    pages: object,
+    source_lang: str,
+    target_lang: str,
+    document_mode: str,
+    previous_pages: object = None,
+) -> int:
+    if not isinstance(pages, list):
+        return 0
+    previous_text = _editor_box_text_index(previous_pages)
+    written = 0
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        page_index = page.get("page_index_0based")
+        try:
+            page_index_key = int(page_index or 0)
+        except (TypeError, ValueError):
+            page_index_key = 0
+        boxes = page.get("boxes")
+        if not isinstance(boxes, list):
+            continue
+        for box in boxes:
+            if not isinstance(box, dict):
+                continue
+            if box.get("deleted") or not bool(box.get("auto_generated")):
+                continue
+            if bool(box.get("tm_prefilled")):
+                continue
+            try:
+                box_id_key = int(box.get("id"))
+            except (TypeError, ValueError):
+                box_id_key = None
+            current_text = str(box.get("text") or "")
+            if (
+                box_id_key is not None
+                and previous_text
+                and previous_text.get((page_index_key, box_id_key)) == current_text
+            ):
+                continue
+            source_text = str(box.get("tm_source_text") or "").strip()
+            translated_text = current_text.strip()
+            box_mode = str(box.get("tm_document_mode") or document_mode)
+            box_target_lang = str(box.get("tm_target_lang") or target_lang)
+            if not source_text or not translated_text:
+                continue
+            entry_id = upsert_approved_editor_entry(
+                job_id=job_id,
+                source_text=source_text,
+                target_text=translated_text,
+                source_lang=source_lang,
+                target_lang=box_target_lang,
+                document_mode=box_mode,
+                source_normalized=str(box.get("tm_source_normalized") or "") or None,
+                source="editor",
+                source_metadata={
+                    "box_id": box.get("id"),
+                    "page_index_0based": page_index,
+                },
+            )
+            if entry_id is not None:
+                written += 1
+    return written
+
 def upsert_sql_entry_input(entry: TranslationMemoryEntryInput, *, now: datetime | None = None) -> int | None:
     return upsert_sql_entry(
         source_text=entry.source_text,
@@ -644,7 +801,7 @@ def upsert_sql_entry(
     if not normalized_source or not cleaned_target:
         return None
 
-    normalized_source_lang = normalize_source_lang(source_lang)
+    normalized_source_lang = canonical_source_lang_for_tm(source_lang)
     normalized_target_lang = normalize_target_lang(target_lang)
     normalized_mode = normalize_document_mode(document_mode)
     normalized_status = normalize_status(status)
@@ -686,6 +843,7 @@ def upsert_sql_entry(
         row.source_text = str(source_text or "")
         row.source_normalized = normalized_source
         row.source_hash = normalized_hash
+        row.source_lang = normalized_source_lang
         row.target_text = cleaned_target
         row.source = str(source or "").strip() or row.source
         row.source_job_id = str(source_job_id or "").strip() or row.source_job_id
@@ -707,7 +865,7 @@ def retrieve_sql(
     min_fuzzy_chars: int | None = None,
 ) -> TranslationMemoryRetrievalResult:
     normalized_source = normalize_source_text(source_text)
-    normalized_source_lang = normalize_source_lang(source_lang)
+    normalized_source_lang = canonical_source_lang_for_tm(source_lang)
     normalized_target_lang = normalize_target_lang(target_lang)
     normalized_mode = normalize_document_mode(document_mode)
     result = _empty_retrieval_result(
@@ -860,6 +1018,10 @@ def normalize_target_lang(target_lang: str | None) -> str:
 
 def normalize_document_mode(document_mode: str | None) -> str:
     cleaned = str(document_mode or "").strip().lower()
+    if cleaned in {"other", "other_document", "other_documents"}:
+        return "other"
+    if cleaned in {"general_force_translate", "general_force"}:
+        return "general_force"
     if cleaned == "word":
         return "word"
     if cleaned == "general":

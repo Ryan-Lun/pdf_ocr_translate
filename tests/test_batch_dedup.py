@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import time
 
+import pytest
+
 from app.services.batch import (
     _write_required_glossary_hits_from_key_map,
     build_batch_items,
@@ -11,7 +13,12 @@ from app.services.batch import (
     resolve_batch_prompt,
     translate_texts_for_region,
 )
-from app.services import batch, state, translation_memory
+from app.services import batch, job_store, state, translation_memory
+
+
+@pytest.fixture(autouse=True)
+def _disable_sql_translation_memory_by_default(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
 
 
 def test_table_paragraph_blocks_are_skipped_when_merged_cells_exist():
@@ -1166,6 +1173,33 @@ def test_overlay_can_disable_translation_memory_prefill(tmp_path, monkeypatch):
     assert prefilled == {}
 
 
+
+def test_edits_payload_marks_prefilled_tm_boxes():
+    payload = build_edits_payload_from_translations(
+        [
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["確認設備是否正常。", "操作人員必須配戴乾淨棉手套。"],
+                "rec_polys": [
+                    [[0, 0], [100, 0], [100, 20], [0, 20]],
+                    [[0, 30], [100, 30], [100, 50], [0, 50]],
+                ],
+            }
+        ],
+        {
+            "p0000-l0000": "Confirm whether the equipment is operating normally.",
+            "p0000-l0001": "Operators must wear clean cotton gloves.",
+        },
+        target_lang="en",
+        source_lang="zh-tw",
+        document_mode="form",
+        prefilled_ids={"p0000-l0000"},
+    )
+
+    boxes = payload["pages"][0]["boxes"]
+    assert boxes[0]["tm_prefilled"] is True
+    assert "tm_prefilled" not in boxes[1]
+
 def test_form_mode_edits_payload_includes_tm_metadata():
     ocr_pages = [
         {
@@ -2048,7 +2082,55 @@ def test_pdf_batch_auto_source_lang_can_match_imported_zh_tw_sql_tm(monkeypatch)
         document_mode="form",
     )
 
-    assert source_lang_calls == ["auto", "zh-tw"]
+    assert source_lang_calls == ["auto", "zh", "zh-tw"]
+    assert items == []
+    assert prefilled == {
+        "p0000-l0000": "Confirm whether the equipment is operating normally."
+    }
+
+
+def test_pdf_batch_generic_zh_source_lang_can_match_imported_zh_tw_sql_tm(monkeypatch):
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    exact = _tm_match(
+        entry_id=103,
+        match_type="byte_exact",
+        source_text="確認設備是否正常。",
+        target_text="Confirm whether the equipment is operating normally.",
+        score=1.0,
+    )
+    source_lang_calls: list[str] = []
+
+    def fake_retrieve_sql(source_text, **kwargs):
+        source_lang_calls.append(str(kwargs.get("source_lang") or ""))
+        if kwargs.get("source_lang") == "zh-tw":
+            return _tm_result(str(source_text), exact_match=exact)
+        return _tm_result(str(source_text))
+
+    monkeypatch.setattr(translation_memory, "retrieve_sql", fake_retrieve_sql)
+    monkeypatch.setattr(
+        translation_memory,
+        "record_exact_reuse",
+        lambda entry_ids: None,
+    )
+
+    items, _, _, prefilled = build_batch_items(
+        [
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["確認設備是否正常。"],
+                "rec_polys": [],
+            }
+        ],
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        target_lang="en",
+        source_lang="zh",
+        document_mode="other",
+    )
+
+    assert source_lang_calls == ["zh", "zh-tw"]
     assert items == []
     assert prefilled == {
         "p0000-l0000": "Confirm whether the equipment is operating normally."
@@ -2164,7 +2246,8 @@ def test_pdf_batch_keeps_glossary_priority_when_tm_reference_is_present(monkeypa
     assert required_terms[0]["target"] == "Appearance"
 
 
-def test_pdf_batch_does_not_retrieve_sql_tm_when_feature_flag_disabled(monkeypatch):
+def test_pdf_batch_does_not_retrieve_sql_tm_when_feature_flag_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
     monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
 
@@ -2275,3 +2358,57 @@ def test_batch_translate_job_completes_when_all_segments_are_sql_tm_exact(monkey
     assert finalized["prefilled"] == {
         "p0000-l0000": "Confirm whether the equipment is operating normally."
     }
+
+
+def test_finalize_translation_job_does_not_auto_write_sql_tm_from_llm_completion(
+    app, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
+
+    job_id = "f" * 32
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+
+    monkeypatch.setattr(
+        batch.ocr,
+        "apply_edits_to_pdf",
+        lambda current_job_id, current_job_dir, edits_payload: job_dir / "edited.pdf",
+    )
+
+    batch.finalize_translation_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        ocr_pages=[
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["確認設備是否正常。"],
+                "rec_polys": [[[0, 0], [100, 0], [100, 20], [0, 20]]],
+            }
+        ],
+        pp_pages=None,
+        document_mode="form",
+        target_lang="en",
+        source_lang="zh-tw",
+        key_map={
+            "p0000-l0000": {
+                "source_text": "確認設備是否正常。",
+                "source_normalized": "確認設備是否正常.",
+            }
+        },
+        translations={
+            "p0000-l0000": "Confirm whether the equipment is operating normally."
+        },
+        status_meta={},
+        backend_id="realtime-test",
+    )
+
+    entry = translation_memory.find_sql_entry(
+        "確認設備是否正常。",
+        source_lang="zh-tw",
+        target_lang="en",
+        document_mode="form",
+    )
+    assert entry is None
