@@ -1,0 +1,6 @@
+source_text,target_text,source_lang,target_lang,document_mode,status,notes
+"確認設備是否正常。","Confirm whether the equipment is operating normally.","zh-tw","en","word","approved","Word procedure example"
+"確認首件半成品尺寸是否符合製程規範。","Confirm whether the dimensions of the first semi-finished product comply with the process specification.","zh-tw","en","form","approved","PDF overlay form example"
+"作業前請確認外觀是否符合規範。","Before operation, confirm whether the appearance complies with the specification.","zh-tw","en","scanned","approved","Scanned PDF example"
+"操作人員必須配戴乾淨棉手套。","Operators must wear clean cotton gloves.","zh-tw","en","word","approved","Safety instruction example"
+"產品編號需與工單內容一致。","The product number must match the work order.","zh-tw","en","form","approved","Terminology consistency example"

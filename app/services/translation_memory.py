@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import re
@@ -8,8 +9,10 @@ import unicodedata
 from dataclasses import dataclass, replace
 from datetime import datetime
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Any
 
+import click
 from sqlalchemy import select
 
 from . import job_store, state
@@ -51,6 +54,18 @@ STATUS_DISABLED = "disabled"
 MATCH_BYTE_EXACT = "byte_exact"
 MATCH_NORMALIZED_EXACT = "normalized_exact"
 MATCH_FUZZY = "fuzzy"
+IMPORT_ACTION_CREATED = "created"
+IMPORT_ACTION_UPDATED = "updated"
+IMPORT_ACTION_SKIPPED = "skipped"
+IMPORT_ACTION_ERROR = "error"
+IMPORT_ACTION_WOULD_CREATE = "would_create"
+IMPORT_ACTION_WOULD_UPDATE = "would_update"
+IMPORT_REASON_NEW_ENTRY = "new_entry"
+IMPORT_REASON_APPROVED_CONFLICT = "approved_conflict"
+IMPORT_REASON_APPROVED_CONFLICT_OVERWRITTEN = "approved_conflict_overwritten"
+IMPORT_REASON_UNSUPPORTED_STATUS = "unsupported_status"
+IMPORT_REASON_STATUS_MUST_BE_APPROVED = "status_must_be_approved"
+IMPORT_REASON_EMPTY_NORMALIZED_SOURCE = "empty_normalized_source"
 
 try:
     from rapidfuzz import fuzz as _rapidfuzz_fuzz
@@ -120,6 +135,40 @@ class TranslationMemoryRetrievalResult:
     exact_match: TranslationMemoryMatch | None
     fuzzy_references: list[TranslationMemoryMatch]
     semantic_references: list[TranslationMemoryMatch]
+
+
+REQUIRED_IMPORT_COLUMNS = frozenset(
+    {
+        "source_text",
+        "target_text",
+        "source_lang",
+        "target_lang",
+        "document_mode",
+        "status",
+    }
+)
+
+
+@dataclass(frozen=True)
+class TranslationMemoryImportDetail:
+    row_number: int
+    action: str
+    reason: str
+    entry_id: int | None = None
+
+
+@dataclass(frozen=True)
+class TranslationMemoryImportSummary:
+    dry_run: bool
+    overwrite: bool
+    scanned: int = 0
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+    would_create: int = 0
+    would_update: int = 0
+    errors: int = 0
+    details: tuple[TranslationMemoryImportDetail, ...] = ()
 
 
 def _empty_retrieval_result(
@@ -261,6 +310,297 @@ def get_sql_entry(entry_id: int) -> SqlTranslationMemoryEntry | None:
         return _row_to_entry(row) if row is not None else None
 
 
+def _sql_entry_lookup_stmt(
+    *,
+    source_normalized: str,
+    source_lang: str,
+    target_lang: str,
+    document_mode: str,
+    status: str,
+):
+    return (
+        select(job_store.TranslationMemoryEntryRecord)
+        .where(
+            job_store.TranslationMemoryEntryRecord.source_hash
+            == source_hash(source_normalized)
+        )
+        .where(job_store.TranslationMemoryEntryRecord.source_normalized == source_normalized)
+        .where(
+            job_store.TranslationMemoryEntryRecord.source_lang
+            == normalize_source_lang(source_lang)
+        )
+        .where(
+            job_store.TranslationMemoryEntryRecord.target_lang
+            == normalize_target_lang(target_lang)
+        )
+        .where(
+            job_store.TranslationMemoryEntryRecord.document_mode
+            == normalize_document_mode(document_mode)
+        )
+        .where(job_store.TranslationMemoryEntryRecord.status == normalize_status(status))
+        .order_by(
+            job_store.TranslationMemoryEntryRecord.updated_at.desc(),
+            job_store.TranslationMemoryEntryRecord.id.desc(),
+        )
+    )
+
+
+def find_sql_entry(
+    source_text: str,
+    *,
+    source_lang: str,
+    target_lang: str,
+    document_mode: str,
+    status: str = STATUS_APPROVED,
+    source_normalized: str | None = None,
+) -> SqlTranslationMemoryEntry | None:
+    normalized_source = (
+        source_normalized
+        if source_normalized is not None
+        else normalize_source_text(source_text)
+    )
+    normalized_source = normalize_source_text(normalized_source)
+    if not normalized_source:
+        return None
+    stmt = _sql_entry_lookup_stmt(
+        source_normalized=normalized_source,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        document_mode=document_mode,
+        status=status,
+    )
+    with job_store.session_scope() as session:
+        row = session.scalars(stmt).first()
+        return _row_to_entry(row) if row is not None else None
+
+
+def _validate_import_columns(fieldnames: list[str] | None) -> None:
+    supplied = {
+        str(field or "").strip()
+        for field in (fieldnames or [])
+        if str(field or "").strip()
+    }
+    missing = sorted(REQUIRED_IMPORT_COLUMNS - supplied)
+    if missing:
+        raise ValueError("missing required CSV columns: " + ", ".join(missing))
+
+
+def _validate_import_row(
+    row: dict[str, str],
+) -> tuple[TranslationMemoryEntryInput | None, str | None]:
+    try:
+        status = normalize_status(row.get("status"))
+    except ValueError:
+        return None, IMPORT_REASON_UNSUPPORTED_STATUS
+    if status != STATUS_APPROVED:
+        return None, IMPORT_REASON_STATUS_MUST_BE_APPROVED
+
+    required_values = {
+        column: str(row.get(column) or "").strip()
+        for column in REQUIRED_IMPORT_COLUMNS
+    }
+    missing_values = sorted(
+        column for column, value in required_values.items() if not value
+    )
+    if missing_values:
+        return None, "missing_required_values:" + ",".join(missing_values)
+
+    source_text = required_values["source_text"]
+    target_text = required_values["target_text"]
+    if not normalize_source_text(source_text):
+        return None, IMPORT_REASON_EMPTY_NORMALIZED_SOURCE
+    return (
+        TranslationMemoryEntryInput(
+            source_text=source_text,
+            target_text=target_text,
+            source_lang=required_values["source_lang"],
+            target_lang=required_values["target_lang"],
+            document_mode=required_values["document_mode"],
+            status=status,
+            source="csv_import",
+            notes=str(row.get("notes") or "").strip() or None,
+        ),
+        None,
+    )
+
+
+def _process_import_row(
+    row: dict[str, str],
+    *,
+    row_number: int,
+    apply: bool,
+    overwrite: bool,
+) -> TranslationMemoryImportDetail:
+    entry, error_reason = _validate_import_row(row)
+    if entry is None:
+        return TranslationMemoryImportDetail(
+            row_number=row_number,
+            action=IMPORT_ACTION_ERROR,
+            reason=error_reason or "invalid_row",
+        )
+
+    existing = find_sql_entry(
+        entry.source_text,
+        source_lang=entry.source_lang,
+        target_lang=entry.target_lang,
+        document_mode=entry.document_mode,
+        status=STATUS_APPROVED,
+    )
+    if existing is not None and not overwrite:
+        return TranslationMemoryImportDetail(
+            row_number=row_number,
+            action=IMPORT_ACTION_SKIPPED,
+            reason=IMPORT_REASON_APPROVED_CONFLICT,
+            entry_id=existing.entry_id,
+        )
+
+    if not apply:
+        if existing is not None:
+            return TranslationMemoryImportDetail(
+                row_number=row_number,
+                action=IMPORT_ACTION_WOULD_UPDATE,
+                reason=IMPORT_REASON_APPROVED_CONFLICT,
+                entry_id=existing.entry_id,
+            )
+        return TranslationMemoryImportDetail(
+            row_number=row_number,
+            action=IMPORT_ACTION_WOULD_CREATE,
+            reason=IMPORT_REASON_NEW_ENTRY,
+        )
+
+    entry_id = upsert_sql_entry_input(entry)
+    if existing is not None:
+        return TranslationMemoryImportDetail(
+            row_number=row_number,
+            action=IMPORT_ACTION_UPDATED,
+            reason=IMPORT_REASON_APPROVED_CONFLICT_OVERWRITTEN,
+            entry_id=entry_id,
+        )
+    return TranslationMemoryImportDetail(
+        row_number=row_number,
+        action=IMPORT_ACTION_CREATED,
+        reason=IMPORT_REASON_NEW_ENTRY,
+        entry_id=entry_id,
+    )
+
+
+def _summary_from_details(
+    *,
+    apply: bool,
+    overwrite: bool,
+    scanned: int,
+    details: list[TranslationMemoryImportDetail],
+) -> TranslationMemoryImportSummary:
+    counts = {
+        IMPORT_ACTION_CREATED: 0,
+        IMPORT_ACTION_UPDATED: 0,
+        IMPORT_ACTION_SKIPPED: 0,
+        IMPORT_ACTION_WOULD_CREATE: 0,
+        IMPORT_ACTION_WOULD_UPDATE: 0,
+        IMPORT_ACTION_ERROR: 0,
+    }
+    for detail in details:
+        counts[detail.action] = counts.get(detail.action, 0) + 1
+    return TranslationMemoryImportSummary(
+        dry_run=not apply,
+        overwrite=overwrite,
+        scanned=scanned,
+        created=counts[IMPORT_ACTION_CREATED],
+        updated=counts[IMPORT_ACTION_UPDATED],
+        skipped=counts[IMPORT_ACTION_SKIPPED],
+        would_create=counts[IMPORT_ACTION_WOULD_CREATE],
+        would_update=counts[IMPORT_ACTION_WOULD_UPDATE],
+        errors=counts[IMPORT_ACTION_ERROR],
+        details=tuple(details),
+    )
+
+
+def import_csv(
+    csv_path: Path | str,
+    *,
+    apply: bool = False,
+    overwrite: bool = False,
+) -> TranslationMemoryImportSummary:
+    path = Path(csv_path)
+    details: list[TranslationMemoryImportDetail] = []
+    scanned = 0
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        _validate_import_columns(reader.fieldnames)
+        for row_number, row in enumerate(reader, start=2):
+            scanned += 1
+            details.append(
+                _process_import_row(
+                    row,
+                    row_number=row_number,
+                    apply=apply,
+                    overwrite=overwrite,
+                )
+            )
+    return _summary_from_details(
+        apply=apply,
+        overwrite=overwrite,
+        scanned=scanned,
+        details=details,
+    )
+
+
+def register_translation_memory_cli(app) -> None:
+    @app.cli.command("tm-import")
+    @click.argument(
+        "csv_path",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    )
+    @click.option(
+        "--apply",
+        "apply_changes",
+        is_flag=True,
+        help="Write approved CSV entries to SQL. Defaults to dry-run.",
+    )
+    @click.option(
+        "--overwrite",
+        is_flag=True,
+        help="Overwrite existing approved entries with matching source/language/mode.",
+    )
+    def tm_import_command(
+        csv_path: Path,
+        apply_changes: bool,
+        overwrite: bool,
+    ) -> None:
+        try:
+            summary = import_csv(
+                csv_path,
+                apply=apply_changes,
+                overwrite=overwrite,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(
+            "tm_import "
+            f"dry_run={'1' if summary.dry_run else '0'} "
+            f"overwrite={'1' if summary.overwrite else '0'} "
+            f"scanned={summary.scanned} "
+            f"created={summary.created} "
+            f"updated={summary.updated} "
+            f"would_create={summary.would_create} "
+            f"would_update={summary.would_update} "
+            f"skipped={summary.skipped} "
+            f"errors={summary.errors}"
+        )
+        for detail in summary.details:
+            parts = [
+                "tm_import_detail",
+                f"row={detail.row_number}",
+                f"action={detail.action}",
+                f"reason={detail.reason}",
+            ]
+            if detail.entry_id is not None:
+                parts.append(f"entry_id={detail.entry_id}")
+            click.echo(" ".join(parts))
+        if summary.errors:
+            raise click.ClickException(
+                "Some Translation Memory rows could not be imported."
+            )
 
 
 def upsert_sql_entry_input(entry: TranslationMemoryEntryInput, *, now: datetime | None = None) -> int | None:
@@ -311,21 +651,12 @@ def upsert_sql_entry(
     normalized_hash = source_hash(normalized_source)
     timestamp = now or job_store.utcnow()
     with job_store.session_scope() as session:
-        stmt = (
-            select(job_store.TranslationMemoryEntryRecord)
-            .where(job_store.TranslationMemoryEntryRecord.source_hash == normalized_hash)
-            .where(
-                job_store.TranslationMemoryEntryRecord.source_normalized
-                == normalized_source
-            )
-            .where(job_store.TranslationMemoryEntryRecord.source_lang == normalized_source_lang)
-            .where(job_store.TranslationMemoryEntryRecord.target_lang == normalized_target_lang)
-            .where(job_store.TranslationMemoryEntryRecord.document_mode == normalized_mode)
-            .where(job_store.TranslationMemoryEntryRecord.status == normalized_status)
-            .order_by(
-                job_store.TranslationMemoryEntryRecord.updated_at.desc(),
-                job_store.TranslationMemoryEntryRecord.id.desc(),
-            )
+        stmt = _sql_entry_lookup_stmt(
+            source_normalized=normalized_source,
+            source_lang=normalized_source_lang,
+            target_lang=normalized_target_lang,
+            document_mode=normalized_mode,
+            status=normalized_status,
         )
         row = session.scalars(stmt).first()
         if row is None:
