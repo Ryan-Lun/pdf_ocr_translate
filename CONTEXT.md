@@ -27,3 +27,19 @@ _Avoid_: Hint, synonym, protected content
 **Exact Protected Content**:
 Source content that must remain byte-for-byte unchanged in the translated output, such as user-defined do-not-translate terms, identifiers, model numbers, URLs, and email addresses.
 _Avoid_: Required glossary term, terminology preference
+
+**Translation Memory**:
+Approved source-to-target segment translations that can be reused or referenced by later translation jobs with the same language direction.
+_Avoid_: Glossary, Translation cache, Draft translation history
+
+**Approved Translation**:
+A human-confirmed or otherwise formally accepted translation that is eligible to become Translation Memory.
+_Avoid_: AI draft, Raw model output, Unreviewed translation
+
+**TM Exact Match**:
+A Translation Memory match where the current source segment matches a stored approved source segment closely enough to reuse its target translation without calling the language model.
+_Avoid_: Fuzzy match, Reference match
+
+**TM Reference**:
+A similar approved Translation Memory entry shown to the language model for consistency guidance while translating the current source segment.
+_Avoid_: Exact match, Required glossary term, Automatic replacement
