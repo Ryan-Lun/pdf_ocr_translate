@@ -9,6 +9,7 @@ from . import auth_store, job_store
 SCHEMA_GROUPS: dict[str, tuple[str, ...]] = {
     "jobs": ("jobs", "job_artifacts", "job_events", "editor_presence", "document_templates"),
     "logs": ("audit_logs", "system_error_logs"),
+    "translation_memory": ("translation_memory_entries",),
     "auth": ("users", "roles", "user_roles"),
 }
 
@@ -57,6 +58,27 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "created_at",
         "updated_at",
     ),
+    "translation_memory_entries": (
+        "id",
+        "source_text",
+        "source_normalized",
+        "source_hash",
+        "target_text",
+        "source_lang",
+        "target_lang",
+        "document_mode",
+        "status",
+        "source",
+        "source_job_id",
+        "source_metadata_json",
+        "notes",
+        "exact_reuse_count",
+        "reference_count",
+        "created_at",
+        "updated_at",
+        "last_used_at",
+        "last_referenced_at",
+    ),
     "users": ("id", "work_id", "display_name", "email", "is_active", "created_at", "last_login_at"),
     "roles": ("id", "name"),
     "user_roles": ("user_id", "role_id"),
@@ -86,7 +108,11 @@ def tables_exist(*table_names: str) -> bool:
 
 
 def required_schema_groups(app) -> dict[str, tuple[str, ...]]:
-    groups = {"jobs": SCHEMA_GROUPS["jobs"], "logs": SCHEMA_GROUPS["logs"]}
+    groups = {
+        "jobs": SCHEMA_GROUPS["jobs"],
+        "logs": SCHEMA_GROUPS["logs"],
+        "translation_memory": SCHEMA_GROUPS["translation_memory"],
+    }
     if app.config.get("AUTH_ENABLED", False):
         groups["auth"] = SCHEMA_GROUPS["auth"]
     return groups

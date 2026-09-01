@@ -4,6 +4,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 
 from app.services.schema_control import SCHEMA_GROUPS
@@ -30,4 +31,5 @@ def test_alembic_upgrade_head_creates_current_schema(monkeypatch, tmp_path):
     with engine.connect() as conn:
         revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
 
-    assert revision == "0002_audit_system_logs"
+    script = ScriptDirectory.from_config(cfg)
+    assert revision == script.get_current_head()

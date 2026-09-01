@@ -154,12 +154,39 @@ BEGIN
         name nvarchar(255) NOT NULL CONSTRAINT DF_translation_document_templates_name DEFAULT (N''),
         display_name nvarchar(255) NULL,
         owner_work_id nvarchar(100) NULL,
-        source_job_id char(32) NULL,
+        source_job_id varchar(32) NULL,
         status varchar(20) NOT NULL CONSTRAINT DF_translation_document_templates_status DEFAULT ('saved'),
         payload_json nvarchar(max) NULL,
         created_at datetime2(6) NOT NULL CONSTRAINT DF_translation_document_templates_created_at DEFAULT (SYSUTCDATETIME()),
         updated_at datetime2(6) NOT NULL CONSTRAINT DF_translation_document_templates_updated_at DEFAULT (SYSUTCDATETIME()),
         CONSTRAINT PK_translation_document_templates PRIMARY KEY CLUSTERED (template_id)
+    );
+END;
+GO
+
+IF OBJECT_ID(N'translation.translation_memory_entries', N'U') IS NULL
+BEGIN
+    CREATE TABLE translation.translation_memory_entries (
+        id int IDENTITY(1,1) NOT NULL,
+        source_text nvarchar(max) NOT NULL,
+        source_normalized nvarchar(max) NOT NULL,
+        source_hash varchar(64) NOT NULL,
+        target_text nvarchar(max) NOT NULL,
+        source_lang varchar(20) NOT NULL,
+        target_lang varchar(20) NOT NULL,
+        document_mode varchar(20) NOT NULL,
+        status varchar(20) NOT NULL,
+        source nvarchar(100) NULL,
+        source_job_id varchar(32) NULL,
+        source_metadata_json nvarchar(max) NULL,
+        notes nvarchar(max) NULL,
+        exact_reuse_count int NOT NULL,
+        reference_count int NOT NULL,
+        created_at datetime2(6) NOT NULL,
+        updated_at datetime2(6) NOT NULL,
+        last_used_at datetime2(6) NULL,
+        last_referenced_at datetime2(6) NULL,
+        CONSTRAINT PK_translation_memory_entries PRIMARY KEY CLUSTERED (id)
     );
 END;
 GO
@@ -226,4 +253,36 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_document_templates_updated_at' AND object_id = OBJECT_ID(N'translation.document_templates'))
     CREATE INDEX IX_translation_document_templates_updated_at ON translation.document_templates (updated_at DESC);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_memory_entries_source_hash' AND object_id = OBJECT_ID(N'translation.translation_memory_entries'))
+    CREATE INDEX IX_translation_memory_entries_source_hash ON translation.translation_memory_entries (source_hash);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_memory_entries_source_lang' AND object_id = OBJECT_ID(N'translation.translation_memory_entries'))
+    CREATE INDEX IX_translation_memory_entries_source_lang ON translation.translation_memory_entries (source_lang);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_memory_entries_target_lang' AND object_id = OBJECT_ID(N'translation.translation_memory_entries'))
+    CREATE INDEX IX_translation_memory_entries_target_lang ON translation.translation_memory_entries (target_lang);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_memory_entries_document_mode' AND object_id = OBJECT_ID(N'translation.translation_memory_entries'))
+    CREATE INDEX IX_translation_memory_entries_document_mode ON translation.translation_memory_entries (document_mode);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_memory_entries_status' AND object_id = OBJECT_ID(N'translation.translation_memory_entries'))
+    CREATE INDEX IX_translation_memory_entries_status ON translation.translation_memory_entries (status);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_memory_entries_source_job_id' AND object_id = OBJECT_ID(N'translation.translation_memory_entries'))
+    CREATE INDEX IX_translation_memory_entries_source_job_id ON translation.translation_memory_entries (source_job_id);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_memory_lookup' AND object_id = OBJECT_ID(N'translation.translation_memory_entries'))
+    CREATE INDEX IX_translation_memory_lookup ON translation.translation_memory_entries (status, source_lang, target_lang, document_mode, source_hash);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_memory_language_status' AND object_id = OBJECT_ID(N'translation.translation_memory_entries'))
+    CREATE INDEX IX_translation_memory_language_status ON translation.translation_memory_entries (status, source_lang, target_lang);
 GO

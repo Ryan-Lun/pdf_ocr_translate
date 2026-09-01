@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, func, inspect, select, text
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, create_engine, func, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from . import state
@@ -171,6 +171,46 @@ class DocumentTemplateRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class TranslationMemoryEntryRecord(Base):
+    __tablename__ = "translation_memory_entries"
+    __table_args__ = (
+        Index(
+            "IX_translation_memory_lookup",
+            "status",
+            "source_lang",
+            "target_lang",
+            "document_mode",
+            "source_hash",
+        ),
+        Index(
+            "IX_translation_memory_language_status",
+            "status",
+            "source_lang",
+            "target_lang",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_normalized: Mapped[str] = mapped_column(Text, nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_lang: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    target_lang: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    document_mode: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="approved", index=True)
+    source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source_job_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    source_metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    exact_reuse_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reference_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_referenced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 _engine = None
 _session_factory: sessionmaker[Session] | None = None
 REQUIRED_TABLES = (
@@ -181,6 +221,7 @@ REQUIRED_TABLES = (
     "audit_logs",
     "system_error_logs",
     "document_templates",
+    "translation_memory_entries",
 )
 
 
@@ -248,6 +289,10 @@ def _ensure_compatible_columns() -> None:
             template_columns = {col["name"].lower() for col in inspector.get_columns("document_templates", schema=schema)}
             if "owner_work_id" not in template_columns:
                 conn.execute(text(f"ALTER TABLE {qualified_table_name('document_templates', _engine)} ADD owner_work_id NVARCHAR(100) NULL;"))
+        if "translation_memory_entries" in table_names:
+            tm_columns = {col["name"].lower() for col in inspector.get_columns("translation_memory_entries", schema=schema)}
+            if "source_hash" not in tm_columns:
+                conn.execute(text(f"ALTER TABLE {qualified_table_name('translation_memory_entries', _engine)} ADD source_hash VARCHAR(64) NULL;"))
 
 
 def _assert_required_tables() -> None:
@@ -265,7 +310,8 @@ def _assert_required_tables() -> None:
             'editor_presence',
             'audit_logs',
             'system_error_logs',
-            'document_templates'
+            'document_templates',
+            'translation_memory_entries'
           );
         """
     )
