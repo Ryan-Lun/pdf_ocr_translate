@@ -57,25 +57,102 @@ async def _consume_translation(
         pass
 
 
-def test_word_translation_ignores_tm_and_uses_model(tmp_path, monkeypatch):
-    monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
-    now_ts = time.time()
-    memory = {
-        translation_memory.make_tm_key("表格內容", "en", "word"): {
-            "source_text": "表格內容",
-            "source_normalized": "表格內容",
-            "target_text": "table content",
-            "target_lang": "en",
-            "document_mode": "word",
-            "created_at": now_ts,
-            "last_used": now_ts,
-            "source": "word",
-            "count": 1,
-        }
-    }
-    state.TRANSLATION_MEMORY_PATH.write_text(
-        json.dumps(memory, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+def test_word_translation_uses_sql_tm_exact_match_without_model_call(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
+    entry_id = translation_memory.upsert_sql_entry(
+        source_text="表格內容",
+        target_text="approved table content",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="word",
+        status="approved",
+        source="test",
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _FailingClient(),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("表格內容")
+    source_doc.add_paragraph("表格內容")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+
+    asyncio.run(_consume_translation(translator, source_path, output_path, source_language="zh"))
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "approved table content",
+        "approved table content",
+    ]
+    entry = translation_memory.get_sql_entry(entry_id)
+    assert entry is not None
+    assert entry.exact_reuse_count == 1
+
+
+def test_word_translation_sql_tm_exact_preserves_decimal_prefix(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
+    translation_memory.upsert_sql_entry(
+        source_text="雷射雕刻內容",
+        target_text="Laser Marking content",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="word",
+        status="approved",
+        source="test",
+    )
+    translation_memory.upsert_sql_entry(
+        source_text="外觀檢查",
+        target_text="Appearance inspection",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="word",
+        status="approved",
+        source="test",
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _FailingClient(),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("3.1雷射雕刻內容")
+    source_doc.add_paragraph("3.2外觀檢查")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+
+    asyncio.run(_consume_translation(translator, source_path, output_path, source_language="zh"))
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "3.1 Laser Marking content",
+        "3.2 Appearance inspection",
+    ]
+
+
+def test_word_translation_feature_flag_disabled_skips_sql_tm(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
+    translation_memory.upsert_sql_entry(
+        source_text="表格內容",
+        target_text="approved table content",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="word",
+        status="approved",
+        source="test",
     )
     requests: list[dict] = []
 
@@ -101,19 +178,95 @@ def test_word_translation_ignores_tm_and_uses_model(tmp_path, monkeypatch):
     output_path = tmp_path / "output.docx"
     source_doc = docx.Document()
     source_doc.add_paragraph("表格內容")
-    source_doc.add_paragraph("表格內容")
     source_doc.save(source_path)
 
     translator = EnhancedWordTranslator()
 
-    asyncio.run(_consume_translation(translator, source_path, output_path))
+    asyncio.run(_consume_translation(translator, source_path, output_path, source_language="zh"))
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == ["model table content"]
+    assert len(requests) == 1
+
+
+def test_word_translation_injects_fuzzy_tm_reference_without_direct_reuse(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_FUZZY_THRESHOLD", 0.5)
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
+    translation_memory.upsert_sql_entry(
+        source_text="確認首件半成品尺寸是否符合製程規範。",
+        target_text="Confirm whether the first semi-finished product dimensions comply with the Process Specification.",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="word",
+        status="approved",
+        source="test",
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    requests: list[dict] = []
+
+    class _ModelCompletions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            payload = kwargs["messages"][-1]["content"]
+            raw_items = payload.split("<SOURCE_ITEMS_JSON>\n", 1)[1].split(
+                "\n</SOURCE_ITEMS_JSON>",
+                1,
+            )[0]
+            items = json.loads(raw_items)
+            message = type(
+                "Message",
+                (),
+                {
+                    "content": json.dumps(
+                        {
+                            items[0]["id"]: "Model translation for current finished product.",
+                            items[1]["id"]: "Another model translation.",
+                        },
+                        ensure_ascii=False,
+                    )
+                },
+            )()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _ModelChat:
+        completions = _ModelCompletions()
+
+    class _ModelClient:
+        chat = _ModelChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _ModelClient(),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("確認首件成品尺寸是否符合製程規範。")
+    source_doc.add_paragraph("另一段需要翻譯。")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    translator.batch_size = 20
+
+    asyncio.run(_consume_translation(translator, source_path, output_path, source_language="zh"))
+
+    payload = requests[0]["messages"][-1]["content"]
+    assert "Translation Memory references" in payload
+    assert "確認首件半成品尺寸是否符合製程規範。" in payload
+    assert "Confirm whether the first semi-finished product dimensions comply" in payload
 
     translated_doc = docx.Document(output_path)
     assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
-        "model table content",
-        "model table content",
+        "Model translation for current finished product.",
+        "Another model translation.",
     ]
-    assert len(requests) == 1
 
 
 def test_word_translation_does_not_write_tm_after_model_translation(tmp_path, monkeypatch):
