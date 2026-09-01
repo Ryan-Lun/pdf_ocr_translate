@@ -404,6 +404,7 @@ def upload_word_workspace() -> str:
     target_lang = request.form.get("target_lang", "en").strip() or "en"
     retain_terms = request.form.get("retain_terms", "")
     system_prompt = request.form.get("system_prompt", "").strip()
+    layout_mode = word_translate.normalize_word_layout_mode(request.form.get("layout_mode"))
     creator_name = _current_creator_name()
     owner_work_id = _current_owner_work_id()
     _enforce_submit_quota(creator_name)
@@ -426,6 +427,7 @@ def upload_word_workspace() -> str:
             owner_work_id=owner_work_id,
             retain_terms_raw=retain_terms,
             system_prompt=system_prompt,
+            layout_mode=layout_mode,
         )
         audit_service.record_audit(
             "job_upload",
@@ -435,6 +437,7 @@ def upload_word_workspace() -> str:
                 "filename": file.filename or "",
                 "source_lang": source_lang,
                 "target_lang": target_lang,
+                "layout_mode": layout_mode,
             },
             job_id=created_job_id,
         )

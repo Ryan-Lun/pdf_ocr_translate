@@ -239,7 +239,12 @@ def test_doc_and_word_handlers_wrap_existing_service_boundaries(app, tmp_path, m
                 target_lang="ko",
             ),
             job_dir=word_dir,
-            payload={"source_lang": "zh", "retain_terms": ["ABC"], "system_prompt": "word prompt"},
+            payload={
+                "source_lang": "zh",
+                "retain_terms": ["ABC"],
+                "system_prompt": "word prompt",
+                "layout_mode": "bilingual_below",
+            },
         )
     )
 
@@ -265,6 +270,41 @@ def test_doc_and_word_handlers_wrap_existing_service_boundaries(app, tmp_path, m
     assert word_kwargs["target_lang"] == "ko"
     assert word_kwargs["retain_terms"] == ["ABC"]
     assert word_kwargs["system_prompt"] == "word prompt"
+    assert word_kwargs["layout_mode"] == "bilingual_below"
+
+
+def test_word_handler_defaults_missing_layout_mode(app, tmp_path, monkeypatch):
+    from app.services import job_handlers
+
+    job_id = _job_id()
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    jobs.write_job_meta(job_dir, {"source_filename": "source.docx"})
+    captured: dict[str, object] = {}
+
+    def fake_run_word_translate_job(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(job_handlers.word_translate, "run_word_translate_job", fake_run_word_translate_job)
+
+    handler = job_handlers.WordTranslateJobHandler()
+    handler.handle(
+        job_handlers.JobContext(
+            job_id=job_id,
+            record=job_store.JobRecord(
+                job_id=job_id,
+                job_type="word_translate",
+                status="running",
+                stage="queued",
+                progress=0.0,
+                target_lang="en",
+            ),
+            job_dir=job_dir,
+            payload={"source_lang": "zh"},
+        )
+    )
+
+    assert captured["layout_mode"] == "replace_original"
 
 
 def test_worker_loop_records_orphan_recovery_exception_and_continues(app, monkeypatch):

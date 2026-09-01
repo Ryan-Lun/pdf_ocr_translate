@@ -13,7 +13,7 @@ from typing import Any
 
 from flask import url_for
 
-from . import job_store, state
+from . import job_store, state, word_layout
 
 DB_STATUS_BY_BATCH = {
     "running": "running",
@@ -187,6 +187,10 @@ def normalize_translate_mode(value: Any) -> str:
     if mode == "realtime":
         return "realtime"
     return "batch"
+
+
+def normalize_word_layout_mode(value: Any) -> str:
+    return word_layout.normalize(value)
 
 
 def build_download_base(job_id: str, job_name: str | None) -> str:
@@ -732,6 +736,7 @@ def _build_legacy_payload(job_dir_path: Path, job_type: str, meta: dict[str, Any
             "retain_terms": [str(item) for item in retain_terms if str(item).strip()],
             "creator_name": str(meta.get("creator_name") or "").strip(),
             "owner_work_id": str(meta.get("owner_work_id") or "").strip(),
+            "layout_mode": normalize_word_layout_mode(meta.get("layout_mode")),
         }
 
     return None

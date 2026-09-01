@@ -613,6 +613,62 @@ def test_enqueue_word_job_from_upload_stores_system_prompt(tmp_path, monkeypatch
     assert captured["payload"]["system_prompt"] == "Use concise legal wording."
 
 
+def test_enqueue_word_job_from_upload_stores_layout_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    captured: dict[str, object] = {}
+
+    def fake_create_job(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.create_job", fake_create_job)
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.register_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.word_translate.jobs.notify_jobs_update", lambda: None)
+
+    source_path = tmp_path / "source.docx"
+    source_path.write_bytes(b"docx")
+
+    job_id = enqueue_word_job_from_upload(
+        source_path,
+        "sample",
+        "auto",
+        "en",
+        layout_mode="bilingual_below",
+    )
+
+    meta = jobs.load_job_meta(state.JOB_ROOT / job_id)
+    assert meta is not None
+    assert meta["layout_mode"] == "bilingual_below"
+    assert captured["payload"]["layout_mode"] == "bilingual_below"
+
+
+def test_enqueue_word_job_from_upload_defaults_invalid_layout_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    captured: dict[str, object] = {}
+
+    def fake_create_job(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.create_job", fake_create_job)
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.register_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.word_translate.jobs.notify_jobs_update", lambda: None)
+
+    source_path = tmp_path / "source.docx"
+    source_path.write_bytes(b"docx")
+
+    job_id = enqueue_word_job_from_upload(
+        source_path,
+        "sample",
+        "auto",
+        "en",
+        layout_mode="unsupported",
+    )
+
+    meta = jobs.load_job_meta(state.JOB_ROOT / job_id)
+    assert meta is not None
+    assert meta["layout_mode"] == "replace_original"
+    assert captured["payload"]["layout_mode"] == "replace_original"
+
+
 def test_run_word_translate_job_does_not_write_avg_quality_metadata(app, tmp_path, monkeypatch):
     job_id = uuid.uuid4().hex
     job_dir = tmp_path / job_id
@@ -764,6 +820,9 @@ def test_word_workspace_page_does_not_render_quality_score(client):
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
     assert "品質:" not in html
+    assert 'name="layout_mode"' in html
+    assert 'value="replace_original"' in html
+    assert 'value="bilingual_below"' in html
 
 
 def test_word_translation_with_system_prompt_includes_prompt(tmp_path, monkeypatch):

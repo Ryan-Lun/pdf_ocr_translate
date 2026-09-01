@@ -22,16 +22,22 @@ from docx.text.paragraph import Paragraph
 from lang_utils import describe_target_language, traditional_chinese_instruction
 from werkzeug.utils import secure_filename
 
-from . import audit_service, glossary, jobs, openai_config, state, translation_debug, translation_memory
+from . import audit_service, glossary, jobs, openai_config, state, translation_debug, translation_memory, word_layout
 
 logger = logging.getLogger(__name__)
 WORD_JOB_EVENTS: dict[str, threading.Event] = {}
 WORD_JOB_EVENTS_LOCK = threading.Lock()
 WORD_ALLOWED_EXTENSIONS = {".doc", ".docx"}
+WORD_LAYOUT_REPLACE_ORIGINAL = word_layout.REPLACE_ORIGINAL
+WORD_LAYOUT_BILINGUAL_BELOW = word_layout.BILINGUAL_BELOW
 
 
 class WordTranslationCancelled(Exception):
     pass
+
+
+def normalize_word_layout_mode(value: object) -> str:
+    return word_layout.normalize(value)
 
 
 def _word_translation_memory_enabled() -> bool:
@@ -1514,7 +1520,9 @@ class EnhancedWordTranslator:
         cancel_event: threading.Event | None = None,
         warning_callback: Callable[[str], None] | None = None,
         record_tm_usage_on_save: bool = True,
+        layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
     ):
+        layout_mode = normalize_word_layout_mode(layout_mode)
         doc = docx.Document(source_path)
         self.mark_update_fields_on_open(doc)
         all_paragraphs = self.get_all_paragraphs(doc)
@@ -1698,6 +1706,7 @@ def run_word_translate_job(
     target_lang: str,
     retain_terms: list[str],
     system_prompt: str = "",
+    layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
 ) -> None:
     _run_word_job(
         job_id=job_id,
@@ -1709,6 +1718,7 @@ def run_word_translate_job(
         target_lang=target_lang,
         retain_terms=retain_terms,
         system_prompt=system_prompt,
+        layout_mode=layout_mode,
     )
 
 
@@ -1722,7 +1732,9 @@ def _run_word_job(
     target_lang: str,
     retain_terms: list[str],
     system_prompt: str = "",
+    layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
 ) -> None:
+    layout_mode = normalize_word_layout_mode(layout_mode)
     now_ts = time.time()
     jobs.set_job_state(
         job_dir,
@@ -1765,6 +1777,7 @@ def _run_word_job(
                 cancel_event=cancel_event,
                 warning_callback=record_warning,
                 record_tm_usage_on_save=False,
+                layout_mode=layout_mode,
             ):
                 last_progress = float(progress)
                 jobs.set_job_state(
@@ -1853,6 +1866,7 @@ def enqueue_word_job_from_upload(
     owner_work_id: str = "",
     retain_terms_raw: str | None = None,
     system_prompt: str | None = None,
+    layout_mode: str | None = None,
 ) -> str:
     job_id = uuid.uuid4().hex
     job_dir = jobs.job_dir(job_id, job_root=jobs.job_root_for_type("word_translate"))
@@ -1871,6 +1885,7 @@ def enqueue_word_job_from_upload(
     shutil.copy2(source_docx, source_path)
     retain_terms = _parse_retain_terms(retain_terms_raw)
     custom_system_prompt = str(system_prompt or "").strip()
+    normalized_layout_mode = normalize_word_layout_mode(layout_mode)
     owner = str(owner_work_id or "").strip()
     meta = {
         "job_name": display_name,
@@ -1883,6 +1898,7 @@ def enqueue_word_job_from_upload(
         "owner_work_id": owner,
         "retain_terms": retain_terms,
         "system_prompt": custom_system_prompt,
+        "layout_mode": normalized_layout_mode,
         "source_filename": safe_name,
         "progress": 0.0,
     }
@@ -1893,6 +1909,7 @@ def enqueue_word_job_from_upload(
         "owner_work_id": owner,
         "retain_terms": retain_terms,
         "system_prompt": custom_system_prompt,
+        "layout_mode": normalized_layout_mode,
         "source_filename": safe_name,
         "processing_started_at": now_ts,
     }

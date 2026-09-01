@@ -2055,6 +2055,7 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
                 "target_lang": target_lang,
                 "creator_name": creator_name,
                 "system_prompt": kwargs.get("system_prompt", ""),
+                "layout_mode": kwargs.get("layout_mode", ""),
             }
         )
         return "b" * 32
@@ -2070,6 +2071,7 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
             "source_lang": "auto",
             "target_lang": "en",
             "system_prompt": "Use concise legal wording.",
+            "layout_mode": "bilingual_below",
             "docx": (io.BytesIO(b"legacy doc"), "legacy.doc"),
         },
         content_type="multipart/form-data",
@@ -2083,6 +2085,45 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
     assert captured[0]["target_lang"] == "en"
     assert captured[0]["creator_name"] == ""
     assert captured[0]["system_prompt"] == "Use concise legal wording."
+    assert captured[0]["layout_mode"] == "bilingual_below"
+
+
+def test_upload_word_workspace_defaults_invalid_layout_mode(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._enforce_submit_quota", lambda creator_name: None)
+    captured: list[dict[str, str]] = []
+
+    def fake_enqueue(
+        source_path,
+        display_name,
+        source_lang,
+        target_lang,
+        creator_name="",
+        retain_terms_raw=None,
+        **kwargs,
+    ):
+        captured.append({"layout_mode": kwargs.get("layout_mode", "")})
+        return "b" * 32
+
+    monkeypatch.setattr(
+        "app.blueprints.main.routes.word_translate.enqueue_word_job_from_upload",
+        fake_enqueue,
+    )
+
+    resp = client.post(
+        "/upload-word-workspace",
+        data={
+            "source_lang": "auto",
+            "target_lang": "en",
+            "layout_mode": "side_by_side",
+            "docx": (io.BytesIO(b"docx"), "sample.docx"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 302
+    assert captured == [{"layout_mode": "replace_original"}]
 
 
 def test_upload_word_workspace_preserves_chinese_display_name(client, tmp_path, monkeypatch):
