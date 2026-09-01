@@ -1041,7 +1041,13 @@ body.has-global-nav:not(.home-hub) .shell {
 }
 
 .file-input input {
+  min-width: 0;
   margin-left: auto;
+}
+
+.file-input span {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .form-grid {
