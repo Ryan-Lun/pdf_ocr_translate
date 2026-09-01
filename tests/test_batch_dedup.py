@@ -11,7 +11,7 @@ from app.services.batch import (
     resolve_batch_prompt,
     translate_texts_for_region,
 )
-from app.services import state, translation_memory
+from app.services import batch, state, translation_memory
 
 
 def test_table_paragraph_blocks_are_skipped_when_merged_cells_exist():
@@ -1916,3 +1916,362 @@ def test_translate_texts_for_region_auto_source_uses_english_for_simplified_chin
 
     assert outputs == ["检查项目"]
     assert captured["input"] == "Inspection item"
+
+
+def _tm_result(
+    source_text: str,
+    *,
+    exact_match: translation_memory.TranslationMemoryMatch | None = None,
+    fuzzy_references: list[translation_memory.TranslationMemoryMatch] | None = None,
+) -> translation_memory.TranslationMemoryRetrievalResult:
+    return translation_memory.TranslationMemoryRetrievalResult(
+        source_text=source_text,
+        source_normalized=translation_memory.normalize_source_text(source_text),
+        source_lang="zh-tw",
+        target_lang="en",
+        document_mode="form",
+        exact_match=exact_match,
+        fuzzy_references=fuzzy_references or [],
+        semantic_references=[],
+    )
+
+
+def _tm_match(
+    *,
+    entry_id: int,
+    match_type: str,
+    source_text: str,
+    target_text: str,
+    score: float,
+) -> translation_memory.TranslationMemoryMatch:
+    return translation_memory.TranslationMemoryMatch(
+        entry_id=entry_id,
+        match_type=match_type,
+        source_text=source_text,
+        source_normalized=translation_memory.normalize_source_text(source_text),
+        target_text=target_text,
+        source_lang="zh-tw",
+        target_lang="en",
+        document_mode="form",
+        score=score,
+    )
+
+
+def test_pdf_batch_uses_sql_tm_exact_match_as_prefill(monkeypatch):
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    exact = _tm_match(
+        entry_id=101,
+        match_type="byte_exact",
+        source_text="確認設備是否正常。",
+        target_text="Confirm whether the equipment is operating normally.",
+        score=1.0,
+    )
+    calls: list[str] = []
+
+    def fake_retrieve_sql(source_text, **kwargs):
+        calls.append(str(source_text))
+        return _tm_result(str(source_text), exact_match=exact)
+
+    monkeypatch.setattr(translation_memory, "retrieve_sql", fake_retrieve_sql)
+    exact_reuse_ids: list[list[int]] = []
+    monkeypatch.setattr(
+        translation_memory,
+        "record_exact_reuse",
+        lambda entry_ids: exact_reuse_ids.append(list(entry_ids)),
+    )
+
+    items, alias_map, key_map, prefilled = build_batch_items(
+        [
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["確認設備是否正常。"],
+                "rec_polys": [],
+            }
+        ],
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        target_lang="en",
+        source_lang="zh-tw",
+        document_mode="form",
+    )
+
+    assert calls == ["確認設備是否正常。"]
+    assert items == []
+    assert alias_map == {}
+    assert key_map == {}
+    assert prefilled == {
+        "p0000-l0000": "Confirm whether the equipment is operating normally."
+    }
+    assert exact_reuse_ids == [[101]]
+
+
+def test_pdf_batch_auto_source_lang_can_match_imported_zh_tw_sql_tm(monkeypatch):
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    exact = _tm_match(
+        entry_id=102,
+        match_type="byte_exact",
+        source_text="確認設備是否正常。",
+        target_text="Confirm whether the equipment is operating normally.",
+        score=1.0,
+    )
+    source_lang_calls: list[str] = []
+
+    def fake_retrieve_sql(source_text, **kwargs):
+        source_lang_calls.append(str(kwargs.get("source_lang") or ""))
+        if kwargs.get("source_lang") == "zh-tw":
+            return _tm_result(str(source_text), exact_match=exact)
+        return _tm_result(str(source_text))
+
+    monkeypatch.setattr(translation_memory, "retrieve_sql", fake_retrieve_sql)
+    monkeypatch.setattr(
+        translation_memory,
+        "record_exact_reuse",
+        lambda entry_ids: None,
+    )
+
+    items, _, _, prefilled = build_batch_items(
+        [
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["確認設備是否正常。"],
+                "rec_polys": [],
+            }
+        ],
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        target_lang="en",
+        source_lang="auto",
+        document_mode="form",
+    )
+
+    assert source_lang_calls == ["auto", "zh-tw"]
+    assert items == []
+    assert prefilled == {
+        "p0000-l0000": "Confirm whether the equipment is operating normally."
+    }
+
+
+def test_pdf_batch_injects_sql_tm_fuzzy_reference_into_segment_payload(monkeypatch):
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    fuzzy = _tm_match(
+        entry_id=202,
+        match_type="fuzzy",
+        source_text="確認首件半成品尺寸是否符合製程規範。",
+        target_text=(
+            "Confirm whether the first semi-finished product dimensions comply "
+            "with the process specification."
+        ),
+        score=0.91,
+    )
+    monkeypatch.setattr(
+        translation_memory,
+        "retrieve_sql",
+        lambda source_text, **kwargs: _tm_result(
+            str(source_text),
+            fuzzy_references=[fuzzy],
+        ),
+    )
+    reference_use_ids: list[list[int]] = []
+    monkeypatch.setattr(
+        translation_memory,
+        "record_reference_use",
+        lambda entry_ids: reference_use_ids.append(list(entry_ids)),
+    )
+
+    items, alias_map, key_map, prefilled = build_batch_items(
+        [
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["確認首件成品尺寸是否符合製程規範。"],
+                "rec_polys": [],
+            }
+        ],
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        target_lang="en",
+        source_lang="zh-tw",
+        document_mode="form",
+    )
+
+    assert [item["custom_id"] for item in items] == ["p0000-l0000"]
+    assert alias_map == {}
+    assert prefilled == {}
+    user_content = items[0]["body"]["messages"][1]["content"]
+    system_content = items[0]["body"]["messages"][0]["content"]
+    assert "Current source text" in user_content
+    assert "確認首件成品尺寸是否符合製程規範。" in user_content
+    assert "Translation Memory references" in user_content
+    assert fuzzy.source_text in user_content
+    assert fuzzy.target_text in user_content
+    assert "cannot override the current source text" in system_content
+    assert "Required Glossary Term" in system_content
+    tm_references = key_map["p0000-l0000"]["translation_memory_references"]
+    assert tm_references[0]["entry_id"] == 202
+    assert reference_use_ids == [[202]]
+
+
+def test_pdf_batch_keeps_glossary_priority_when_tm_reference_is_present(monkeypatch):
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    fuzzy = _tm_match(
+        entry_id=303,
+        match_type="fuzzy",
+        source_text="作業前確認外觀是否正常。",
+        target_text="Before operation, confirm whether the look is normal.",
+        score=0.9,
+    )
+    monkeypatch.setattr(
+        translation_memory,
+        "retrieve_sql",
+        lambda source_text, **kwargs: _tm_result(
+            str(source_text),
+            fuzzy_references=[fuzzy],
+        ),
+    )
+    monkeypatch.setattr(
+        translation_memory,
+        "record_reference_use",
+        lambda entry_ids: None,
+    )
+
+    items, _, key_map, prefilled = build_batch_items(
+        [
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["作業前確認外觀。"],
+                "rec_polys": [],
+            }
+        ],
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[("外觀", "Appearance")],
+        target_lang="en",
+        source_lang="zh-tw",
+        document_mode="form",
+    )
+
+    assert prefilled == {}
+    user_content = items[0]["body"]["messages"][1]["content"]
+    assert '<term id="0001">Appearance</term>' in user_content
+    assert "Required Glossary Term" in items[0]["body"]["messages"][0]["content"]
+    required_terms = key_map["p0000-l0000"]["required_glossary_terms"]
+    assert required_terms[0]["target"] == "Appearance"
+
+
+def test_pdf_batch_does_not_retrieve_sql_tm_when_feature_flag_disabled(monkeypatch):
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+
+    def fail_retrieve_sql(*args, **kwargs):
+        raise AssertionError(
+            "SQL TM retrieval must not run when TRANSLATION_MEMORY_ENABLED is false"
+        )
+
+    monkeypatch.setattr(translation_memory, "retrieve_sql", fail_retrieve_sql)
+
+    items, alias_map, key_map, prefilled = build_batch_items(
+        [
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["確認設備是否正常。"],
+                "rec_polys": [],
+            }
+        ],
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        target_lang="en",
+        source_lang="zh-tw",
+        document_mode="form",
+    )
+
+    assert [item["custom_id"] for item in items] == ["p0000-l0000"]
+    assert alias_map == {}
+    assert key_map["p0000-l0000"]["source_text"] == "確認設備是否正常。"
+    assert prefilled == {}
+
+
+def test_batch_translate_job_completes_when_all_segments_are_sql_tm_exact(monkeypatch, tmp_path):
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    monkeypatch.setattr(
+        batch.ocr,
+        "load_ocr_pages",
+        lambda current_job_dir: [
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["確認設備是否正常。"],
+                "rec_polys": [],
+            }
+        ],
+    )
+    monkeypatch.setattr(batch.ocr, "load_pp_pages", lambda current_job_dir: {})
+    monkeypatch.setattr(batch.glossary, "load_combined_glossary", lambda: [])
+    monkeypatch.setattr(
+        translation_memory,
+        "retrieve_sql",
+        lambda source_text, **kwargs: _tm_result(
+            str(source_text),
+            exact_match=_tm_match(
+                entry_id=404,
+                match_type="byte_exact",
+                source_text=str(source_text),
+                target_text="Confirm whether the equipment is operating normally.",
+                score=1.0,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        translation_memory,
+        "record_exact_reuse",
+        lambda entry_ids: None,
+    )
+    monkeypatch.setattr(batch.jobs, "set_job_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(batch.jobs, "write_batch_status", lambda *args, **kwargs: None)
+    monkeypatch.setattr(batch.jobs, "write_batch_alias_map", lambda *args, **kwargs: None)
+    monkeypatch.setattr(batch.jobs, "write_batch_prefill_map", lambda *args, **kwargs: None)
+    monkeypatch.setattr(batch, "_write_batch_key_map", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        batch,
+        "_write_required_glossary_hits_from_key_map",
+        lambda *args, **kwargs: None,
+    )
+    finalized: dict[str, object] = {}
+    monkeypatch.setattr(
+        batch,
+        "_finalize_batch_translate_job",
+        lambda **kwargs: finalized.update(kwargs),
+    )
+
+    def fail_get_azure_client():
+        raise AssertionError(
+            "external batch request must not be created for all-exact TM jobs"
+        )
+
+    monkeypatch.setattr(batch, "get_azure_client", fail_get_azure_client)
+
+    result = batch.run_batch_translate_job(
+        "a" * 32,
+        job_dir,
+        config={
+            "target_lang": "en",
+            "source_lang": "zh-tw",
+            "model": "dummy-model",
+            "document_mode": "form",
+            "translate_mode": "batch",
+        },
+    )
+
+    assert result is True
+    assert finalized["batch_id"] == "prefill_only"
+    assert finalized["prefilled"] == {
+        "p0000-l0000": "Confirm whether the equipment is operating normally."
+    }

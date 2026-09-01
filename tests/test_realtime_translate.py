@@ -533,3 +533,236 @@ def test_finalize_translation_job_skips_tm_write_when_overlay_tm_disabled(tmp_pa
     )
 
     assert called == {"load": 0, "write": 0}
+
+
+def test_realtime_chunk_prompt_includes_tm_rules_when_later_item_has_reference(
+    monkeypatch,
+    tmp_path,
+):
+    captured: dict[str, str] = {}
+
+    class _FakeParsed:
+        choices = [
+            type(
+                "Choice",
+                (),
+                {
+                    "message": type(
+                        "Message",
+                        (),
+                        {"content": "<<<p0000-l0001>>>\nFirst\n\n<<<p0000-l0002>>>\nSecond"},
+                    )()
+                },
+            )()
+        ]
+
+    class _FakeRawResponse:
+        headers = {}
+
+        def parse(self):
+            return _FakeParsed()
+
+    class _FakeWithRawResponse:
+        async def create(self, **kwargs):
+            captured["system_prompt"] = kwargs["messages"][0]["content"]
+            return _FakeRawResponse()
+
+    class _FakeCompletions:
+        with_raw_response = _FakeWithRawResponse()
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    async def fake_acquire_async(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        realtime_translate.rate_limiter.REALTIME_RATE_LIMITER,
+        "acquire_async",
+        fake_acquire_async,
+    )
+    monkeypatch.setattr(
+        realtime_translate.rate_limiter.REALTIME_RATE_LIMITER,
+        "update_from_headers",
+        lambda *args, **kwargs: None,
+    )
+
+    items = [
+        {
+            "custom_id": "p0000-l0001",
+            "body": {
+                "messages": [
+                    {"role": "system", "content": "base prompt"},
+                    {"role": "user", "content": "第一段"},
+                ]
+            },
+        },
+        {
+            "custom_id": "p0000-l0002",
+            "body": {
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": realtime_translate.batch._append_translation_memory_instruction(
+                            "base prompt"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": "Current source text:\n<source>第二段</source>",
+                    },
+                ]
+            },
+        },
+    ]
+
+    translations = __import__("asyncio").run(
+        realtime_translate._translate_chunk(
+            _FakeClient(),
+            job_dir=tmp_path,
+            chunk_label="chunk_0001",
+            items=items,
+            model_name="fake-model",
+            request_delay=0,
+            max_retries=1,
+        )
+    )
+
+    assert translations == {"p0000-l0001": "First", "p0000-l0002": "Second"}
+    assert "cannot override the current source text" in captured["system_prompt"]
+    assert "Required Glossary Term" in captured["system_prompt"]
+
+
+def test_realtime_translate_job_completes_when_all_segments_are_sql_tm_exact(
+    monkeypatch,
+    tmp_path,
+):
+    tm = realtime_translate.batch.translation_memory
+    monkeypatch.setattr(
+        realtime_translate.state,
+        "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY",
+        True,
+    )
+    monkeypatch.setattr(realtime_translate.state, "TRANSLATION_MEMORY_ENABLED", True)
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    monkeypatch.setattr(
+        realtime_translate.batch.ocr,
+        "load_ocr_pages",
+        lambda current_job_dir: [
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["確認設備是否正常。"],
+                "rec_polys": [],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        realtime_translate.batch.ocr,
+        "load_pp_pages",
+        lambda current_job_dir: {},
+    )
+    monkeypatch.setattr(
+        realtime_translate.batch.glossary,
+        "load_combined_glossary",
+        lambda: [],
+    )
+
+    def fake_retrieve_sql(source_text, **kwargs):
+        exact = tm.TranslationMemoryMatch(
+            entry_id=505,
+            match_type="byte_exact",
+            source_text=str(source_text),
+            source_normalized=tm.normalize_source_text(str(source_text)),
+            target_text="Confirm whether the equipment is operating normally.",
+            source_lang="zh-tw",
+            target_lang="en",
+            document_mode="form",
+            score=1.0,
+        )
+        return tm.TranslationMemoryRetrievalResult(
+            source_text=str(source_text),
+            source_normalized=tm.normalize_source_text(str(source_text)),
+            source_lang="zh-tw",
+            target_lang="en",
+            document_mode="form",
+            exact_match=exact,
+            fuzzy_references=[],
+            semantic_references=[],
+        )
+
+    monkeypatch.setattr(tm, "retrieve_sql", fake_retrieve_sql)
+    monkeypatch.setattr(tm, "record_exact_reuse", lambda entry_ids: None)
+    monkeypatch.setattr(
+        realtime_translate.jobs,
+        "set_job_state",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        realtime_translate.jobs,
+        "write_batch_status",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        realtime_translate.jobs,
+        "write_merge_notices",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        realtime_translate.jobs,
+        "write_batch_alias_map",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        realtime_translate.jobs,
+        "write_batch_prefill_map",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        realtime_translate.batch,
+        "_write_batch_key_map",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        realtime_translate.batch,
+        "_write_required_glossary_hits_from_key_map",
+        lambda *args, **kwargs: None,
+    )
+    finalized: dict[str, object] = {}
+    monkeypatch.setattr(
+        realtime_translate.batch,
+        "finalize_translation_job",
+        lambda **kwargs: finalized.update(kwargs),
+    )
+
+    def fail_create_async_client():
+        raise AssertionError(
+            "realtime OpenAI request must not start for all-exact TM jobs"
+        )
+
+    monkeypatch.setattr(
+        realtime_translate.openai_config,
+        "create_async_client",
+        fail_create_async_client,
+    )
+
+    result = realtime_translate.run_realtime_translate_job(
+        "b" * 32,
+        job_dir,
+        config={
+            "target_lang": "en",
+            "source_lang": "zh-tw",
+            "model": "dummy-model",
+            "document_mode": "form",
+            "translate_mode": "realtime",
+        },
+    )
+
+    assert result is True
+    assert finalized["backend_id"] == "realtime_prefill_only"
+    assert finalized["translations"] == {
+        "p0000-l0000": "Confirm whether the equipment is operating normally."
+    }

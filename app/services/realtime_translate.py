@@ -352,6 +352,17 @@ def _build_chunk_prompt(*, system_prompt: str) -> str:
     ).strip()
 
 
+def _merge_chunk_system_prompt(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return ""
+    _, base_prompt, _ = _extract_batch_item_payload(items[0])
+    for item in items:
+        _, item_prompt, _ = _extract_batch_item_payload(item)
+        if batch.TRANSLATION_MEMORY_REFERENCE_INSTRUCTION in item_prompt:
+            return batch._append_translation_memory_instruction(base_prompt)
+    return base_prompt
+
+
 def _chunk_batch_items(
     items: list[dict[str, Any]],
     *,
@@ -556,8 +567,8 @@ async def _translate_chunk(
     retry_count = max(1, int(max_retries))
     if not items:
         return {}
-    first_id, system_prompt, _ = _extract_batch_item_payload(items[0])
     expected_ids = [_extract_batch_item_payload(item)[0] for item in items]
+    system_prompt = _merge_chunk_system_prompt(items)
     prompt = _build_chunk_prompt(system_prompt=system_prompt)
     payload = _serialize_translation_chunk(items)
     required_terms_by_id = {

@@ -54,6 +54,14 @@ The previous translation omitted these approved glossary terms:
 
 Use each listed approved glossary term exactly as written in the revised translation.
 """.strip()
+TRANSLATION_MEMORY_REFERENCE_INSTRUCTION = """
+Translation Memory references are historical approved translations for similar source text.
+Use them only as reference for terminology, phrasing, and style.
+They cannot override the current source text.
+They cannot override any Required Glossary Term.
+Do not copy a Translation Memory reference mechanically when the current source differs.
+Translate only the current source text.
+""".strip()
 TERMINAL_BATCH_STATUSES = {"completed", "failed", "canceled", "cancelled"}
 
 
@@ -139,6 +147,129 @@ def _build_missing_required_terms_prompt(missing_terms: list[str]) -> str:
         return ""
     lines = "\n".join(f"* {term}" for term in missing_terms)
     return MISSING_REQUIRED_GLOSSARY_TERMS_INSTRUCTION.format(missing_terms=lines)
+
+
+def _serialize_translation_memory_references(
+    references: list[translation_memory.TranslationMemoryMatch],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "entry_id": reference.entry_id,
+            "match_type": reference.match_type,
+            "score": reference.score,
+            "source_text": reference.source_text,
+            "target_text": reference.target_text,
+            "document_mode": reference.document_mode,
+        }
+        for reference in references
+    ]
+
+
+def _append_translation_memory_instruction(system_prompt: str) -> str:
+    cleaned = str(system_prompt or "").strip()
+    if TRANSLATION_MEMORY_REFERENCE_INSTRUCTION in cleaned:
+        return cleaned
+    return "\n\n".join(
+        part for part in (cleaned, TRANSLATION_MEMORY_REFERENCE_INSTRUCTION) if part
+    ).strip()
+
+
+def _build_translation_memory_reference_payload(
+    current_source: str,
+    references: list[translation_memory.TranslationMemoryMatch],
+) -> str:
+    if not references:
+        return current_source
+    lines = [
+        "Current source text:",
+        "<source>",
+        current_source,
+        "</source>",
+        "",
+        "Translation Memory references:",
+    ]
+    for index, reference in enumerate(references, start=1):
+        lines.extend(
+            [
+                f"Reference {index} (score={reference.score:.2f}, match={reference.match_type}):",
+                f"Source: {reference.source_text}",
+                f"Translation: {reference.target_text}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Translate only the current source text. Use Translation Memory references "
+            "only when they fit the current source.",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def _sql_translation_memory_enabled() -> bool:
+    return bool(state.PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY) and bool(
+        state.TRANSLATION_MEMORY_ENABLED
+    )
+
+
+def _translation_memory_source_lang_candidates(
+    source_lang: str,
+    target_lang: str,
+) -> list[str]:
+    normalized = translation_memory.normalize_source_lang(source_lang)
+    candidates = [normalized]
+    if normalized == "auto":
+        inferred = translation_memory.normalize_source_lang(
+            _infer_source_lang_for_target(target_lang)
+        )
+        if inferred == "zh":
+            candidates.extend(["zh-tw", "zh", "zh-cn"])
+        elif inferred and inferred != "auto":
+            candidates.append(inferred)
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
+def _retrieve_sql_translation_memory(
+    *,
+    source_text: str,
+    source_lang: str,
+    target_lang: str,
+    document_mode: str,
+    canonical_source_text: str | None = None,
+    normalized_source: str | None = None,
+    canonical_source_normalized: str | None = None,
+) -> translation_memory.TranslationMemoryRetrievalResult | None:
+    if not _sql_translation_memory_enabled():
+        return None
+    empty_result: translation_memory.TranslationMemoryRetrievalResult | None = None
+    source_texts = [(source_text, normalized_source)]
+    if (
+        canonical_source_normalized
+        and normalized_source
+        and canonical_source_normalized != normalized_source
+    ):
+        source_texts.append((canonical_source_text or source_text, canonical_source_normalized))
+
+    for candidate_text, _ in source_texts:
+        for candidate_lang in _translation_memory_source_lang_candidates(
+            source_lang,
+            target_lang,
+        ):
+            result = translation_memory.retrieve_sql(
+                candidate_text,
+                source_lang=candidate_lang,
+                target_lang=target_lang,
+                document_mode=document_mode,
+            )
+            if empty_result is None:
+                empty_result = result
+            if result.exact_match or result.fuzzy_references or result.semantic_references:
+                return result
+    return empty_result
 
 
 def _restore_and_validate_required_glossary_terms(
@@ -727,7 +858,7 @@ def build_batch_items(
             return
         should_translate = should_translate_text(
             normalized_source,
-            source_lang=source_lang if use_explicit_source_lang else "auto",
+            source_lang=source_lang,
             target_lang=target_lang,
         )
         if not should_translate:
@@ -735,6 +866,33 @@ def build_batch_items(
         matched_term = document_terms.lookup_document_term(source_text, document_term_map)
         canonical_source_text = str((matched_term or {}).get("best_source_text") or source_text)
         canonical_source_normalized = str((matched_term or {}).get("canonical_key") or normalized_source)
+        tm_references: list[translation_memory.TranslationMemoryMatch] = []
+        sql_tm_result = _retrieve_sql_translation_memory(
+            source_text=source_text,
+            source_lang=source_lang if use_explicit_source_lang else "auto",
+            target_lang=target_lang,
+            document_mode=document_mode,
+            canonical_source_text=canonical_source_text,
+            normalized_source=normalized_source,
+            canonical_source_normalized=canonical_source_normalized,
+        )
+        if sql_tm_result and sql_tm_result.exact_match:
+            exact_match = sql_tm_result.exact_match
+            translated_text = str(exact_match.target_text or "").strip()
+            if translated_text:
+                prefilled[custom_id] = translated_text
+                translation_memory.record_exact_reuse([exact_match.entry_id])
+                return
+        if sql_tm_result:
+            tm_references = [
+                *sql_tm_result.fuzzy_references,
+                *sql_tm_result.semantic_references,
+            ]
+            if tm_references:
+                translation_memory.record_reference_use(
+                    [reference.entry_id for reference in tm_references]
+                )
+
         if translation_memory_enabled:
             tm_key, tm_entry = _get_tm_entry_with_fallback(
                 translation_memory_data,
@@ -788,7 +946,17 @@ def build_batch_items(
         required_terms = _serialize_required_glossary_terms(glossary_application)
         if required_terms:
             key_meta["required_glossary_terms"] = required_terms
+        if tm_references:
+            key_meta["translation_memory_references"] = (
+                _serialize_translation_memory_references(tm_references)
+            )
         key_map[custom_id] = key_meta
+        user_content = _build_translation_memory_reference_payload(clean, tm_references)
+        item_system_prompt = (
+            _append_translation_memory_instruction(system_prompt)
+            if tm_references
+            else system_prompt
+        )
         items.append(
             {
                 "custom_id": custom_id,
@@ -797,8 +965,8 @@ def build_batch_items(
                 "body": {
                     "model": model_name,
                     "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": clean},
+                        {"role": "system", "content": item_system_prompt},
+                        {"role": "user", "content": user_content},
                     ],
                 },
             }
