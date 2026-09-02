@@ -1129,11 +1129,27 @@ class EnhancedWordTranslator:
         except Exception:
             return
 
+    def paragraph_has_numbering(self, paragraph: Paragraph) -> bool:
+        paragraph_properties = paragraph._p.pPr
+        if paragraph_properties is not None and paragraph_properties.numPr is not None:
+            return True
+        style = paragraph.style
+        seen_style_ids: set[int] = set()
+        while style is not None and id(style) not in seen_style_ids:
+            seen_style_ids.add(id(style))
+            style_element = getattr(style, "element", None)
+            style_properties = getattr(style_element, "pPr", None)
+            if style_properties is not None and style_properties.numPr is not None:
+                return True
+            style = getattr(style, "base_style", None)
+        return False
+
     def insert_paragraph_after(self, paragraph: Paragraph, new_text: str) -> Paragraph:
         new_paragraph_element = OxmlElement("w:p")
         paragraph._p.addnext(new_paragraph_element)
         new_paragraph = Paragraph(new_paragraph_element, paragraph._parent)
-        new_paragraph.style = paragraph.style
+        if not self.paragraph_has_numbering(paragraph):
+            new_paragraph.style = paragraph.style
         new_run = new_paragraph.add_run(new_text or "")
         first_run = paragraph.runs[0] if paragraph.runs else None
         if first_run is not None:
@@ -1179,12 +1195,34 @@ class EnhancedWordTranslator:
         if first_run is not None:
             self.copy_run_style(first_run, new_run)
 
-    def get_all_paragraphs(self, doc: Document) -> list[Paragraph]:
-        all_paragraphs = list(doc.paragraphs)
+    def get_body_and_table_paragraphs(self, doc: Document) -> list[Paragraph]:
+        paragraphs: list[Paragraph] = []
+        seen_paragraphs: set[int] = set()
+
+        def append_once(paragraph: Paragraph) -> None:
+            paragraph_id = id(paragraph._p)
+            if paragraph_id in seen_paragraphs:
+                return
+            seen_paragraphs.add(paragraph_id)
+            paragraphs.append(paragraph)
+
+        for paragraph in doc.paragraphs:
+            append_once(paragraph)
+
+        seen_cells: set[int] = set()
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
-                    all_paragraphs.extend(cell.paragraphs)
+                    cell_id = id(cell._tc)
+                    if cell_id in seen_cells:
+                        continue
+                    seen_cells.add(cell_id)
+                    for paragraph in cell.paragraphs:
+                        append_once(paragraph)
+        return paragraphs
+
+    def get_all_paragraphs(self, doc: Document) -> list[Paragraph]:
+        all_paragraphs = self.get_body_and_table_paragraphs(doc)
         for section in doc.sections:
             all_paragraphs.extend(section.header.paragraphs)
             all_paragraphs.extend(section.footer.paragraphs)
@@ -1557,7 +1595,7 @@ class EnhancedWordTranslator:
         self.mark_update_fields_on_open(doc)
         all_paragraphs = self.get_all_paragraphs(doc)
         translatable_paragraphs = (
-            list(doc.paragraphs)
+            self.get_body_and_table_paragraphs(doc)
             if layout_mode == WORD_LAYOUT_BILINGUAL_BELOW
             else all_paragraphs
         )
@@ -1710,9 +1748,14 @@ class EnhancedWordTranslator:
             ):
                 separator = " "
             final_text = f"{prefix}{separator}{translated_core_text}"
+            output_text = (
+                translated_core_text
+                if layout_mode == WORD_LAYOUT_BILINGUAL_BELOW
+                else final_text
+            )
             self.apply_paragraph_translation(
                 paragraph,
-                prefixed_translated_text=final_text,
+                prefixed_translated_text=output_text,
                 layout_mode=layout_mode,
             )
 

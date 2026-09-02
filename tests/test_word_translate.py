@@ -9,6 +9,7 @@ from zipfile import ZipFile
 
 import docx
 import pytest
+from docx.enum.style import WD_STYLE_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
@@ -35,6 +36,38 @@ class _FailingChat:
 
 class _FailingClient:
     chat = _FailingChat()
+
+
+def _client_returning_translations(translations: list[str]):
+    class _Completions:
+        async def create(self, **kwargs):
+            payload = kwargs["messages"][-1]["content"]
+            if "<SOURCE_ITEMS_JSON>\n" in payload:
+                raw_items = payload.split("<SOURCE_ITEMS_JSON>\n", 1)[1].split(
+                    "\n</SOURCE_ITEMS_JSON>",
+                    1,
+                )[0]
+                items = json.loads(raw_items)
+                content = json.dumps(
+                    {
+                        item["id"]: translations[index]
+                        for index, item in enumerate(items)
+                    },
+                    ensure_ascii=False,
+                )
+            else:
+                content = translations[0]
+            message = type("Message", (), {"content": content})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    return _Client()
 
 
 async def _consume_translation(
@@ -197,6 +230,245 @@ def test_word_translation_tm_exact_match_inserts_bilingual_translation(app, tmp_
     assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
         "確認設備。",
         "Confirm the equipment.",
+    ]
+
+
+def test_word_translation_bilingual_below_does_not_continue_word_numbering(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Purpose: Establish the criteria."]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("目的：規定自有產品之編碼及圖名命名依據。", style="List Number")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "目的：規定自有產品之編碼及圖名命名依據。",
+        "Purpose: Establish the criteria.",
+    ]
+    assert translated_doc.paragraphs[0].style.name == "List Number"
+    assert translated_doc.paragraphs[1].style.name != "List Number"
+
+
+def test_word_translation_bilingual_below_does_not_continue_inherited_numbering_style(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Purpose: Establish the criteria."]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    custom_style = source_doc.styles.add_style("Custom Numbered Source", WD_STYLE_TYPE.PARAGRAPH)
+    custom_style.base_style = source_doc.styles["List Number"]
+    source_doc.add_paragraph(
+        "目的：規定自有產品之編碼及圖名命名依據。",
+        style="Custom Numbered Source",
+    )
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "目的：規定自有產品之編碼及圖名命名依據。",
+        "Purpose: Establish the criteria.",
+    ]
+    assert translated_doc.paragraphs[0].style.name == "Custom Numbered Source"
+    assert translated_doc.paragraphs[1].style.name != "Custom Numbered Source"
+
+
+def test_word_translation_bilingual_below_inserts_table_cell_translation(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Confirm the equipment."]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    table = source_doc.add_table(rows=1, cols=1)
+    table.cell(0, 0).paragraphs[0].text = "確認設備。"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    output_table = translated_doc.tables[0]
+    assert len(output_table.rows) == 1
+    assert len(output_table.columns) == 1
+    assert [paragraph.text for paragraph in output_table.cell(0, 0).paragraphs] == [
+        "確認設備。",
+        "Confirm the equipment.",
+    ]
+
+
+def test_word_translation_bilingual_below_does_not_duplicate_merged_table_cell_translation(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Confirm the equipment."]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    table = source_doc.add_table(rows=1, cols=2)
+    merged_cell = table.cell(0, 0).merge(table.cell(0, 1))
+    merged_cell.paragraphs[0].text = "確認設備。"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    output_cell = translated_doc.tables[0].cell(0, 0)
+    assert [paragraph.text for paragraph in output_cell.paragraphs] == [
+        "確認設備。",
+        "Confirm the equipment.",
+    ]
+
+
+def test_word_translation_bilingual_below_does_not_repeat_decimal_prefix(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Appearance inspection"]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("3.1 外觀檢查")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "3.1 外觀檢查",
+        "Appearance inspection",
+    ]
+
+
+def test_word_translation_bilingual_below_does_not_repeat_list_prefixes(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(
+            [
+                "Confirm the dimensions.",
+                "Check the appearance.",
+                "Record the result.",
+            ]
+        ),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("(1) 確認尺寸")
+    source_doc.add_paragraph("A. 檢查外觀")
+    source_doc.add_paragraph("(A) 記錄結果")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    translator.batch_size = 20
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "(1) 確認尺寸",
+        "Confirm the dimensions.",
+        "A. 檢查外觀",
+        "Check the appearance.",
+        "(A) 記錄結果",
+        "Record the result.",
     ]
 
 
