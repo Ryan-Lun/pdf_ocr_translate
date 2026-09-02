@@ -40,6 +40,19 @@ def normalize_word_layout_mode(value: object) -> str:
     return word_layout.normalize(value)
 
 
+def normalize_translate_tables(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return True
+    normalized = str(value).strip().lower()
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    return True
+
+
 def _word_translation_memory_enabled() -> bool:
     return bool(getattr(state, "TRANSLATION_MEMORY_ENABLED", False))
 
@@ -1966,6 +1979,7 @@ def enqueue_word_job_from_upload(
     retain_terms_raw: str | None = None,
     system_prompt: str | None = None,
     layout_mode: str | None = None,
+    translate_tables: object = True,
 ) -> str:
     job_id = uuid.uuid4().hex
     job_dir = jobs.job_dir(job_id, job_root=jobs.job_root_for_type("word_translate"))
@@ -1985,6 +1999,7 @@ def enqueue_word_job_from_upload(
     retain_terms = _parse_retain_terms(retain_terms_raw)
     custom_system_prompt = str(system_prompt or "").strip()
     normalized_layout_mode = normalize_word_layout_mode(layout_mode)
+    normalized_translate_tables = normalize_translate_tables(translate_tables)
     owner = str(owner_work_id or "").strip()
     meta = {
         "job_name": display_name,
@@ -1998,6 +2013,7 @@ def enqueue_word_job_from_upload(
         "retain_terms": retain_terms,
         "system_prompt": custom_system_prompt,
         "layout_mode": normalized_layout_mode,
+        "translate_tables": normalized_translate_tables,
         "source_filename": safe_name,
         "progress": 0.0,
     }
@@ -2009,6 +2025,7 @@ def enqueue_word_job_from_upload(
         "retain_terms": retain_terms,
         "system_prompt": custom_system_prompt,
         "layout_mode": normalized_layout_mode,
+        "translate_tables": normalized_translate_tables,
         "source_filename": safe_name,
         "processing_started_at": now_ts,
     }

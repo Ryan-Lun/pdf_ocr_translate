@@ -1226,6 +1226,60 @@ def test_enqueue_word_job_from_upload_stores_system_prompt(tmp_path, monkeypatch
     assert captured["payload"]["system_prompt"] == "Use concise legal wording."
 
 
+def test_enqueue_word_job_from_upload_stores_translate_tables(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    source = tmp_path / "source.docx"
+    source.write_bytes(b"docx")
+    captured: dict[str, object] = {}
+
+    def fake_create_job(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.create_job", fake_create_job)
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.register_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.word_translate.jobs.notify_jobs_update", lambda: None)
+
+    job_id = enqueue_word_job_from_upload(
+        source,
+        "Sample",
+        "auto",
+        "en",
+        translate_tables=False,
+    )
+
+    meta = jobs.load_job_meta(state.JOB_ROOT / job_id)
+    assert meta is not None
+    assert meta["translate_tables"] is False
+    assert captured["payload"]["translate_tables"] is False
+
+
+def test_enqueue_word_job_from_upload_defaults_invalid_translate_tables(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    source = tmp_path / "source.docx"
+    source.write_bytes(b"docx")
+    captured: dict[str, object] = {}
+
+    def fake_create_job(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.create_job", fake_create_job)
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.register_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.word_translate.jobs.notify_jobs_update", lambda: None)
+
+    job_id = enqueue_word_job_from_upload(
+        source,
+        "Sample",
+        "auto",
+        "en",
+        translate_tables="unsupported",
+    )
+
+    meta = jobs.load_job_meta(state.JOB_ROOT / job_id)
+    assert meta is not None
+    assert meta["translate_tables"] is True
+    assert captured["payload"]["translate_tables"] is True
+
+
 def test_enqueue_word_job_from_upload_stores_layout_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     captured: dict[str, object] = {}
@@ -1436,6 +1490,8 @@ def test_word_workspace_page_does_not_render_quality_score(client):
     assert 'name="layout_mode"' in html
     assert 'value="replace_original"' in html
     assert 'value="bilingual_below"' in html
+    assert 'name="translate_tables"' in html
+    assert '不翻譯表格' in html
 
 
 def test_word_translation_with_system_prompt_includes_prompt(tmp_path, monkeypatch):
