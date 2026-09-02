@@ -45,6 +45,7 @@ async def _consume_translation(
     source_language: str = "auto",
     target_language: str = "en",
     system_prompt: str | None = None,
+    layout_mode: str = "replace_original",
 ) -> None:
     async for _progress, _unused_quality in translator.process_translation(
         source_path=source_path,
@@ -53,8 +54,150 @@ async def _consume_translation(
         target_language=target_language,
         user_terms=[],
         system_prompt=system_prompt,
+        layout_mode=layout_mode,
     ):
         pass
+
+
+def test_word_translation_bilingual_below_keeps_source_and_inserts_translation(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    requests: list[dict] = []
+
+    class _BilingualCompletions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            message = type("Message", (), {"content": "Confirm the equipment."})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _BilingualChat:
+        completions = _BilingualCompletions()
+
+    class _BilingualClient:
+        chat = _BilingualChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _BilingualClient(),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    paragraph = source_doc.add_paragraph()
+    run = paragraph.add_run("確認設備。")
+    run.bold = True
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "確認設備。",
+        "Confirm the equipment.",
+    ]
+    assert translated_doc.paragraphs[1].runs[0].bold is True
+    assert requests
+
+
+def test_word_translation_replace_original_still_replaces_body_paragraph(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+
+    class _ReplaceCompletions:
+        async def create(self, **kwargs):
+            message = type("Message", (), {"content": "Confirm the equipment."})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _ReplaceChat:
+        completions = _ReplaceCompletions()
+
+    class _ReplaceClient:
+        chat = _ReplaceChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _ReplaceClient(),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("確認設備。")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="replace_original",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == ["Confirm the equipment."]
+
+
+def test_word_translation_tm_exact_match_inserts_bilingual_translation(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _FailingClient(),
+    )
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
+    translation_memory.upsert_sql_entry(
+        source_text="確認設備。",
+        target_text="Confirm the equipment.",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="word",
+        status="approved",
+        source="test",
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("確認設備。")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "確認設備。",
+        "Confirm the equipment.",
+    ]
 
 
 def test_word_translation_uses_sql_tm_exact_match_without_model_call(app, tmp_path, monkeypatch):

@@ -1129,6 +1129,17 @@ class EnhancedWordTranslator:
         except Exception:
             return
 
+    def insert_paragraph_after(self, paragraph: Paragraph, new_text: str) -> Paragraph:
+        new_paragraph_element = OxmlElement("w:p")
+        paragraph._p.addnext(new_paragraph_element)
+        new_paragraph = Paragraph(new_paragraph_element, paragraph._parent)
+        new_paragraph.style = paragraph.style
+        new_run = new_paragraph.add_run(new_text or "")
+        first_run = paragraph.runs[0] if paragraph.runs else None
+        if first_run is not None:
+            self.copy_run_style(first_run, new_run)
+        return new_paragraph
+
     def replace_paragraph_text_preserving_drawings(self, paragraph: Paragraph, new_text: str) -> None:
         remaining = new_text or ""
         first_text_run = None
@@ -1148,6 +1159,25 @@ class EnhancedWordTranslator:
             appended = paragraph.add_run(remaining)
             if first_text_run is not None:
                 self.copy_run_style(first_text_run, appended)
+
+    def apply_paragraph_translation(
+        self,
+        paragraph: Paragraph,
+        *,
+        prefixed_translated_text: str,
+        layout_mode: str,
+    ) -> None:
+        if layout_mode == WORD_LAYOUT_BILINGUAL_BELOW:
+            self.insert_paragraph_after(paragraph, prefixed_translated_text)
+            return
+        if self.paragraph_contains_drawing(paragraph):
+            self.replace_paragraph_text_preserving_drawings(paragraph, prefixed_translated_text)
+            return
+        first_run = paragraph.runs[0] if paragraph.runs else None
+        paragraph.clear()
+        new_run = paragraph.add_run(prefixed_translated_text)
+        if first_run is not None:
+            self.copy_run_style(first_run, new_run)
 
     def get_all_paragraphs(self, doc: Document) -> list[Paragraph]:
         all_paragraphs = list(doc.paragraphs)
@@ -1526,12 +1556,17 @@ class EnhancedWordTranslator:
         doc = docx.Document(source_path)
         self.mark_update_fields_on_open(doc)
         all_paragraphs = self.get_all_paragraphs(doc)
+        translatable_paragraphs = (
+            list(doc.paragraphs)
+            if layout_mode == WORD_LAYOUT_BILINGUAL_BELOW
+            else all_paragraphs
+        )
         glossary_entries = glossary.load_combined_glossary()
         if debug_job_dir is None:
             debug_job_dir = output_path.parent.parent if output_path.parent.name == "output" else output_path.parent
         prefix_pattern = re.compile(r"^\s*(?:(?:\d+(?:\.\d+)+|\d+\.)\s*|\(\d+\)\s*|[a-zA-Z]\.\s*|\([a-zA-Z]\)\s*)")
         texts_for_translation: dict[str, dict[str, Any]] = {}
-        for paragraph in all_paragraphs:
+        for paragraph in translatable_paragraphs:
             if self.is_table_of_contents_paragraph(paragraph):
                 continue
             if self.paragraph_contains_any_field_code(paragraph):
@@ -1654,7 +1689,7 @@ class EnhancedWordTranslator:
         if cancel_event is not None and cancel_event.is_set():
             raise WordTranslationCancelled("Word translation cancelled.")
 
-        for paragraph in all_paragraphs:
+        for paragraph in translatable_paragraphs:
             if self.is_table_of_contents_paragraph(paragraph):
                 continue
             if self.paragraph_contains_any_field_code(paragraph):
@@ -1675,14 +1710,11 @@ class EnhancedWordTranslator:
             ):
                 separator = " "
             final_text = f"{prefix}{separator}{translated_core_text}"
-            if self.paragraph_contains_drawing(paragraph):
-                self.replace_paragraph_text_preserving_drawings(paragraph, final_text)
-            else:
-                first_run = paragraph.runs[0] if paragraph.runs else None
-                paragraph.clear()
-                new_run = paragraph.add_run(final_text)
-                if first_run is not None:
-                    self.copy_run_style(first_run, new_run)
+            self.apply_paragraph_translation(
+                paragraph,
+                prefixed_translated_text=final_text,
+                layout_mode=layout_mode,
+            )
 
         if debug_job_dir is not None:
             glossary.write_required_glossary_hits_artifact(
