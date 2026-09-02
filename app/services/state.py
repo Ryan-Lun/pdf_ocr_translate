@@ -166,6 +166,19 @@ DOC_TRANSLATE_MODEL = openai_config.get_doc_translate_deployment()
 PDF_REALTIME_TRANSLATE_MODEL = openai_config.get_pdf_realtime_translate_deployment()
 WORD_TRANSLATE_MODEL = openai_config.get_word_translate_deployment()
 WORD_QUALITY_MODEL = openai_config.get_word_quality_deployment()
+TRANSLATION_POST_EDIT_ENABLED = (
+    os.getenv("TRANSLATION_POST_EDIT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+)
+TRANSLATION_POST_EDIT_MODEL = (
+    os.getenv("TRANSLATION_POST_EDIT_MODEL")
+    or os.getenv("TRANSLATION_POST_EDIT_DEPLOYMENT")
+    or WORD_TRANSLATE_MODEL
+).strip()
+TRANSLATION_POST_EDIT_TEMPERATURE = max(0.0, _float_env("TRANSLATION_POST_EDIT_TEMPERATURE", 0.0))
+TRANSLATION_POST_EDIT_MAX_TOKENS = max(
+    1,
+    int(os.getenv("TRANSLATION_POST_EDIT_MAX_TOKENS", "6000")),
+)
 DOC_TRANSLATE_MAX_CHARS = int(os.getenv("DOC_TRANSLATE_MAX_CHARS", "4000"))
 DOC_TRANSLATE_USE_AZURE = os.getenv("DOC_TRANSLATE_USE_AZURE", "0").strip() == "1"
 DOC_TRANSLATE_SYSTEM_PROMPT = os.getenv(
