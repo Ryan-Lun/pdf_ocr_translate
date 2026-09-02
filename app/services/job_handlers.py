@@ -125,6 +125,7 @@ class WordTranslateJobHandler:
             retain_terms=list(payload.get("retain_terms") or []),
             system_prompt=str(payload.get("system_prompt") or ""),
             layout_mode=word_translate.normalize_word_layout_mode(payload.get("layout_mode")),
+            translate_tables=word_translate.normalize_translate_tables(payload.get("translate_tables")),
         )
 
 

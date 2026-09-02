@@ -1336,6 +1336,59 @@ def test_enqueue_word_job_from_upload_defaults_invalid_layout_mode(tmp_path, mon
     assert captured["payload"]["layout_mode"] == "replace_original"
 
 
+def test_run_word_translate_job_passes_translate_tables_to_process_translation(app, tmp_path, monkeypatch):
+    job_id = uuid.uuid4().hex
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    source_path = job_dir / "source.docx"
+    output_path = job_dir / "output" / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("表格內容")
+    source_doc.save(source_path)
+    jobs.create_job_state(
+        job_dir,
+        job_type="word_translate",
+        stage="queued",
+        job_name="sample",
+        target_lang="en",
+        payload={"target_lang": "en"},
+        meta={
+            "job_name": "sample",
+            "job_type": "word_translate",
+            "target_lang": "en",
+            "source_filename": "source.docx",
+        },
+    )
+    captured: dict[str, object] = {}
+
+    class _CapturingTranslator:
+        async def process_translation(self, **kwargs):
+            captured.update(kwargs)
+            kwargs["output_path"].parent.mkdir(parents=True, exist_ok=True)
+            docx.Document().save(kwargs["output_path"])
+            yield 100.0, 0.0
+
+    monkeypatch.setattr(
+        "app.services.word_translate.EnhancedWordTranslator",
+        _CapturingTranslator,
+    )
+
+    run_word_translate_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        source_path=source_path,
+        processing_source_path=source_path,
+        output_path=output_path,
+        source_lang="auto",
+        target_lang="en",
+        retain_terms=[],
+        translate_tables="false",
+    )
+
+    assert captured["translate_tables"] is False
+    assert captured["layout_mode"] == "replace_original"
+
+
 def test_run_word_translate_job_does_not_write_avg_quality_metadata(app, tmp_path, monkeypatch):
     job_id = uuid.uuid4().hex
     job_dir = tmp_path / job_id

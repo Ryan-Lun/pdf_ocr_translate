@@ -244,6 +244,7 @@ def test_doc_and_word_handlers_wrap_existing_service_boundaries(app, tmp_path, m
                 "retain_terms": ["ABC"],
                 "system_prompt": "word prompt",
                 "layout_mode": "bilingual_below",
+                "translate_tables": False,
             },
         )
     )
@@ -271,9 +272,25 @@ def test_doc_and_word_handlers_wrap_existing_service_boundaries(app, tmp_path, m
     assert word_kwargs["retain_terms"] == ["ABC"]
     assert word_kwargs["system_prompt"] == "word prompt"
     assert word_kwargs["layout_mode"] == "bilingual_below"
+    assert word_kwargs["translate_tables"] is False
 
 
-def test_word_handler_defaults_missing_layout_mode(app, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("payload", "expected_layout_mode", "expected_translate_tables"),
+    [
+        ({"source_lang": "zh"}, "replace_original", True),
+        ({"source_lang": "zh", "translate_tables": True}, "replace_original", True),
+        ({"source_lang": "zh", "translate_tables": "unsupported"}, "replace_original", True),
+    ],
+)
+def test_word_handler_defaults_and_normalizes_options(
+    app,
+    tmp_path,
+    monkeypatch,
+    payload,
+    expected_layout_mode,
+    expected_translate_tables,
+):
     from app.services import job_handlers
 
     job_id = _job_id()
@@ -300,11 +317,12 @@ def test_word_handler_defaults_missing_layout_mode(app, tmp_path, monkeypatch):
                 target_lang="en",
             ),
             job_dir=job_dir,
-            payload={"source_lang": "zh"},
+            payload=payload,
         )
     )
 
-    assert captured["layout_mode"] == "replace_original"
+    assert captured["layout_mode"] == expected_layout_mode
+    assert captured["translate_tables"] is expected_translate_tables
 
 
 def test_worker_loop_records_orphan_recovery_exception_and_continues(app, monkeypatch):

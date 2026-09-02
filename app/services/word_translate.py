@@ -1819,6 +1819,7 @@ def run_word_translate_job(
     retain_terms: list[str],
     system_prompt: str = "",
     layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
+    translate_tables: object = True,
 ) -> None:
     _run_word_job(
         job_id=job_id,
@@ -1831,6 +1832,7 @@ def run_word_translate_job(
         retain_terms=retain_terms,
         system_prompt=system_prompt,
         layout_mode=layout_mode,
+        translate_tables=translate_tables,
     )
 
 
@@ -1845,8 +1847,10 @@ def _run_word_job(
     retain_terms: list[str],
     system_prompt: str = "",
     layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
+    translate_tables: object = True,
 ) -> None:
     layout_mode = normalize_word_layout_mode(layout_mode)
+    translate_tables = normalize_translate_tables(translate_tables)
     now_ts = time.time()
     jobs.set_job_state(
         job_dir,
@@ -1890,6 +1894,7 @@ def _run_word_job(
                 warning_callback=record_warning,
                 record_tm_usage_on_save=False,
                 layout_mode=layout_mode,
+                translate_tables=translate_tables,
             ):
                 last_progress = float(progress)
                 jobs.set_job_state(
