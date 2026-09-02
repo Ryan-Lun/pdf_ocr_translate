@@ -23,7 +23,7 @@ from docx.text.paragraph import Paragraph
 from lang_utils import describe_target_language, normalize_lang_code, traditional_chinese_instruction
 from werkzeug.utils import secure_filename
 
-from . import audit_service, glossary, jobs, openai_config, state, translation_debug, translation_memory, word_layout
+from . import audit_service, glossary, jobs, openai_config, state, translation_debug, translation_memory, translation_post_edit, word_layout
 
 logger = logging.getLogger(__name__)
 WORD_JOB_EVENTS: dict[str, threading.Event] = {}
@@ -1351,6 +1351,69 @@ class EnhancedWordTranslator:
             await asyncio.sleep(base_delay * (2**attempt) + random.uniform(0, 1))
         raise RuntimeError(f"Word 翻譯連續失敗 {self.max_retries} 次，已中斷任務。請向系統管理員回報此問題。")
 
+    async def post_edit_word_translations(
+        self,
+        translations: dict[str, str],
+        *,
+        item_ids: dict[str, str],
+        glossary_applications: dict[str, glossary.GlossaryApplication],
+        target_lang: str,
+        user_terms: list[str],
+        cancel_event: threading.Event | None = None,
+        warning_callback: Callable[[str], None] | None = None,
+    ) -> dict[str, str]:
+        if not translations or not translation_post_edit.is_enabled():
+            return translations
+        if cancel_event is not None and cancel_event.is_set():
+            raise WordTranslationCancelled("Word translation cancelled.")
+
+        text_by_item_id = {item_ids[text]: text for text in translations if text in item_ids}
+        post_edit_items = []
+        for text, draft_text in translations.items():
+            item_id = item_ids.get(text)
+            if not item_id:
+                continue
+            glossary_application = glossary_applications.get(item_id)
+            post_edit_items.append(
+                translation_post_edit.PostEditItem(
+                    id=item_id,
+                    source_text=text,
+                    draft_text=draft_text,
+                    required_terms=tuple(glossary_application.required_terms)
+                    if glossary_application is not None
+                    else tuple(),
+                    protected_texts=tuple(user_terms),
+                )
+            )
+        if not post_edit_items:
+            return translations
+
+        try:
+            post_edit_result = await translation_post_edit.post_edit_texts_batch(
+                post_edit_items,
+                target_lang=target_lang,
+            )
+        except Exception as exc:
+            logger.warning("Word Stage 2 post-edit failed, using Stage 1 drafts error=%s", exc)
+            if warning_callback is not None:
+                warning_callback(f"Word Stage 2 後編輯失敗，沿用 Stage 1 譯文：{exc}")
+            return translations
+
+        revised = dict(translations)
+        for result_item in post_edit_result.items:
+            text = text_by_item_id.get(result_item.id)
+            if text is None:
+                continue
+            if result_item.used_fallback and result_item.fallback_reason:
+                logger.info(
+                    "Word Stage 2 post-edit fallback item_id=%s reason=%s",
+                    result_item.id,
+                    result_item.fallback_reason,
+                )
+            revised[text] = result_item.text
+        return revised
+
+
     async def translate_texts_batch(
         self,
         texts: list[str],
@@ -1371,17 +1434,16 @@ class EnhancedWordTranslator:
             return {}
         if len(texts) == 1:
             text = texts[0]
+            item_id = (item_ids or {}).get(text) or debug_custom_id or "single"
+            masked_text, _token_map = self._mask_text(text, user_terms)
+            glossary_application = glossary.apply_required_glossary_terms(
+                masked_text,
+                glossary_entries,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
             if glossary_hit_collector is not None:
-                masked_text, _token_map = self._mask_text(text, user_terms)
-                glossary_hit_collector.append((
-                    (item_ids or {}).get(text) or debug_custom_id or "single",
-                    glossary.apply_required_glossary_terms(
-                        masked_text,
-                        glossary_entries,
-                        source_lang=source_lang,
-                        target_lang=target_lang,
-                    ),
-                ))
+                glossary_hit_collector.append((item_id, glossary_application))
             translate_kwargs = _word_translate_text_kwargs(
                 text=text,
                 translation_memory_references=translation_memory_references,
@@ -1399,7 +1461,15 @@ class EnhancedWordTranslator:
                 user_terms,
                 **translate_kwargs,
             )
-            return {text: translated_text}
+            return await self.post_edit_word_translations(
+                {text: translated_text},
+                item_ids={text: item_id},
+                glossary_applications={item_id: glossary_application},
+                target_lang=target_lang,
+                user_terms=user_terms,
+                cancel_event=cancel_event,
+                warning_callback=warning_callback,
+            )
 
         item_ids = item_ids or {
             text: f"item_{index:04d}"
@@ -1520,6 +1590,16 @@ class EnhancedWordTranslator:
                     )
                 parsed_translations[item_id] = translated_text
                 results[text] = translated_text
+            results = await self.post_edit_word_translations(
+                results,
+                item_ids=item_ids,
+                glossary_applications=glossary_applications,
+                target_lang=target_lang,
+                user_terms=user_terms,
+                cancel_event=cancel_event,
+                warning_callback=warning_callback,
+            )
+            parsed_translations = {item_ids[text]: results[text] for text in results if text in item_ids}
             if debug_job_dir is not None and debug_custom_id:
                 translation_debug.record_parsed(
                     job_dir=debug_job_dir,
@@ -1558,7 +1638,15 @@ class EnhancedWordTranslator:
                     **translate_kwargs,
                 )
                 results[text] = translated_text
-            return results
+            return await self.post_edit_word_translations(
+                results,
+                item_ids=item_ids,
+                glossary_applications=glossary_applications,
+                target_lang=target_lang,
+                user_terms=user_terms,
+                cancel_event=cancel_event,
+                warning_callback=warning_callback,
+            )
 
     async def process_translation(
         self,
