@@ -49,6 +49,22 @@ def _item(
     )
 
 
+def test_collect_exact_protected_texts_extracts_tokens_codes_urls_emails_and_numbers():
+    protected = translation_post_edit.collect_exact_protected_texts(
+        "檢查 PN-88 <<UT0>> 10 mm 5% https://example.test/spec user@example.test。",
+        "Keep PN-88 and 10 mm unchanged.",
+    )
+
+    assert protected == (
+        "PN-88",
+        "<<UT0>>",
+        "10 mm",
+        "5%",
+        "https://example.test/spec",
+        "user@example.test",
+    )
+
+
 def test_stage_2_disabled_returns_stage_1_drafts_without_model_call(monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", False, raising=False)
 

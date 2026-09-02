@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
 import sys
 import types
 from pathlib import Path
+
+import pytest
+
+from app.services import markdown_translate as real_markdown_translate, state as real_state
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "app" / "services" / "markdown_translate.py"
@@ -19,6 +24,7 @@ def _load_module():
         "app.services.openai_config",
         "app.services.state",
         "app.services.translation_debug",
+        "app.services.translation_post_edit",
     ]
     original_modules = {name: sys.modules.get(name) for name in module_names}
     fake_app = types.ModuleType("app")
@@ -111,6 +117,47 @@ def _load_module():
     fake_translation_debug.record_error = lambda **kwargs: None
     fake_translation_debug.record_parsed = lambda **kwargs: None
     fake_translation_debug.record_plan = lambda *args, **kwargs: None
+    fake_translation_post_edit = types.ModuleType("app.services.translation_post_edit")
+
+    class FakePostEditItem:
+        def __init__(self, id, source_text, draft_text, required_terms=(), protected_texts=()):
+            self.id = id
+            self.source_text = source_text
+            self.draft_text = draft_text
+            self.required_terms = tuple(required_terms)
+            self.protected_texts = tuple(protected_texts)
+
+    class FakePostEditResultItem:
+        def __init__(self, id, text, used_fallback=False, fallback_reason=None):
+            self.id = id
+            self.text = text
+            self.used_fallback = used_fallback
+            self.fallback_reason = fallback_reason
+
+    class FakePostEditBatchResult:
+        def __init__(self, enabled, items, raw_response=""):
+            self.enabled = enabled
+            self.items = tuple(items)
+            self.raw_response = raw_response
+
+    fake_translation_post_edit.PostEditItem = FakePostEditItem
+    fake_translation_post_edit.PostEditResultItem = FakePostEditResultItem
+    fake_translation_post_edit.PostEditBatchResult = FakePostEditBatchResult
+    fake_translation_post_edit.is_enabled = lambda: False
+
+    async def fake_post_edit_texts_batch(items, **kwargs):
+        return FakePostEditBatchResult(
+            enabled=False,
+            items=[FakePostEditResultItem(item.id, item.draft_text, True, "disabled") for item in items],
+        )
+
+    fake_translation_post_edit.post_edit_texts_batch = fake_post_edit_texts_batch
+
+    def fake_post_edit_texts_batch_sync(items, **kwargs):
+        return asyncio.run(fake_translation_post_edit.post_edit_texts_batch(items, **kwargs))
+
+    fake_translation_post_edit.post_edit_texts_batch_sync = fake_post_edit_texts_batch_sync
+    fake_translation_post_edit.collect_exact_protected_texts = lambda *texts: tuple()
     fake_state.DOC_TRANSLATE_MODEL = "fake-model"
     fake_state.DOC_TRANSLATE_MAX_CHARS = 4000
     fake_state.DOC_TRANSLATE_SYSTEM_PROMPT = "Translate HTML text nodes."
@@ -130,6 +177,7 @@ def _load_module():
         sys.modules["app.services.openai_config"] = fake_openai_config
         sys.modules["app.services.state"] = fake_state
         sys.modules["app.services.translation_debug"] = fake_translation_debug
+        sys.modules["app.services.translation_post_edit"] = fake_translation_post_edit
 
         spec = importlib.util.spec_from_file_location("app.services.markdown_translate", MODULE_PATH)
         assert spec and spec.loader
@@ -258,6 +306,212 @@ def test_translate_html_file_retries_missing_required_glossary_term(tmp_path: Pa
     assert len(requests) == 2
     assert "Missing Required Glossary Terms" in requests[1]["messages"][-1]["content"]
     assert "* Appearance" in requests[1]["messages"][-1]["content"]
+
+
+
+
+def test_translate_html_file_stage_2_disabled_does_not_call_post_edit(tmp_path: Path):
+    module = _load_module()
+    source = tmp_path / "doc.html"
+    output = tmp_path / "doc.translated.html"
+    source.write_text("<p>來源文字</p>", encoding="utf-8")
+    module.translation_post_edit.is_enabled = lambda: False
+    module.translation_post_edit.post_edit_texts_batch_sync = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("Stage 2 must not run when disabled")
+    )
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            message = types.SimpleNamespace(content="Stage 1 draft.")
+            choice = types.SimpleNamespace(message=message)
+            return types.SimpleNamespace(choices=[choice])
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    module._get_translation_client = lambda: (FakeClient(), "fake-model")
+
+    module.translate_html_file(source, output, target_lang="en")
+
+    assert output.read_text(encoding="utf-8") == "<p>Stage 1 draft.</p>"
+
+
+def test_translate_html_file_stage_2_revises_text_node_after_stage_1(tmp_path: Path):
+    module = _load_module()
+    source = tmp_path / "doc.html"
+    output = tmp_path / "doc.translated.html"
+    source.write_text("<p>來源文字</p>", encoding="utf-8")
+    module.translation_post_edit.is_enabled = lambda: True
+    captured_items = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            message = types.SimpleNamespace(content="Stage 1 draft.")
+            choice = types.SimpleNamespace(message=message)
+            return types.SimpleNamespace(choices=[choice])
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    async def fake_post_edit(items, **kwargs):
+        item_tuple = tuple(items)
+        captured_items.extend(item_tuple)
+        return module.translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=[
+                module.translation_post_edit.PostEditResultItem(
+                    item_tuple[0].id,
+                    "Stage 2 revision.",
+                )
+            ],
+        )
+
+    module._get_translation_client = lambda: (FakeClient(), "fake-model")
+    module.translation_post_edit.post_edit_texts_batch = fake_post_edit
+
+    module.translate_html_file(source, output, target_lang="en")
+
+    assert output.read_text(encoding="utf-8") == "<p>Stage 2 revision.</p>"
+    assert captured_items[0].source_text == "來源文字"
+    assert captured_items[0].draft_text == "Stage 1 draft."
+
+
+def test_translate_html_file_stage_2_fallback_keeps_stage_1_text_node(tmp_path: Path):
+    module = _load_module()
+    source = tmp_path / "doc.html"
+    output = tmp_path / "doc.translated.html"
+    source.write_text("<p>來源文字</p>", encoding="utf-8")
+    module.translation_post_edit.is_enabled = lambda: True
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            message = types.SimpleNamespace(content="Stage 1 draft.")
+            choice = types.SimpleNamespace(message=message)
+            return types.SimpleNamespace(choices=[choice])
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    async def fake_post_edit(items, **kwargs):
+        item_tuple = tuple(items)
+        return module.translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=[
+                module.translation_post_edit.PostEditResultItem(
+                    item_tuple[0].id,
+                    item_tuple[0].draft_text,
+                    True,
+                    "missing_output_id",
+                )
+            ],
+        )
+
+    module._get_translation_client = lambda: (FakeClient(), "fake-model")
+    module.translation_post_edit.post_edit_texts_batch = fake_post_edit
+
+    module.translate_html_file(source, output, target_lang="en")
+
+    assert output.read_text(encoding="utf-8") == "<p>Stage 1 draft.</p>"
+
+
+
+def test_translate_html_file_stage_2_unexpected_id_keeps_stage_1_text_node(tmp_path: Path):
+    module = _load_module()
+    source = tmp_path / "doc.html"
+    output = tmp_path / "doc.translated.html"
+    source.write_text("<p>來源文字</p>", encoding="utf-8")
+    module.translation_post_edit.is_enabled = lambda: True
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            message = types.SimpleNamespace(content="Stage 1 draft.")
+            choice = types.SimpleNamespace(message=message)
+            return types.SimpleNamespace(choices=[choice])
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    async def fake_post_edit(items, **kwargs):
+        return module.translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=[module.translation_post_edit.PostEditResultItem("wrong-id", "Stage 2 wrong mapping.")],
+        )
+
+    module._get_translation_client = lambda: (FakeClient(), "fake-model")
+    module.translation_post_edit.post_edit_texts_batch = fake_post_edit
+
+    module.translate_html_file(source, output, target_lang="en")
+
+    assert output.read_text(encoding="utf-8") == "<p>Stage 1 draft.</p>"
+
+
+@pytest.mark.parametrize(
+    "post_edit_response",
+    [
+        "not json",
+        "{}",
+        '{"chunk_0001": ""}',
+    ],
+)
+def test_translate_html_file_stage_2_real_service_invalid_output_fallbacks_to_stage_1(
+    tmp_path: Path,
+    monkeypatch,
+    post_edit_response: str,
+):
+    source = tmp_path / "doc.html"
+    output = tmp_path / "doc.translated.html"
+    source.write_text("<p>來源文字</p>", encoding="utf-8")
+    monkeypatch.setattr(real_state, "TRANSLATION_POST_EDIT_ENABLED", True)
+
+    class Stage1Completions:
+        def create(self, **kwargs):
+            message = types.SimpleNamespace(content="Stage 1 draft.")
+            choice = types.SimpleNamespace(message=message)
+            return types.SimpleNamespace(choices=[choice])
+
+    class Stage1Chat:
+        completions = Stage1Completions()
+
+    class Stage1Client:
+        chat = Stage1Chat()
+
+    post_edit_calls: list[dict] = []
+
+    class PostEditCompletions:
+        async def create(self, **kwargs):
+            post_edit_calls.append(kwargs)
+            message = types.SimpleNamespace(content=post_edit_response)
+            choice = types.SimpleNamespace(message=message)
+            return types.SimpleNamespace(choices=[choice])
+
+    class PostEditChat:
+        completions = PostEditCompletions()
+
+    class PostEditClient:
+        chat = PostEditChat()
+
+    monkeypatch.setattr(real_markdown_translate, "_get_translation_client", lambda: (Stage1Client(), "fake-model"))
+    monkeypatch.setattr(
+        "app.services.translation_post_edit.openai_config.create_async_client",
+        lambda: PostEditClient(),
+    )
+
+    real_markdown_translate.translate_html_file(source, output, target_lang="en")
+
+    assert output.read_text(encoding="utf-8") == "<p>Stage 1 draft.</p>"
+    assert len(post_edit_calls) == 1
 
 
 def test_translate_html_file_with_system_prompt_includes_prompt(tmp_path: Path):

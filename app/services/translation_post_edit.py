@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -95,6 +97,44 @@ class PostEditBatchResult:
 
 
 ClientFactory = Callable[[], Any]
+
+
+_EXACT_PROTECTED_PATTERN = re.compile(
+    r"https?://[^\s<>()]+"
+    r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    r"|<<UT\d+>>"
+    r"|\b[A-Z]{2,}[A-Z0-9]*(?:[-_/][A-Z0-9]+)+\b"
+    r"|\b\d+(?:\.\d+)?\s?(?:%|mm|cm|m|kg|g|mg|ml|L|°C|℃|V|A|W|kW|Hz|rpm)?(?=$|\s|[.,;:!?，。；：！？)])"
+)
+
+
+def collect_exact_protected_texts(*texts: str) -> tuple[str, ...]:
+    protected: list[str] = []
+    for text in texts:
+        for match in _EXACT_PROTECTED_PATTERN.finditer(str(text or "")):
+            value = match.group(0)
+            if value and value not in protected:
+                protected.append(value)
+    return tuple(protected)
+
+
+def post_edit_texts_batch_sync(
+    items: Iterable[PostEditItem],
+    *,
+    target_lang: str,
+    model: str | None = None,
+    client_factory: ClientFactory | None = None,
+    enabled: bool | None = None,
+) -> PostEditBatchResult:
+    return asyncio.run(
+        post_edit_texts_batch(
+            items,
+            target_lang=target_lang,
+            model=model,
+            client_factory=client_factory,
+            enabled=enabled,
+        )
+    )
 
 
 def is_enabled() -> bool:

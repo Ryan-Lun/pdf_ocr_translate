@@ -16,7 +16,7 @@ from lang_utils import (
     traditional_chinese_instruction,
 )
 
-from . import glossary, openai_config, state, translation_debug
+from . import glossary, openai_config, state, translation_debug, translation_post_edit
 
 logger = logging.getLogger(__name__)
 DOC_TRANSLATE_MAX_RETRIES = 3
@@ -282,6 +282,59 @@ def _doc_translate_request(
             time.sleep((2**attempt) + random.uniform(0, 0.5))
 
 
+def _post_edit_markdown_translation(
+    *,
+    source_text: str,
+    draft_text: str,
+    required_terms: glossary.RequiredTermContext = None,
+    target_lang: str,
+    debug_custom_id: str | None = None,
+    warning_callback: Callable[[str], None] | None = None,
+) -> str:
+    if not draft_text.strip() or not translation_post_edit.is_enabled():
+        return draft_text
+    required_term_tuple = tuple(getattr(required_terms, "required_terms", ()) or ())
+    item_id = debug_custom_id or "snippet"
+    try:
+        result = translation_post_edit.post_edit_texts_batch_sync(
+            [
+                translation_post_edit.PostEditItem(
+                    id=item_id,
+                    source_text=source_text,
+                    draft_text=draft_text,
+                    required_terms=required_term_tuple,
+                    protected_texts=translation_post_edit.collect_exact_protected_texts(
+                        source_text,
+                        draft_text,
+                    ),
+                )
+            ],
+            target_lang=target_lang,
+        )
+    except Exception as exc:
+        logger.warning("Markdown Stage 2 post-edit failed, using Stage 1 draft error=%s", exc)
+        if warning_callback is not None:
+            warning_callback(f"PDF 翻譯重建 Stage 2 後編輯失敗，沿用 Stage 1 譯文：{exc}")
+        return draft_text
+    if not result.items:
+        return draft_text
+    result_item = result.items[0]
+    if result_item.id != item_id:
+        logger.info(
+            "Markdown Stage 2 post-edit fallback item_id=%s reason=unexpected_output_id:%s",
+            item_id,
+            result_item.id,
+        )
+        return draft_text
+    if result_item.used_fallback and result_item.fallback_reason:
+        logger.info(
+            "Markdown Stage 2 post-edit fallback item_id=%s reason=%s",
+            result_item.id,
+            result_item.fallback_reason,
+        )
+    return result_item.text
+
+
 def _translate_snippet(
     snippet: str,
     client: Any,
@@ -329,6 +382,14 @@ def _translate_snippet(
         required_terms=glossary_application,
     )
     restored = glossary.restore_protected_glossary_terms(translated, glossary_application)
+    restored = _post_edit_markdown_translation(
+        source_text=snippet,
+        draft_text=restored,
+        required_terms=glossary_application,
+        target_lang=target_lang,
+        debug_custom_id=debug_custom_id,
+        warning_callback=warning_callback,
+    )
     if debug_job_dir is not None and debug_custom_id and restored:
         translation_debug.record_parsed(
             job_dir=debug_job_dir,
@@ -390,6 +451,14 @@ def _translate_text(
         required_terms=glossary_application,
     )
     restored = glossary.restore_protected_glossary_terms(translated, glossary_application)
+    restored = _post_edit_markdown_translation(
+        source_text=text,
+        draft_text=restored,
+        required_terms=glossary_application,
+        target_lang=target_lang,
+        debug_custom_id=debug_custom_id,
+        warning_callback=warning_callback,
+    )
     if debug_job_dir is not None and debug_custom_id and restored:
         translation_debug.record_parsed(
             job_dir=debug_job_dir,

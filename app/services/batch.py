@@ -24,6 +24,7 @@ from . import (
     openai_config,
     state,
     translation_memory,
+    translation_post_edit,
 )
 
 logger = logging.getLogger(__name__)
@@ -1191,6 +1192,57 @@ def apply_alias_map_to_translations(
     return resolved
 
 
+def _post_edit_batch_translations(
+    translations: dict[str, str],
+    *,
+    key_map: dict[str, dict[str, Any]],
+    target_lang: str,
+) -> dict[str, str]:
+    if not translations or not translation_post_edit.is_enabled():
+        return translations
+
+    post_edit_items: list[translation_post_edit.PostEditItem] = []
+    for custom_id, draft_text in translations.items():
+        key_meta = key_map.get(custom_id) or {}
+        source_text = str(key_meta.get("source_text") or "")
+        post_edit_items.append(
+            translation_post_edit.PostEditItem(
+                id=custom_id,
+                source_text=source_text,
+                draft_text=draft_text,
+                required_terms=_required_glossary_terms_from_key_meta(key_meta),
+                protected_texts=translation_post_edit.collect_exact_protected_texts(
+                    source_text,
+                    draft_text,
+                ),
+            )
+        )
+    if not post_edit_items:
+        return translations
+
+    try:
+        post_edit_result = translation_post_edit.post_edit_texts_batch_sync(
+            post_edit_items,
+            target_lang=target_lang,
+        )
+    except Exception as exc:
+        logger.warning("PDF batch Stage 2 post-edit failed, using Stage 1 drafts error=%s", exc)
+        return translations
+
+    revised = dict(translations)
+    for result_item in post_edit_result.items:
+        if result_item.id not in revised:
+            continue
+        if result_item.used_fallback and result_item.fallback_reason:
+            logger.info(
+                "PDF batch Stage 2 post-edit fallback custom_id=%s reason=%s",
+                result_item.id,
+                result_item.fallback_reason,
+            )
+        revised[result_item.id] = result_item.text
+    return revised
+
+
 def build_edits_payload_from_translations(
     ocr_pages: list[dict[str, Any]],
     translations: dict[str, str],
@@ -1783,9 +1835,20 @@ def _finalize_batch_translate_job(
     status_meta: dict[str, Any],
     batch_id: str,
 ) -> None:
-    translations = build_translations_from_jsonl_text(
-        raw_text, alias_map=alias_map, prefilled=prefilled, key_map=key_map
+    stage_1_translations = build_translations_from_jsonl_text(
+        raw_text, key_map=key_map
     )
+    stage_1_translations = _post_edit_batch_translations(
+        stage_1_translations,
+        key_map=key_map,
+        target_lang=target_lang,
+    )
+    translations = {
+        key: glossary.restore_protected_glossary_terms(value)
+        for key, value in prefilled.items()
+    }
+    translations.update(stage_1_translations)
+    translations = apply_alias_map_to_translations(translations, alias_map)
     finalize_translation_job(
         job_id=job_id,
         job_dir=job_dir,

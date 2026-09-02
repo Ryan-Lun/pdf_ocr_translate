@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -13,7 +14,7 @@ from app.services.batch import (
     resolve_batch_prompt,
     translate_texts_for_region,
 )
-from app.services import batch, job_store, state, translation_memory
+from app.services import batch, job_store, state, translation_memory, translation_post_edit
 
 
 @pytest.fixture(autouse=True)
@@ -2390,6 +2391,298 @@ def test_pdf_batch_does_not_retrieve_sql_tm_when_feature_flag_disabled(tmp_path,
     assert alias_map == {}
     assert key_map["p0000-l0000"]["source_text"] == "確認設備是否正常。"
     assert prefilled == {}
+
+
+
+def _raw_batch_output(translations: dict[str, str]) -> str:
+    return "\n".join(
+        json.dumps(
+            {
+                "custom_id": custom_id,
+                "response": {"body": {"output_text": translated}},
+            },
+            ensure_ascii=False,
+        )
+        for custom_id, translated in translations.items()
+    )
+
+
+def _line_poly(index: int) -> list[list[int]]:
+    top = index * 30
+    return [[0, top], [100, top], [100, top + 20], [0, top + 20]]
+
+
+def _patch_finalize_side_effects(monkeypatch, captured_edits: dict[str, object] | None = None) -> None:
+    monkeypatch.setattr(batch.jobs, "write_batch_status", lambda *args, **kwargs: None)
+    monkeypatch.setattr(batch.jobs, "set_job_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(translation_memory, "record_artifact_usage_from_files", lambda job_dir: None)
+
+    def fake_apply_edits(current_job_id, current_job_dir, edits_payload):
+        if captured_edits is not None:
+            captured_edits["payload"] = edits_payload
+        return Path(current_job_dir) / "edited.pdf"
+
+    monkeypatch.setattr(batch.ocr, "apply_edits_to_pdf", fake_apply_edits)
+
+
+def test_pdf_batch_stage_2_disabled_does_not_call_post_edit(monkeypatch, tmp_path):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", False)
+    captured_edits: dict[str, object] = {}
+    _patch_finalize_side_effects(monkeypatch, captured_edits)
+    monkeypatch.setattr(
+        "app.services.batch.translation_post_edit.post_edit_texts_batch_sync",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Stage 2 must not run when disabled")),
+    )
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+
+    batch._finalize_batch_translate_job(
+        job_id="d" * 32,
+        job_dir=job_dir,
+        ocr_pages=[
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["來源文字"],
+                "rec_polys": [_line_poly(0)],
+            }
+        ],
+        pp_pages=None,
+        document_mode="form",
+        target_lang="en",
+        source_lang="zh-tw",
+        key_map={"p0000-l0000": {"source_text": "來源文字", "source_normalized": "來源文字"}},
+        alias_map={},
+        prefilled={},
+        raw_text=_raw_batch_output({"p0000-l0000": "Stage 1 draft."}),
+        status_meta={},
+        batch_id="batch-1",
+    )
+
+    boxes = captured_edits["payload"]["pages"][0]["boxes"]
+    assert [box["text"] for box in boxes] == ["Stage 1 draft."]
+
+
+def test_pdf_batch_stage_2_revises_llm_output_without_changing_mapping(monkeypatch, tmp_path):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    captured_edits: dict[str, object] = {}
+    _patch_finalize_side_effects(monkeypatch, captured_edits)
+    captured_items: list[translation_post_edit.PostEditItem] = []
+
+    async def fake_post_edit(items, **kwargs):
+        item_tuple = tuple(items)
+        captured_items.extend(item_tuple)
+        assert kwargs["target_lang"] == "en"
+        return translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(
+                translation_post_edit.PostEditResultItem(
+                    "p0000-l0000",
+                    "Check the Appearance of PN-88 <<UT0>> at 10 mm.",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.services.batch.translation_post_edit.post_edit_texts_batch",
+        fake_post_edit,
+    )
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+
+    batch._finalize_batch_translate_job(
+        job_id="a" * 32,
+        job_dir=job_dir,
+        ocr_pages=[
+            {
+                "page_index_0based": 0,
+                "rec_texts": [
+                    "檢查外觀 PN-88 <<UT0>> 10 mm。",
+                    "檢查外觀 PN-88 <<UT0>> 10 mm。",
+                    "確認設備是否正常。",
+                ],
+                "rec_polys": [_line_poly(0), _line_poly(1), _line_poly(2)],
+            }
+        ],
+        pp_pages=None,
+        document_mode="form",
+        target_lang="en",
+        source_lang="zh-tw",
+        key_map={
+            "p0000-l0000": {
+                "source_text": "檢查外觀 PN-88 <<UT0>> 10 mm。",
+                "source_normalized": "檢查外觀 PN-88 <<UT0>> 10 mm.",
+                "required_glossary_terms": [
+                    {"id": "0001", "source": "外觀", "target": "Appearance"}
+                ],
+            }
+        },
+        alias_map={"p0000-l0001": "p0000-l0000"},
+        prefilled={"p0000-l0002": "Confirm whether the equipment is operating normally."},
+        raw_text=_raw_batch_output(
+            {"p0000-l0000": "The Appearance shape of PN-88 <<UT0>> is checked at 10 mm."}
+        ),
+        status_meta={},
+        batch_id="batch-1",
+    )
+
+    assert [item.id for item in captured_items] == ["p0000-l0000"]
+    assert captured_items[0].source_text == "檢查外觀 PN-88 <<UT0>> 10 mm。"
+    assert captured_items[0].draft_text == "The Appearance shape of PN-88 <<UT0>> is checked at 10 mm."
+    assert captured_items[0].required_terms[0].target == "Appearance"
+    assert captured_items[0].protected_texts == ("PN-88", "<<UT0>>", "10 mm")
+    boxes = captured_edits["payload"]["pages"][0]["boxes"]
+    assert [box["text"] for box in boxes] == [
+        "Check the Appearance of PN-88 <<UT0>> at 10 mm.",
+        "Check the Appearance of PN-88 <<UT0>> at 10 mm.",
+        "Confirm whether the equipment is operating normally.",
+    ]
+    assert boxes[2]["tm_prefilled"] is True
+
+
+
+def test_pdf_batch_stage_2_keeps_fuzzy_tm_as_stage_1_reference_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(state, "PDF_OVERLAY_ENABLE_TRANSLATION_MEMORY", True)
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    fuzzy = _tm_match(
+        entry_id=303,
+        match_type="fuzzy",
+        source_text="確認首件半成品尺寸是否符合製程規範。",
+        target_text="Confirm whether the first semi-finished product dimensions comply with the process specification.",
+        score=0.91,
+    )
+    monkeypatch.setattr(
+        translation_memory,
+        "retrieve_sql",
+        lambda source_text, **kwargs: _tm_result(str(source_text), fuzzy_references=[fuzzy]),
+    )
+    monkeypatch.setattr(translation_memory, "record_reference_use", lambda entry_ids: None)
+
+    ocr_pages = [
+        {
+            "page_index_0based": 0,
+            "rec_texts": ["確認首件成品尺寸是否符合製程規範。"],
+            "rec_polys": [_line_poly(0)],
+        }
+    ]
+    items, alias_map, key_map, prefilled = build_batch_items(
+        ocr_pages,
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[],
+        target_lang="en",
+        source_lang="zh-tw",
+        document_mode="form",
+    )
+    user_content = items[0]["body"]["messages"][1]["content"]
+    assert fuzzy.target_text in user_content
+    assert prefilled == {}
+
+    captured_edits: dict[str, object] = {}
+    _patch_finalize_side_effects(monkeypatch, captured_edits)
+    captured_items: list[translation_post_edit.PostEditItem] = []
+
+    async def fake_post_edit(items, **kwargs):
+        item_tuple = tuple(items)
+        captured_items.extend(item_tuple)
+        return translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=tuple(
+                translation_post_edit.PostEditResultItem(item.id, item.draft_text)
+                for item in item_tuple
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.services.batch.translation_post_edit.post_edit_texts_batch",
+        fake_post_edit,
+    )
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+
+    batch._finalize_batch_translate_job(
+        job_id="e" * 32,
+        job_dir=job_dir,
+        ocr_pages=ocr_pages,
+        pp_pages=None,
+        document_mode="form",
+        target_lang="en",
+        source_lang="zh-tw",
+        key_map=key_map,
+        alias_map=alias_map,
+        prefilled=prefilled,
+        raw_text=_raw_batch_output({"p0000-l0000": "Model translation for current finished product."}),
+        status_meta={},
+        batch_id="batch-1",
+    )
+
+    assert captured_items[0].source_text == "確認首件成品尺寸是否符合製程規範。"
+    assert captured_items[0].draft_text == "Model translation for current finished product."
+    assert fuzzy.target_text not in captured_items[0].draft_text
+    boxes = captured_edits["payload"]["pages"][0]["boxes"]
+    assert [box["text"] for box in boxes] == ["Model translation for current finished product."]
+
+
+@pytest.mark.parametrize(
+    "post_edit_response",
+    [
+        "not json",
+        "{}",
+        '{"p0000-l0000": ""}',
+    ],
+)
+def test_pdf_batch_stage_2_invalid_output_fallbacks_to_stage_1(monkeypatch, tmp_path, post_edit_response):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    captured_edits: dict[str, object] = {}
+    _patch_finalize_side_effects(monkeypatch, captured_edits)
+
+    post_edit_calls: list[dict] = []
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            post_edit_calls.append(kwargs)
+            message = type("Message", (), {"content": post_edit_response})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    monkeypatch.setattr(
+        "app.services.translation_post_edit.openai_config.create_async_client",
+        lambda: FakeClient(),
+    )
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+
+    batch._finalize_batch_translate_job(
+        job_id="b" * 32,
+        job_dir=job_dir,
+        ocr_pages=[
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["來源文字"],
+                "rec_polys": [_line_poly(0)],
+            }
+        ],
+        pp_pages=None,
+        document_mode="form",
+        target_lang="en",
+        source_lang="zh-tw",
+        key_map={"p0000-l0000": {"source_text": "來源文字", "source_normalized": "來源文字"}},
+        alias_map={},
+        prefilled={},
+        raw_text=_raw_batch_output({"p0000-l0000": "Stage 1 draft."}),
+        status_meta={},
+        batch_id="batch-1",
+    )
+
+    boxes = captured_edits["payload"]["pages"][0]["boxes"]
+    assert [box["text"] for box in boxes] == ["Stage 1 draft."]
+    assert len(post_edit_calls) == 1
 
 
 def test_batch_translate_job_completes_when_all_segments_are_sql_tm_exact(monkeypatch, tmp_path):
