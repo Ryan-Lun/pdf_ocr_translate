@@ -1221,12 +1221,36 @@ class EnhancedWordTranslator:
                         append_once(paragraph)
         return paragraphs
 
-    def get_all_paragraphs(self, doc: Document) -> list[Paragraph]:
-        all_paragraphs = self.get_body_and_table_paragraphs(doc)
+    def get_header_footer_paragraphs(self, doc: Document) -> list[Paragraph]:
+        paragraphs: list[Paragraph] = []
         for section in doc.sections:
-            all_paragraphs.extend(section.header.paragraphs)
-            all_paragraphs.extend(section.footer.paragraphs)
-        return all_paragraphs
+            paragraphs.extend(section.header.paragraphs)
+            paragraphs.extend(section.footer.paragraphs)
+        return paragraphs
+
+    def get_all_paragraphs(self, doc: Document) -> list[Paragraph]:
+        return [
+            *self.get_body_and_table_paragraphs(doc),
+            *self.get_header_footer_paragraphs(doc),
+        ]
+
+    def get_word_translation_paragraphs(
+        self,
+        doc: Document,
+        *,
+        layout_mode: str,
+        translate_tables: bool,
+    ) -> list[Paragraph]:
+        if layout_mode == WORD_LAYOUT_BILINGUAL_BELOW:
+            if translate_tables:
+                return self.get_body_and_table_paragraphs(doc)
+            return list(doc.paragraphs)
+        if translate_tables:
+            return self.get_all_paragraphs(doc)
+        return [
+            *list(doc.paragraphs),
+            *self.get_header_footer_paragraphs(doc),
+        ]
 
     async def translate_text(
         self,
@@ -1589,15 +1613,15 @@ class EnhancedWordTranslator:
         warning_callback: Callable[[str], None] | None = None,
         record_tm_usage_on_save: bool = True,
         layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
+        translate_tables: bool = True,
     ):
         layout_mode = normalize_word_layout_mode(layout_mode)
         doc = docx.Document(source_path)
         self.mark_update_fields_on_open(doc)
-        all_paragraphs = self.get_all_paragraphs(doc)
-        translatable_paragraphs = (
-            self.get_body_and_table_paragraphs(doc)
-            if layout_mode == WORD_LAYOUT_BILINGUAL_BELOW
-            else all_paragraphs
+        translatable_paragraphs = self.get_word_translation_paragraphs(
+            doc,
+            layout_mode=layout_mode,
+            translate_tables=translate_tables,
         )
         glossary_entries = glossary.load_combined_glossary()
         if debug_job_dir is None:

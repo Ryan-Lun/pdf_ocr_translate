@@ -39,8 +39,16 @@ class _FailingClient:
 
 
 def _client_returning_translations(translations: list[str]):
+    client, _requests = _client_returning_translations_with_requests(translations)
+    return client
+
+
+def _client_returning_translations_with_requests(translations: list[str]):
+    requests: list[dict] = []
+
     class _Completions:
         async def create(self, **kwargs):
+            requests.append(kwargs)
             payload = kwargs["messages"][-1]["content"]
             if "<SOURCE_ITEMS_JSON>\n" in payload:
                 raw_items = payload.split("<SOURCE_ITEMS_JSON>\n", 1)[1].split(
@@ -67,7 +75,7 @@ def _client_returning_translations(translations: list[str]):
     class _Client:
         chat = _Chat()
 
-    return _Client()
+    return _Client(), requests
 
 
 async def _consume_translation(
@@ -79,6 +87,7 @@ async def _consume_translation(
     target_language: str = "en",
     system_prompt: str | None = None,
     layout_mode: str = "replace_original",
+    translate_tables: bool = True,
 ) -> None:
     async for _progress, _unused_quality in translator.process_translation(
         source_path=source_path,
@@ -88,6 +97,7 @@ async def _consume_translation(
         user_terms=[],
         system_prompt=system_prompt,
         layout_mode=layout_mode,
+        translate_tables=translate_tables,
     ):
         pass
 
@@ -231,6 +241,194 @@ def test_word_translation_tm_exact_match_inserts_bilingual_translation(app, tmp_
         "確認設備。",
         "Confirm the equipment.",
     ]
+
+
+def test_word_translation_bilingual_below_can_exclude_table_content_from_pipeline(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    client, requests = _client_returning_translations_with_requests(["Body translation."])
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: client,
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("本文內容")
+    table = source_doc.add_table(rows=1, cols=1)
+    table.cell(0, 0).paragraphs[0].text = "表格內容"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+            translate_tables=False,
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "本文內容",
+        "Body translation.",
+    ]
+    assert [paragraph.text for paragraph in translated_doc.tables[0].cell(0, 0).paragraphs] == [
+        "表格內容",
+    ]
+    assert len(requests) == 1
+    payload = requests[0]["messages"][-1]["content"]
+    assert "本文內容" in payload
+    assert "表格內容" not in payload
+
+
+def test_word_translation_replace_original_can_exclude_table_content_from_pipeline(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    client, requests = _client_returning_translations_with_requests(["Body translation."])
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: client,
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("本文內容")
+    table = source_doc.add_table(rows=1, cols=1)
+    table.cell(0, 0).paragraphs[0].text = "表格內容"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="replace_original",
+            translate_tables=False,
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == ["Body translation."]
+    assert [paragraph.text for paragraph in translated_doc.tables[0].cell(0, 0).paragraphs] == [
+        "表格內容",
+    ]
+    payload = requests[0]["messages"][-1]["content"]
+    assert "本文內容" in payload
+    assert "表格內容" not in payload
+
+
+def test_word_translation_can_exclude_merged_table_cell_content(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Body translation."]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("本文內容")
+    table = source_doc.add_table(rows=1, cols=2)
+    merged_cell = table.cell(0, 0).merge(table.cell(0, 1))
+    merged_cell.paragraphs[0].text = "表格內容"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+            translate_tables=False,
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "本文內容",
+        "Body translation.",
+    ]
+    assert [paragraph.text for paragraph in translated_doc.tables[0].cell(0, 0).paragraphs] == [
+        "表格內容",
+    ]
+
+
+def test_word_translation_excluded_table_does_not_use_tm_or_glossary_artifacts(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
+    table_entry_id = translation_memory.upsert_sql_entry(
+        source_text="表格內容",
+        target_text="approved table content",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="word",
+        status="approved",
+        source="test",
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [("表格內容", "table content")],
+    )
+
+    client, requests = _client_returning_translations_with_requests(["Body translation."])
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: client,
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output" / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("本文內容")
+    table = source_doc.add_table(rows=1, cols=1)
+    table.cell(0, 0).paragraphs[0].text = "表格內容"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="replace_original",
+            translate_tables=False,
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == ["Body translation."]
+    assert [paragraph.text for paragraph in translated_doc.tables[0].cell(0, 0).paragraphs] == [
+        "表格內容",
+    ]
+    assert "表格內容" not in requests[0]["messages"][-1]["content"]
+    assert json.loads((tmp_path / "tm_matches.json").read_text(encoding="utf-8")) == []
+    assert json.loads((tmp_path / "tm_references.json").read_text(encoding="utf-8")) == []
+    assert json.loads((tmp_path / "glossary_hits.json").read_text(encoding="utf-8")) == []
+    entry = translation_memory.get_sql_entry(table_entry_id)
+    assert entry is not None
+    assert entry.exact_reuse_count == 0
 
 
 def test_word_translation_bilingual_below_does_not_continue_word_numbering(tmp_path, monkeypatch):
