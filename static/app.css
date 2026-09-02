@@ -1063,6 +1063,30 @@ body.has-global-nav:not(.home-hub) .shell {
   gap: 1rem;
 }
 
+.field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+
+.checkbox-row input[type="checkbox"] {
+  margin: 0;
+}
+
+.checkbox-row span {
+  display: inline;
+  margin: 0;
+}
+
 .form-note {
   margin: 1.5rem 0;
   padding: 1.2rem;

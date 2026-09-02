@@ -1683,7 +1683,7 @@ def test_word_workspace_page_does_not_render_quality_score(client):
     assert 'value="replace_original"' in html
     assert 'value="bilingual_below"' in html
     assert 'name="translate_tables"' in html
-    assert '不翻譯表格' in html
+    assert '排除表格內容' in html
 
 
 def test_word_translation_with_system_prompt_includes_prompt(tmp_path, monkeypatch):
