@@ -18,8 +18,9 @@ import docx
 from docx.document import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Twips
 from docx.text.paragraph import Paragraph
-from lang_utils import describe_target_language, traditional_chinese_instruction
+from lang_utils import describe_target_language, normalize_lang_code, traditional_chinese_instruction
 from werkzeug.utils import secure_filename
 
 from . import audit_service, glossary, jobs, openai_config, state, translation_debug, translation_memory, word_layout
@@ -30,6 +31,7 @@ WORD_JOB_EVENTS_LOCK = threading.Lock()
 WORD_ALLOWED_EXTENSIONS = {".doc", ".docx"}
 WORD_LAYOUT_REPLACE_ORIGINAL = word_layout.REPLACE_ORIGINAL
 WORD_LAYOUT_BILINGUAL_BELOW = word_layout.BILINGUAL_BELOW
+_CJK_TEXT_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]")
 
 
 class WordTranslationCancelled(Exception):
@@ -968,6 +970,25 @@ class EnhancedWordTranslator:
     def is_translatable(self, text: str) -> bool:
         return bool(text and text.strip() and any(char.isalpha() for char in text))
 
+    def should_translate_word_segment(
+        self,
+        text: str,
+        *,
+        source_lang: str,
+        target_lang: str,
+        layout_mode: str,
+    ) -> bool:
+        if not self.is_translatable(text):
+            return False
+        if (
+            layout_mode == WORD_LAYOUT_BILINGUAL_BELOW
+            and normalize_lang_code(target_lang) == "en"
+            and normalize_lang_code(source_lang) in {"auto", "zh", "zh-cn"}
+            and not _CJK_TEXT_RE.search(text)
+        ):
+            return False
+        return True
+
     def _build_system_prompt(
         self,
         source_lang: str,
@@ -1142,10 +1163,10 @@ class EnhancedWordTranslator:
         except Exception:
             return
 
-    def paragraph_has_numbering(self, paragraph: Paragraph) -> bool:
+    def paragraph_numbering_properties(self, paragraph: Paragraph) -> Any | None:
         paragraph_properties = paragraph._p.pPr
         if paragraph_properties is not None and paragraph_properties.numPr is not None:
-            return True
+            return paragraph_properties.numPr
         style = paragraph.style
         seen_style_ids: set[int] = set()
         while style is not None and id(style) not in seen_style_ids:
@@ -1153,9 +1174,77 @@ class EnhancedWordTranslator:
             style_element = getattr(style, "element", None)
             style_properties = getattr(style_element, "pPr", None)
             if style_properties is not None and style_properties.numPr is not None:
-                return True
+                return style_properties.numPr
             style = getattr(style, "base_style", None)
-        return False
+        return None
+
+    def paragraph_has_numbering(self, paragraph: Paragraph) -> bool:
+        return self.paragraph_numbering_properties(paragraph) is not None
+
+    def _numbering_property_value(self, numbering_properties: Any, property_name: str) -> str:
+        child = numbering_properties.find(qn(f"w:{property_name}"))
+        if child is None:
+            return ""
+        return str(child.get(qn("w:val")) or "")
+
+    def numbering_text_indent_twips(self, paragraph: Paragraph) -> int | None:
+        numbering_properties = self.paragraph_numbering_properties(paragraph)
+        if numbering_properties is None:
+            return None
+        num_id = self._numbering_property_value(numbering_properties, "numId")
+        ilvl = self._numbering_property_value(numbering_properties, "ilvl") or "0"
+        if not num_id:
+            return None
+        try:
+            numbering_root = paragraph.part.numbering_part.element
+        except Exception:
+            return None
+        abstract_num_id = ""
+        for num in numbering_root.findall(qn("w:num")):
+            if str(num.get(qn("w:numId")) or "") != num_id:
+                continue
+            abstract_num_id_element = num.find(qn("w:abstractNumId"))
+            if abstract_num_id_element is not None:
+                abstract_num_id = str(abstract_num_id_element.get(qn("w:val")) or "")
+            break
+        if not abstract_num_id:
+            return None
+        for abstract_num in numbering_root.findall(qn("w:abstractNum")):
+            if str(abstract_num.get(qn("w:abstractNumId")) or "") != abstract_num_id:
+                continue
+            for level in abstract_num.findall(qn("w:lvl")):
+                if str(level.get(qn("w:ilvl")) or "") != ilvl:
+                    continue
+                p_pr = level.find(qn("w:pPr"))
+                indent = p_pr.find(qn("w:ind")) if p_pr is not None else None
+                if indent is None:
+                    return None
+                left = str(indent.get(qn("w:left")) or "")
+                return int(left) if left.isdigit() else None
+        return None
+
+    def copy_paragraph_format(self, source_paragraph: Paragraph, target_paragraph: Paragraph) -> None:
+        source_format = source_paragraph.paragraph_format
+        target_format = target_paragraph.paragraph_format
+        target_paragraph.alignment = source_paragraph.alignment
+        target_format.left_indent = source_format.left_indent
+        target_format.right_indent = source_format.right_indent
+        target_format.first_line_indent = source_format.first_line_indent
+        target_format.space_before = source_format.space_before
+        target_format.space_after = source_format.space_after
+        target_format.line_spacing = source_format.line_spacing
+        target_format.line_spacing_rule = source_format.line_spacing_rule
+        target_format.keep_together = source_format.keep_together
+        target_format.keep_with_next = source_format.keep_with_next
+        target_format.page_break_before = source_format.page_break_before
+        target_format.widow_control = source_format.widow_control
+        if target_format.first_line_indent is not None and target_format.first_line_indent < 0:
+            target_format.first_line_indent = None
+        if self.paragraph_has_numbering(source_paragraph):
+            if target_format.left_indent is None:
+                numbering_indent = self.numbering_text_indent_twips(source_paragraph)
+                if numbering_indent is not None:
+                    target_format.left_indent = Twips(numbering_indent)
 
     def insert_paragraph_after(self, paragraph: Paragraph, new_text: str) -> Paragraph:
         new_paragraph_element = OxmlElement("w:p")
@@ -1163,6 +1252,7 @@ class EnhancedWordTranslator:
         new_paragraph = Paragraph(new_paragraph_element, paragraph._parent)
         if not self.paragraph_has_numbering(paragraph):
             new_paragraph.style = paragraph.style
+        self.copy_paragraph_format(paragraph, new_paragraph)
         new_run = new_paragraph.add_run(new_text or "")
         first_run = paragraph.runs[0] if paragraph.runs else None
         if first_run is not None:
@@ -1651,7 +1741,12 @@ class EnhancedWordTranslator:
             prefix = match.group(0) if match else ""
             if match:
                 core_text = core_text[len(prefix) :]
-            if self.is_translatable(core_text):
+            if self.should_translate_word_segment(
+                core_text,
+                source_lang=source_language,
+                target_lang=target_language,
+                layout_mode=layout_mode,
+            ):
                 texts_for_translation[core_text] = {
                     "paragraph": paragraph,
                     "prefix": prefix,

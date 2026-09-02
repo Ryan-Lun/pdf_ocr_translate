@@ -10,6 +10,8 @@ from zipfile import ZipFile
 import docx
 import pytest
 from docx.enum.style import WD_STYLE_TYPE
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, Pt, Twips
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
@@ -154,6 +156,136 @@ def test_word_translation_bilingual_below_keeps_source_and_inserts_translation(t
     ]
     assert translated_doc.paragraphs[1].runs[0].bold is True
     assert requests
+
+
+def test_word_translation_bilingual_below_copies_source_paragraph_format(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Ensure product development follows a regular process."]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    paragraph = source_doc.add_paragraph("為確保產品開發活動能夠遵循固定流程。")
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    paragraph_format = paragraph.paragraph_format
+    paragraph_format.left_indent = Inches(0.35)
+    paragraph_format.right_indent = Inches(0.1)
+    paragraph_format.first_line_indent = Inches(0.2)
+    paragraph_format.space_before = Pt(6)
+    paragraph_format.space_after = Pt(3)
+    paragraph_format.line_spacing = 1.15
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            target_language="en",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    source_paragraph = translated_doc.paragraphs[0]
+    translated_paragraph = translated_doc.paragraphs[1]
+    assert translated_paragraph.text == "Ensure product development follows a regular process."
+    assert translated_paragraph.alignment == source_paragraph.alignment
+    assert translated_paragraph.paragraph_format.left_indent == source_paragraph.paragraph_format.left_indent
+    assert translated_paragraph.paragraph_format.right_indent == source_paragraph.paragraph_format.right_indent
+    assert translated_paragraph.paragraph_format.first_line_indent == source_paragraph.paragraph_format.first_line_indent
+    assert translated_paragraph.paragraph_format.space_before == source_paragraph.paragraph_format.space_before
+    assert translated_paragraph.paragraph_format.space_after == source_paragraph.paragraph_format.space_after
+    assert translated_paragraph.paragraph_format.line_spacing == source_paragraph.paragraph_format.line_spacing
+
+
+def test_word_translation_bilingual_below_clears_negative_first_line_indent(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Figure caption translation."]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    paragraph = source_doc.add_paragraph("      圖二、針頭基準示意圖")
+    paragraph.paragraph_format.left_indent = Twips(1700)
+    paragraph.paragraph_format.first_line_indent = Twips(-566)
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            target_language="en",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    translated_paragraph = translated_doc.paragraphs[1]
+    assert translated_paragraph.text == "Figure caption translation."
+    assert translated_paragraph.paragraph_format.left_indent == Twips(1700)
+    assert translated_paragraph.paragraph_format.first_line_indent is None
+
+
+def test_word_translation_bilingual_below_skips_existing_english_when_translating_to_english(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    client, requests = _client_returning_translations_with_requests(["Confirm the equipment."])
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: client,
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("確認設備。")
+    source_doc.add_paragraph("Confirm the equipment before operation.")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            target_language="en",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "確認設備。",
+        "Confirm the equipment.",
+        "Confirm the equipment before operation.",
+    ]
+    payload = requests[0]["messages"][-1]["content"]
+    assert "確認設備。" in payload
+    assert "Confirm the equipment before operation." not in payload
 
 
 def test_word_translation_replace_original_still_replaces_body_paragraph(tmp_path, monkeypatch):
@@ -445,7 +577,12 @@ def test_word_translation_bilingual_below_does_not_continue_word_numbering(tmp_p
     source_path = tmp_path / "source.docx"
     output_path = tmp_path / "output.docx"
     source_doc = docx.Document()
-    source_doc.add_paragraph("目的：規定自有產品之編碼及圖名命名依據。", style="List Number")
+    numbered_paragraph = source_doc.add_paragraph(
+        "目的：規定自有產品之編碼及圖名命名依據。",
+        style="List Number",
+    )
+    numbered_paragraph.paragraph_format.left_indent = Twips(720)
+    numbered_paragraph.paragraph_format.first_line_indent = Twips(-360)
     source_doc.save(source_path)
 
     translator = EnhancedWordTranslator()
@@ -466,6 +603,8 @@ def test_word_translation_bilingual_below_does_not_continue_word_numbering(tmp_p
     ]
     assert translated_doc.paragraphs[0].style.name == "List Number"
     assert translated_doc.paragraphs[1].style.name != "List Number"
+    assert translated_doc.paragraphs[1].paragraph_format.left_indent == Twips(720)
+    assert translated_doc.paragraphs[1].paragraph_format.first_line_indent is None
 
 
 def test_word_translation_bilingual_below_does_not_continue_inherited_numbering_style(tmp_path, monkeypatch):
