@@ -158,6 +158,36 @@ def _load_module():
 
     fake_translation_post_edit.post_edit_texts_batch_sync = fake_post_edit_texts_batch_sync
     fake_translation_post_edit.collect_exact_protected_texts = lambda *texts: tuple()
+
+    def fake_write_post_edit_artifact(job_dir, items, result, filename="stage_2_post_edit.json"):
+        path = Path(job_dir) / filename
+        item_by_id = {item.id: item for item in items}
+        path.write_text(
+            json.dumps(
+                {
+                    "enabled": result.enabled,
+                    "items": [
+                        {
+                            "id": result_item.id,
+                            "source_text": item_by_id[result_item.id].source_text,
+                            "stage_1_draft": item_by_id[result_item.id].draft_text,
+                            "stage_2_revised": getattr(result_item, "stage_2_text", None) or result_item.text,
+                            "final_text": result_item.text,
+                            "changed": (getattr(result_item, "stage_2_text", None) or result_item.text) != item_by_id[result_item.id].draft_text,
+                            "used_fallback": result_item.used_fallback,
+                            "fallback_reason": result_item.fallback_reason,
+                            "validation_warnings": list(getattr(result_item, "validation_warnings", ())),
+                        }
+                        for result_item in result.items
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    fake_translation_post_edit.write_post_edit_artifact = fake_write_post_edit_artifact
     fake_state.DOC_TRANSLATE_MODEL = "fake-model"
     fake_state.DOC_TRANSLATE_MAX_CHARS = 4000
     fake_state.DOC_TRANSLATE_SYSTEM_PROMPT = "Translate HTML text nodes."
@@ -375,8 +405,15 @@ def test_translate_html_file_stage_2_revises_text_node_after_stage_1(tmp_path: P
     module._get_translation_client = lambda: (FakeClient(), "fake-model")
     module.translation_post_edit.post_edit_texts_batch = fake_post_edit
 
-    module.translate_html_file(source, output, target_lang="en")
+    debug_job_dir = tmp_path / "job"
+    debug_job_dir.mkdir()
 
+    module.translate_html_file(source, output, target_lang="en", debug_job_dir=debug_job_dir)
+
+    artifact = json.loads((debug_job_dir / "pdf_markdown_stage_2_post_edit.json").read_text(encoding="utf-8"))
+    assert artifact["items"][0]["stage_1_draft"] == "Stage 1 draft."
+    assert artifact["items"][0]["stage_2_revised"] == "Stage 2 revision."
+    assert artifact["items"][0]["changed"] is True
     assert output.read_text(encoding="utf-8") == "<p>Stage 2 revision.</p>"
     assert captured_items[0].source_text == "來源文字"
     assert captured_items[0].draft_text == "Stage 1 draft."

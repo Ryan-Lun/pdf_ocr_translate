@@ -1197,6 +1197,7 @@ def _post_edit_batch_translations(
     *,
     key_map: dict[str, dict[str, Any]],
     target_lang: str,
+    job_dir: Path | None = None,
 ) -> dict[str, str]:
     if not translations or not translation_post_edit.is_enabled():
         return translations
@@ -1227,7 +1228,25 @@ def _post_edit_batch_translations(
         )
     except Exception as exc:
         logger.warning("PDF batch Stage 2 post-edit failed, using Stage 1 drafts error=%s", exc)
+        if job_dir is not None:
+            translation_post_edit.write_post_edit_artifact(
+                job_dir,
+                post_edit_items,
+                translation_post_edit.build_fallback_result(
+                    post_edit_items,
+                    reason=f"post_edit_error:{exc.__class__.__name__}",
+                ),
+                filename="pdf_batch_stage_2_post_edit.json",
+            )
         return translations
+
+    if job_dir is not None:
+        translation_post_edit.write_post_edit_artifact(
+            job_dir,
+            post_edit_items,
+            post_edit_result,
+            filename="pdf_batch_stage_2_post_edit.json",
+        )
 
     revised = dict(translations)
     for result_item in post_edit_result.items:
@@ -1842,6 +1861,7 @@ def _finalize_batch_translate_job(
         stage_1_translations,
         key_map=key_map,
         target_lang=target_lang,
+        job_dir=job_dir,
     )
     translations = {
         key: glossary.restore_protected_glossary_terms(value)

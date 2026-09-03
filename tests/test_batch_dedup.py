@@ -2530,6 +2530,20 @@ def test_pdf_batch_stage_2_revises_llm_output_without_changing_mapping(monkeypat
     assert captured_items[0].draft_text == "The Appearance shape of PN-88 <<UT0>> is checked at 10 mm."
     assert captured_items[0].required_terms[0].target == "Appearance"
     assert captured_items[0].protected_texts == ("PN-88", "<<UT0>>", "10 mm")
+    artifact = json.loads((job_dir / "pdf_batch_stage_2_post_edit.json").read_text(encoding="utf-8"))
+    assert artifact["items"] == [
+        {
+            "id": "p0000-l0000",
+            "source_text": "檢查外觀 PN-88 <<UT0>> 10 mm。",
+            "stage_1_draft": "The Appearance shape of PN-88 <<UT0>> is checked at 10 mm.",
+            "stage_2_revised": "Check the Appearance of PN-88 <<UT0>> at 10 mm.",
+            "final_text": "Check the Appearance of PN-88 <<UT0>> at 10 mm.",
+            "changed": True,
+            "used_fallback": False,
+            "fallback_reason": None,
+            "validation_warnings": [],
+        }
+    ]
     boxes = captured_edits["payload"]["pages"][0]["boxes"]
     assert [box["text"] for box in boxes] == [
         "Check the Appearance of PN-88 <<UT0>> at 10 mm.",
@@ -2682,6 +2696,14 @@ def test_pdf_batch_stage_2_invalid_output_fallbacks_to_stage_1(monkeypatch, tmp_
 
     boxes = captured_edits["payload"]["pages"][0]["boxes"]
     assert [box["text"] for box in boxes] == ["Stage 1 draft."]
+    artifact = json.loads((job_dir / "pdf_batch_stage_2_post_edit.json").read_text(encoding="utf-8"))
+    assert artifact["items"][0]["final_text"] == "Stage 1 draft."
+    assert artifact["items"][0]["used_fallback"] is True
+    assert artifact["items"][0]["fallback_reason"] in {
+        "post_edit_error:JSONDecodeError",
+        "missing_output_id",
+        "empty_output",
+    }
     assert len(post_edit_calls) == 1
 
 

@@ -111,6 +111,7 @@ async def _consume_translation(
     layout_mode: str = "replace_original",
     translate_tables: bool = True,
     user_terms: list[str] | None = None,
+    debug_job_dir: Path | None = None,
 ) -> None:
     async for _progress, _unused_quality in translator.process_translation(
         source_path=source_path,
@@ -121,6 +122,7 @@ async def _consume_translation(
         system_prompt=system_prompt,
         layout_mode=layout_mode,
         translate_tables=translate_tables,
+        debug_job_dir=debug_job_dir,
     ):
         pass
 
@@ -430,8 +432,24 @@ def test_word_translation_stage_2_revises_llm_batch_output(tmp_path, monkeypatch
             output_path,
             source_language="zh",
             user_terms=["ABC-123"],
+            debug_job_dir=tmp_path,
         )
     )
+
+    artifact = json.loads((tmp_path / "word_stage_2_post_edit.json").read_text(encoding="utf-8"))
+    assert artifact["items"] == [
+        {
+            "id": "item_0001",
+            "source_text": "外觀形狀 ABC-123 10 mm 已確認。",
+            "stage_1_draft": "The Appearance shape for ABC-123 at 10 mm was checked.",
+            "stage_2_revised": "The shape of the Appearance for ABC-123 at 10 mm was checked.",
+            "final_text": "The shape of the Appearance for ABC-123 at 10 mm was checked.",
+            "changed": True,
+            "used_fallback": False,
+            "fallback_reason": None,
+            "validation_warnings": [],
+        }
+    ]
 
     translated_doc = docx.Document(output_path)
     assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
@@ -440,7 +458,7 @@ def test_word_translation_stage_2_revises_llm_batch_output(tmp_path, monkeypatch
     assert captured_items[0].source_text == "外觀形狀 ABC-123 10 mm 已確認。"
     assert captured_items[0].draft_text == "The Appearance shape for ABC-123 at 10 mm was checked."
     assert captured_items[0].required_terms[0].target == "Appearance"
-    assert captured_items[0].protected_texts == ("ABC-123",)
+    assert captured_items[0].protected_texts == ("ABC-123", "10 mm")
 
 
 def test_word_translation_stage_2_revises_bilingual_below_llm_output(tmp_path, monkeypatch):
@@ -540,6 +558,50 @@ def test_word_translation_stage_2_fallback_keeps_stage_1_output(tmp_path, monkey
     assert [paragraph.text for paragraph in translated_doc.paragraphs] == ["Stage 1 draft."]
 
 
+def test_word_translation_stage_2_error_writes_fallback_artifact(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Stage 1 draft."]),
+    )
+
+    async def fail_post_edit(items, **kwargs):
+        raise TimeoutError("post edit timeout")
+
+    monkeypatch.setattr(
+        "app.services.word_translate.translation_post_edit.post_edit_texts_batch",
+        fail_post_edit,
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("來源文字")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            debug_job_dir=tmp_path,
+        )
+    )
+
+    artifact = json.loads((tmp_path / "word_stage_2_post_edit.json").read_text(encoding="utf-8"))
+    assert artifact["items"][0]["stage_1_draft"] == "Stage 1 draft."
+    assert artifact["items"][0]["final_text"] == "Stage 1 draft."
+    assert artifact["items"][0]["used_fallback"] is True
+    assert artifact["items"][0]["fallback_reason"] == "post_edit_error:TimeoutError"
+
+
 @pytest.mark.parametrize(
     "post_edit_response",
     [
@@ -636,7 +698,7 @@ def test_word_translation_stage_2_passes_and_preserves_protected_tokens_and_part
         "Check the Appearance of PN-88 <<UT0>> at 10 mm."
     ]
     assert captured_items[0].required_terms[0].target == "Appearance"
-    assert captured_items[0].protected_texts == ("PN-88", "<<UT0>>")
+    assert captured_items[0].protected_texts == ("PN-88", "<<UT0>>", "10 mm")
 
 
 def test_word_translation_tm_exact_match_inserts_bilingual_translation(app, tmp_path, monkeypatch):

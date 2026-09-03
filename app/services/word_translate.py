@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 import docx
 from docx.document import Document
@@ -124,6 +124,18 @@ def _append_word_tm_reference_payload(
         f"{json.dumps(_serialize_word_tm_references(references), ensure_ascii=False)}\n"
         "</TRANSLATION_MEMORY_REFERENCES>"
     )
+
+
+def _merge_exact_protected_texts(
+    user_terms: Iterable[str],
+    detected_texts: Iterable[str],
+) -> tuple[str, ...]:
+    protected: list[str] = []
+    for value in (*tuple(user_terms), *tuple(detected_texts)):
+        cleaned = str(value or "").strip()
+        if cleaned and cleaned not in protected:
+            protected.append(cleaned)
+    return tuple(protected)
 
 
 def _word_translate_text_kwargs(
@@ -1361,6 +1373,7 @@ class EnhancedWordTranslator:
         user_terms: list[str],
         cancel_event: threading.Event | None = None,
         warning_callback: Callable[[str], None] | None = None,
+        debug_job_dir: Path | None = None,
     ) -> dict[str, str]:
         if not translations or not translation_post_edit.is_enabled():
             return translations
@@ -1382,7 +1395,10 @@ class EnhancedWordTranslator:
                     required_terms=tuple(glossary_application.required_terms)
                     if glossary_application is not None
                     else tuple(),
-                    protected_texts=tuple(user_terms),
+                    protected_texts=_merge_exact_protected_texts(
+                        user_terms,
+                        translation_post_edit.collect_exact_protected_texts(text, draft_text),
+                    ),
                 )
             )
         if not post_edit_items:
@@ -1397,7 +1413,25 @@ class EnhancedWordTranslator:
             logger.warning("Word Stage 2 post-edit failed, using Stage 1 drafts error=%s", exc)
             if warning_callback is not None:
                 warning_callback(f"Word Stage 2 後編輯失敗，沿用 Stage 1 譯文：{exc}")
+            if debug_job_dir is not None:
+                translation_post_edit.write_post_edit_artifact(
+                    debug_job_dir,
+                    post_edit_items,
+                    translation_post_edit.build_fallback_result(
+                        post_edit_items,
+                        reason=f"post_edit_error:{exc.__class__.__name__}",
+                    ),
+                    filename="word_stage_2_post_edit.json",
+                )
             return translations
+
+        if debug_job_dir is not None:
+            translation_post_edit.write_post_edit_artifact(
+                debug_job_dir,
+                post_edit_items,
+                post_edit_result,
+                filename="word_stage_2_post_edit.json",
+            )
 
         revised = dict(translations)
         for result_item in post_edit_result.items:
@@ -1469,6 +1503,7 @@ class EnhancedWordTranslator:
                 user_terms=user_terms,
                 cancel_event=cancel_event,
                 warning_callback=warning_callback,
+                debug_job_dir=debug_job_dir,
             )
 
         item_ids = item_ids or {
@@ -1598,6 +1633,7 @@ class EnhancedWordTranslator:
                 user_terms=user_terms,
                 cancel_event=cancel_event,
                 warning_callback=warning_callback,
+                debug_job_dir=debug_job_dir,
             )
             parsed_translations = {item_ids[text]: results[text] for text in results if text in item_ids}
             if debug_job_dir is not None and debug_custom_id:
@@ -1627,6 +1663,7 @@ class EnhancedWordTranslator:
                     translation_memory_references=translation_memory_references,
                     system_prompt_adjustment=system_prompt_adjustment,
                     glossary_entries=glossary_entries,
+                    debug_job_dir=debug_job_dir,
                     cancel_event=cancel_event,
                     warning_callback=warning_callback,
                 )
@@ -1646,6 +1683,7 @@ class EnhancedWordTranslator:
                 user_terms=user_terms,
                 cancel_event=cancel_event,
                 warning_callback=warning_callback,
+                debug_job_dir=debug_job_dir,
             )
 
     async def process_translation(

@@ -289,33 +289,52 @@ def _post_edit_markdown_translation(
     required_terms: glossary.RequiredTermContext = None,
     target_lang: str,
     debug_custom_id: str | None = None,
+    debug_job_dir: Path | None = None,
     warning_callback: Callable[[str], None] | None = None,
 ) -> str:
     if not draft_text.strip() or not translation_post_edit.is_enabled():
         return draft_text
     required_term_tuple = tuple(getattr(required_terms, "required_terms", ()) or ())
     item_id = debug_custom_id or "snippet"
+    post_edit_items = [
+        translation_post_edit.PostEditItem(
+            id=item_id,
+            source_text=source_text,
+            draft_text=draft_text,
+            required_terms=required_term_tuple,
+            protected_texts=translation_post_edit.collect_exact_protected_texts(
+                source_text,
+                draft_text,
+            ),
+        )
+    ]
     try:
         result = translation_post_edit.post_edit_texts_batch_sync(
-            [
-                translation_post_edit.PostEditItem(
-                    id=item_id,
-                    source_text=source_text,
-                    draft_text=draft_text,
-                    required_terms=required_term_tuple,
-                    protected_texts=translation_post_edit.collect_exact_protected_texts(
-                        source_text,
-                        draft_text,
-                    ),
-                )
-            ],
+            post_edit_items,
             target_lang=target_lang,
         )
     except Exception as exc:
         logger.warning("Markdown Stage 2 post-edit failed, using Stage 1 draft error=%s", exc)
         if warning_callback is not None:
             warning_callback(f"PDF 翻譯重建 Stage 2 後編輯失敗，沿用 Stage 1 譯文：{exc}")
+        if debug_job_dir is not None:
+            translation_post_edit.write_post_edit_artifact(
+                debug_job_dir,
+                post_edit_items,
+                translation_post_edit.build_fallback_result(
+                    post_edit_items,
+                    reason=f"post_edit_error:{exc.__class__.__name__}",
+                ),
+                filename="pdf_markdown_stage_2_post_edit.json",
+            )
         return draft_text
+    if debug_job_dir is not None:
+        translation_post_edit.write_post_edit_artifact(
+            debug_job_dir,
+            post_edit_items,
+            result,
+            filename="pdf_markdown_stage_2_post_edit.json",
+        )
     if not result.items:
         return draft_text
     result_item = result.items[0]
@@ -388,6 +407,7 @@ def _translate_snippet(
         required_terms=glossary_application,
         target_lang=target_lang,
         debug_custom_id=debug_custom_id,
+        debug_job_dir=debug_job_dir,
         warning_callback=warning_callback,
     )
     if debug_job_dir is not None and debug_custom_id and restored:
@@ -457,6 +477,7 @@ def _translate_text(
         required_terms=glossary_application,
         target_lang=target_lang,
         debug_custom_id=debug_custom_id,
+        debug_job_dir=debug_job_dir,
         warning_callback=warning_callback,
     )
     if debug_job_dir is not None and debug_custom_id and restored:
