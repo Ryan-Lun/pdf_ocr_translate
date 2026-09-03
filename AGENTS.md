@@ -25,6 +25,9 @@ The project uses `pytest` with Flask test clients and temporary-path fixtures. A
 ## Commit & Pull Request Guidelines
 Recent history uses short, task-focused commit messages in Traditional Chinese, for example `修復補翻選區後畫面上移問題`. Keep commits narrowly scoped and written in imperative form. Pull requests should include a concise summary, affected user flow, test evidence (`pytest` command used), and screenshots for editor or layout changes.
 
+## Versioning Guidelines
+Before any user-approved commit that is intended for deployment or changes user-visible behavior, static CSS/JS/templates, database schema, configuration, or release documentation, remind the user to decide whether the system version should be bumped. The single version source is `pyproject.toml` under `[project].version`; update `CHANGELOG.md` in the same versioning change. Use PATCH for bug fixes and small UI/static changes, MINOR for backward-compatible features, and MAJOR for breaking changes or manual migrations. Static assets use the app version for cache busting, so deployed CSS/JS/template changes generally require a version bump.
+
 ## Security & Configuration Tips
 Keep secrets in `.env` and avoid committing real credentials or generated job data. Database schema helpers live in `scripts/`, including `scripts/init_sqlserver_schema.sql`; review schema changes alongside application code before merging.
 
