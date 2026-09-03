@@ -786,6 +786,7 @@ def test_word_translation_tm_exact_match_skips_stage_2_in_replace_original(app, 
 
 def test_word_translation_bilingual_below_can_exclude_table_content_from_pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", False)
     monkeypatch.setattr(
         "app.services.word_translate.glossary.load_combined_glossary",
         lambda: [],
@@ -1304,6 +1305,7 @@ def test_word_translation_sql_tm_exact_preserves_decimal_prefix(app, tmp_path, m
 
 def test_word_translation_feature_flag_disabled_skips_sql_tm(app, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", False)
     with job_store.session_scope() as session:
         session.query(job_store.TranslationMemoryEntryRecord).delete()
     translation_memory.upsert_sql_entry(
@@ -2187,6 +2189,7 @@ def test_word_translation_with_system_prompt_includes_prompt(tmp_path, monkeypat
 
 
 def test_word_translation_batches_short_segments(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", False)
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_PATH", tmp_path / "translation_memory.json")
     requests: list[dict] = []
 
