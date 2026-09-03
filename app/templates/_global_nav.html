@@ -7,7 +7,7 @@
   <div class="app-navbar__inner">
     <div class="app-navbar__brand">
       <a class="app-navbar__logo-link" href="{{ url_for('main.index') }}" aria-label="{{ current_title }}">
-        <img class="app-navbar__logo" src="{{ url_for('static', filename='logo.svg') }}" alt="{{ current_title }}" />
+        <img class="app-navbar__logo" src="{{ static_asset_url('logo.svg') }}" alt="{{ current_title }}" />
       </a>
       <span class="app-navbar__system-name">文件翻譯系統</span>
     </div>

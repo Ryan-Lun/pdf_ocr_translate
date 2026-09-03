@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>文件翻譯系統 - 欄位翻譯模板</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" data-local-href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" onerror="this.onerror=null;this.href=this.dataset.localHref;" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" data-local-href="{{ static_asset_url('vendor/bootstrap-icons/bootstrap-icons.min.css') }}" onerror="this.onerror=null;this.href=this.dataset.localHref;" />
+    <link rel="stylesheet" href="{{ static_asset_url('app.css') }}" />
   </head>
   <body class="home has-global-nav">
     {% set nav_section = 'templates' %}
@@ -90,7 +90,7 @@
       </div>
     </div>
 
-    <script src="{{ url_for('static', filename='job_filters.js') }}"></script>
+    <script src="{{ static_asset_url('job_filters.js') }}"></script>
     <script>
       const templatesList = document.getElementById("templatesList");
       const templatesEmpty = document.getElementById("templatesEmpty");

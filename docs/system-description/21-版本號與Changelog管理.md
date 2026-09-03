@@ -19,6 +19,17 @@
 
 系統畫面會顯示目前版本，例如 `v0.1.0`。此資訊用於使用者回報問題、部署驗收與維運確認。
 
+
+## 靜態資源快取
+
+模板中的本機 CSS 與 JavaScript 透過 `static_asset_url(...)` 產生版本化 URL，例如：
+
+```text
+/static/app.css?v=0.1.0
+```
+
+瀏覽器可繼續快取靜態檔案；當系統版本號提升後，URL query string 會改變，使用者不需要按 Ctrl+F5 也會取得新版 CSS / JavaScript。
+
 ## Semantic Versioning 規則
 
 版本格式採用：

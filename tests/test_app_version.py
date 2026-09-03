@@ -73,3 +73,11 @@ def test_version_management_docs_and_changelog_exist():
     assert "pyproject.toml" in version_docs
     assert "CHANGELOG.md" in version_docs
     assert "21-版本號與Changelog管理.md" in index
+
+def test_index_uses_versioned_static_assets(client):
+    from app.version import APP_VERSION
+
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    assert f"/static/app.css?v={APP_VERSION}".encode() in resp.data

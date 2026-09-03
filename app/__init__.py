@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import Flask
+from flask import Flask, url_for
 
 from .blueprints import register_blueprints
 from .config import CONFIG_BY_NAME, BaseConfig
@@ -36,9 +36,13 @@ def create_app(config_name: str | None = None) -> Flask:
 
     @app.context_processor
     def inject_app_version():
+        def static_asset_url(filename: str) -> str:
+            return url_for("static", filename=filename, v=APP_VERSION)
+
         return {
             "app_version": APP_VERSION,
             "app_version_label": APP_VERSION_LABEL,
+            "static_asset_url": static_asset_url,
         }
 
     return app
