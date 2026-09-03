@@ -11,6 +11,7 @@ from .services import alerts, state
 from .services.auth_service import init_auth
 from .services.startup_validation import validate_startup_config
 from .services.operations_service import register_operations_cli
+from .version import APP_VERSION, APP_VERSION_LABEL
 
 
 
@@ -32,6 +33,13 @@ def create_app(config_name: str | None = None) -> Flask:
     register_blueprints(app)
     register_error_handlers(app)
     register_before_request(app)
+
+    @app.context_processor
+    def inject_app_version():
+        return {
+            "app_version": APP_VERSION,
+            "app_version_label": APP_VERSION_LABEL,
+        }
 
     return app
 

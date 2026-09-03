@@ -3223,3 +3223,9 @@ body.editor .thumbs {
 .admin-pagination__status {
   white-space: nowrap;
 }
+.app-version {
+  padding: 0.75rem 1rem 1rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  text-align: center;
+}
