@@ -18,6 +18,18 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.2.0 - 2026-09-04
+
+### Added
+
+- 建立 Department Glossary SQL-first 基礎資料表與 Alembic migration，支援部門詞彙庫與詞彙 entries。
+- 新增 Department Glossary service facade，可建立/取得預設「法規文管部」詞彙庫，並新增、更新、停用、列出詞彙。
+- 保留既有 JSON-backed glossary 行為，尚未切換翻譯流程。
+
+### Migration
+
+- 新增 `department_glossary_libraries` 與 `department_glossary_entries` schema，正式部署前需套用 migration 或更新 SQL Server schema。
+
 ## 0.1.1 - 2026-09-04
 
 ### Fixed

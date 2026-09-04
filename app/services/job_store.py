@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, create_engine, func, inspect, select, text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from . import state
@@ -171,6 +171,70 @@ class DocumentTemplateRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class DepartmentGlossaryLibraryRecord(Base):
+    __tablename__ = "department_glossary_libraries"
+    __table_args__ = (
+        Index("IX_department_glossary_libraries_code", "code", unique=True),
+        Index("IX_department_glossary_libraries_active_default", "is_active", "is_default"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(100), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    department_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DepartmentGlossaryEntryRecord(Base):
+    __tablename__ = "department_glossary_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "library_id",
+            "source_lang",
+            "target_lang",
+            "source_term",
+            "status",
+            name="UQ_department_glossary_entries_term_status",
+        ),
+        Index(
+            "IX_department_glossary_entries_lookup",
+            "library_id",
+            "status",
+            "source_lang",
+            "target_lang",
+        ),
+        Index(
+            "IX_department_glossary_entries_term",
+            "library_id",
+            "source_lang",
+            "target_lang",
+            "source_term",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    library_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("department_glossary_libraries.id"),
+        nullable=False,
+        index=True,
+    )
+    source_lang: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    target_lang: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    source_term: Mapped[str] = mapped_column(String(500), nullable=False)
+    target_term: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", index=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_work_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    updated_by_work_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class TranslationMemoryEntryRecord(Base):
     __tablename__ = "translation_memory_entries"
     __table_args__ = (
@@ -222,6 +286,8 @@ REQUIRED_TABLES = (
     "system_error_logs",
     "document_templates",
     "translation_memory_entries",
+    "department_glossary_libraries",
+    "department_glossary_entries",
 )
 
 
@@ -311,7 +377,9 @@ def _assert_required_tables() -> None:
             'audit_logs',
             'system_error_logs',
             'document_templates',
-            'translation_memory_entries'
+            'translation_memory_entries',
+            'department_glossary_libraries',
+            'department_glossary_entries'
           );
         """
     )

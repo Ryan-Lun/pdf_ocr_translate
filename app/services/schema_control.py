@@ -10,6 +10,7 @@ SCHEMA_GROUPS: dict[str, tuple[str, ...]] = {
     "jobs": ("jobs", "job_artifacts", "job_events", "editor_presence", "document_templates"),
     "logs": ("audit_logs", "system_error_logs"),
     "translation_memory": ("translation_memory_entries",),
+    "department_glossary": ("department_glossary_libraries", "department_glossary_entries"),
     "auth": ("users", "roles", "user_roles"),
 }
 
@@ -79,6 +80,31 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "last_used_at",
         "last_referenced_at",
     ),
+    "department_glossary_libraries": (
+        "id",
+        "code",
+        "name",
+        "department_code",
+        "is_default",
+        "is_active",
+        "created_at",
+        "updated_at",
+    ),
+    "department_glossary_entries": (
+        "id",
+        "library_id",
+        "source_lang",
+        "target_lang",
+        "source_term",
+        "target_term",
+        "status",
+        "priority",
+        "notes",
+        "created_by_work_id",
+        "updated_by_work_id",
+        "created_at",
+        "updated_at",
+    ),
     "users": ("id", "work_id", "display_name", "email", "is_active", "created_at", "last_login_at"),
     "roles": ("id", "name"),
     "user_roles": ("user_id", "role_id"),
@@ -112,6 +138,7 @@ def required_schema_groups(app) -> dict[str, tuple[str, ...]]:
         "jobs": SCHEMA_GROUPS["jobs"],
         "logs": SCHEMA_GROUPS["logs"],
         "translation_memory": SCHEMA_GROUPS["translation_memory"],
+        "department_glossary": SCHEMA_GROUPS["department_glossary"],
     }
     if app.config.get("AUTH_ENABLED", False):
         groups["auth"] = SCHEMA_GROUPS["auth"]

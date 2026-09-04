@@ -164,6 +164,46 @@ BEGIN
 END;
 GO
 
+
+IF OBJECT_ID(N'translation.department_glossary_libraries', N'U') IS NULL
+BEGIN
+    CREATE TABLE translation.department_glossary_libraries (
+        id int IDENTITY(1,1) NOT NULL,
+        code varchar(100) NOT NULL,
+        name nvarchar(200) NOT NULL,
+        department_code nvarchar(100) NOT NULL,
+        is_default bit NOT NULL CONSTRAINT DF_translation_department_glossary_libraries_is_default DEFAULT (0),
+        is_active bit NOT NULL CONSTRAINT DF_translation_department_glossary_libraries_is_active DEFAULT (1),
+        created_at datetime2(6) NOT NULL,
+        updated_at datetime2(6) NOT NULL,
+        CONSTRAINT PK_department_glossary_libraries PRIMARY KEY CLUSTERED (id)
+    );
+END;
+GO
+
+IF OBJECT_ID(N'translation.department_glossary_entries', N'U') IS NULL
+BEGIN
+    CREATE TABLE translation.department_glossary_entries (
+        id int IDENTITY(1,1) NOT NULL,
+        library_id int NOT NULL,
+        source_lang varchar(20) NOT NULL,
+        target_lang varchar(20) NOT NULL,
+        source_term nvarchar(500) NOT NULL,
+        target_term nvarchar(max) NOT NULL,
+        status varchar(20) NOT NULL,
+        priority int NOT NULL,
+        notes nvarchar(max) NULL,
+        created_by_work_id nvarchar(100) NULL,
+        updated_by_work_id nvarchar(100) NULL,
+        created_at datetime2(6) NOT NULL,
+        updated_at datetime2(6) NOT NULL,
+        CONSTRAINT PK_department_glossary_entries PRIMARY KEY CLUSTERED (id),
+        CONSTRAINT UQ_department_glossary_entries_term_status UNIQUE (library_id, source_lang, target_lang, source_term, status),
+        CONSTRAINT FK_department_glossary_entries_libraries FOREIGN KEY (library_id) REFERENCES translation.department_glossary_libraries(id)
+    );
+END;
+GO
+
 IF OBJECT_ID(N'translation.translation_memory_entries', N'U') IS NULL
 BEGIN
     CREATE TABLE translation.translation_memory_entries (
@@ -253,6 +293,47 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_document_templates_updated_at' AND object_id = OBJECT_ID(N'translation.document_templates'))
     CREATE INDEX IX_translation_document_templates_updated_at ON translation.document_templates (updated_at DESC);
+GO
+
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_libraries_code' AND object_id = OBJECT_ID(N'translation.department_glossary_libraries'))
+    CREATE UNIQUE INDEX IX_department_glossary_libraries_code ON translation.department_glossary_libraries (code);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_libraries_department_code' AND object_id = OBJECT_ID(N'translation.department_glossary_libraries'))
+    CREATE INDEX IX_department_glossary_libraries_department_code ON translation.department_glossary_libraries (department_code);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_libraries_is_active' AND object_id = OBJECT_ID(N'translation.department_glossary_libraries'))
+    CREATE INDEX IX_department_glossary_libraries_is_active ON translation.department_glossary_libraries (is_active);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_libraries_active_default' AND object_id = OBJECT_ID(N'translation.department_glossary_libraries'))
+    CREATE INDEX IX_department_glossary_libraries_active_default ON translation.department_glossary_libraries (is_active, is_default);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_entries_library_id' AND object_id = OBJECT_ID(N'translation.department_glossary_entries'))
+    CREATE INDEX IX_department_glossary_entries_library_id ON translation.department_glossary_entries (library_id);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_entries_source_lang' AND object_id = OBJECT_ID(N'translation.department_glossary_entries'))
+    CREATE INDEX IX_department_glossary_entries_source_lang ON translation.department_glossary_entries (source_lang);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_entries_target_lang' AND object_id = OBJECT_ID(N'translation.department_glossary_entries'))
+    CREATE INDEX IX_department_glossary_entries_target_lang ON translation.department_glossary_entries (target_lang);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_entries_status' AND object_id = OBJECT_ID(N'translation.department_glossary_entries'))
+    CREATE INDEX IX_department_glossary_entries_status ON translation.department_glossary_entries (status);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_entries_lookup' AND object_id = OBJECT_ID(N'translation.department_glossary_entries'))
+    CREATE INDEX IX_department_glossary_entries_lookup ON translation.department_glossary_entries (library_id, status, source_lang, target_lang);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_entries_term' AND object_id = OBJECT_ID(N'translation.department_glossary_entries'))
+    CREATE INDEX IX_department_glossary_entries_term ON translation.department_glossary_entries (library_id, source_lang, target_lang, source_term);
 GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_memory_entries_source_hash' AND object_id = OBJECT_ID(N'translation.translation_memory_entries'))

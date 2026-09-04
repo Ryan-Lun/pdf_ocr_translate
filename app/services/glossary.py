@@ -6,15 +6,17 @@ import threading
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from html import escape as _html_escape, unescape as _html_unescape
-from typing import TypeAlias
-import zipfile
 from io import BytesIO
 from pathlib import Path
+from typing import TypeAlias
+import zipfile
+
+from sqlalchemy import select
 from xml.etree import ElementTree as ET
 
 from lang_utils import normalize_lang_code
 
-from . import state
+from . import job_store, state
 
 try:
     import xlsxwriter
@@ -38,6 +40,36 @@ _SYSTEM_GLOSSARY_CACHE: tuple[
     tuple[tuple[str, float | None], ...],
     list[dict[str, str]],
 ] | None = None
+
+STATUS_ACTIVE = "active"
+STATUS_DISABLED = "disabled"
+DEFAULT_DEPARTMENT_GLOSSARY_CODE = "regulatory-document-control"
+DEFAULT_DEPARTMENT_GLOSSARY_NAME = "法規文管部"
+
+
+@dataclass(frozen=True)
+class DepartmentGlossaryLibrary:
+    library_id: int
+    code: str
+    name: str
+    department_code: str
+    is_default: bool
+    is_active: bool
+
+
+@dataclass(frozen=True)
+class DepartmentGlossaryEntry:
+    entry_id: int
+    library_id: int
+    source_lang: str
+    target_lang: str
+    source_term: str
+    target_term: str
+    status: str
+    priority: int = 0
+    notes: str | None = None
+    created_by_work_id: str | None = None
+    updated_by_work_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +163,237 @@ def write_required_glossary_hits_artifact(
         encoding="utf-8",
     )
     return path
+
+
+def _normalize_glossary_lang(value: str) -> str:
+    normalized = normalize_lang_code(value)
+    return normalized or str(value or "").strip().lower() or "auto"
+
+
+def _clean_department_glossary_status(value: str) -> str:
+    status = str(value or STATUS_ACTIVE).strip().lower()
+    if status not in {STATUS_ACTIVE, STATUS_DISABLED}:
+        raise ValueError(f"Unsupported Department Glossary status: {value}")
+    return status
+
+
+def _library_from_record(record: job_store.DepartmentGlossaryLibraryRecord) -> DepartmentGlossaryLibrary:
+    return DepartmentGlossaryLibrary(
+        library_id=int(record.id),
+        code=record.code,
+        name=record.name,
+        department_code=record.department_code,
+        is_default=bool(record.is_default),
+        is_active=bool(record.is_active),
+    )
+
+
+def _entry_from_record(record: job_store.DepartmentGlossaryEntryRecord) -> DepartmentGlossaryEntry:
+    return DepartmentGlossaryEntry(
+        entry_id=int(record.id),
+        library_id=int(record.library_id),
+        source_lang=record.source_lang,
+        target_lang=record.target_lang,
+        source_term=record.source_term,
+        target_term=record.target_term,
+        status=record.status,
+        priority=int(record.priority or 0),
+        notes=record.notes,
+        created_by_work_id=record.created_by_work_id,
+        updated_by_work_id=record.updated_by_work_id,
+    )
+
+
+def get_or_create_department_glossary_library(
+    *,
+    code: str,
+    name: str,
+    department_code: str,
+    is_default: bool = False,
+    is_active: bool = True,
+) -> DepartmentGlossaryLibrary:
+    cleaned_code = str(code or "").strip()
+    cleaned_name = str(name or "").strip()
+    cleaned_department_code = str(department_code or "").strip()
+    if not cleaned_code or not cleaned_name or not cleaned_department_code:
+        raise ValueError("Department Glossary library code, name, and department code are required.")
+    now = job_store.utcnow()
+    with job_store.session_scope() as session:
+        record = session.scalar(
+            select(job_store.DepartmentGlossaryLibraryRecord).where(
+                job_store.DepartmentGlossaryLibraryRecord.code == cleaned_code
+            )
+        )
+        if record is None:
+            record = job_store.DepartmentGlossaryLibraryRecord(
+                code=cleaned_code,
+                name=cleaned_name,
+                department_code=cleaned_department_code,
+                is_default=bool(is_default),
+                is_active=bool(is_active),
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(record)
+            session.flush()
+        else:
+            record.name = cleaned_name
+            record.department_code = cleaned_department_code
+            record.is_default = bool(is_default)
+            record.is_active = bool(is_active)
+            record.updated_at = now
+            session.flush()
+        return _library_from_record(record)
+
+
+def get_or_create_default_department_glossary() -> DepartmentGlossaryLibrary:
+    return get_or_create_department_glossary_library(
+        code=DEFAULT_DEPARTMENT_GLOSSARY_CODE,
+        name=DEFAULT_DEPARTMENT_GLOSSARY_NAME,
+        department_code=DEFAULT_DEPARTMENT_GLOSSARY_NAME,
+        is_default=True,
+        is_active=True,
+    )
+
+
+def list_department_glossary_libraries(*, active_only: bool = False) -> list[DepartmentGlossaryLibrary]:
+    with job_store.session_scope() as session:
+        stmt = select(job_store.DepartmentGlossaryLibraryRecord)
+        if active_only:
+            stmt = stmt.where(job_store.DepartmentGlossaryLibraryRecord.is_active.is_(True))
+        stmt = stmt.order_by(
+            job_store.DepartmentGlossaryLibraryRecord.is_default.desc(),
+            job_store.DepartmentGlossaryLibraryRecord.name.asc(),
+            job_store.DepartmentGlossaryLibraryRecord.id.asc(),
+        )
+        return [_library_from_record(record) for record in session.scalars(stmt).all()]
+
+
+def upsert_department_glossary_entry(
+    *,
+    library_id: int,
+    source_lang: str,
+    target_lang: str,
+    source_term: str,
+    target_term: str,
+    status: str = STATUS_ACTIVE,
+    priority: int = 0,
+    notes: str | None = None,
+    created_by_work_id: str | None = None,
+    updated_by_work_id: str | None = None,
+) -> int:
+    cleaned_source_term = str(source_term or "").strip()
+    cleaned_target_term = str(target_term or "").strip()
+    if not int(library_id or 0):
+        raise ValueError("Department Glossary library_id is required.")
+    if not cleaned_source_term or not cleaned_target_term:
+        raise ValueError("Department Glossary source and target terms are required.")
+    cleaned_status = _clean_department_glossary_status(status)
+    normalized_source_lang = _normalize_glossary_lang(source_lang)
+    normalized_target_lang = _normalize_glossary_lang(target_lang)
+    now = job_store.utcnow()
+    with job_store.session_scope() as session:
+        library = session.get(job_store.DepartmentGlossaryLibraryRecord, int(library_id))
+        if library is None:
+            raise ValueError(f"Department Glossary library not found: {library_id}")
+        record = session.scalar(
+            select(job_store.DepartmentGlossaryEntryRecord)
+            .where(job_store.DepartmentGlossaryEntryRecord.library_id == int(library_id))
+            .where(job_store.DepartmentGlossaryEntryRecord.source_lang == normalized_source_lang)
+            .where(job_store.DepartmentGlossaryEntryRecord.target_lang == normalized_target_lang)
+            .where(job_store.DepartmentGlossaryEntryRecord.source_term == cleaned_source_term)
+            .where(job_store.DepartmentGlossaryEntryRecord.status == cleaned_status)
+            .order_by(job_store.DepartmentGlossaryEntryRecord.id.asc())
+        )
+        if record is None:
+            record = job_store.DepartmentGlossaryEntryRecord(
+                library_id=int(library_id),
+                source_lang=normalized_source_lang,
+                target_lang=normalized_target_lang,
+                source_term=cleaned_source_term,
+                target_term=cleaned_target_term,
+                status=cleaned_status,
+                priority=int(priority or 0),
+                notes=str(notes).strip() if notes is not None and str(notes).strip() else None,
+                created_by_work_id=str(created_by_work_id or "").strip() or None,
+                updated_by_work_id=str(updated_by_work_id or created_by_work_id or "").strip() or None,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(record)
+            session.flush()
+            return int(record.id)
+        record.target_term = cleaned_target_term
+        record.priority = int(priority or 0)
+        record.notes = str(notes).strip() if notes is not None and str(notes).strip() else None
+        record.updated_by_work_id = (
+            str(updated_by_work_id or created_by_work_id or "").strip() or record.updated_by_work_id
+        )
+        record.updated_at = now
+        session.flush()
+        return int(record.id)
+
+
+def disable_department_glossary_entry(
+    entry_id: int,
+    *,
+    updated_by_work_id: str | None = None,
+) -> bool:
+    with job_store.session_scope() as session:
+        record = session.get(job_store.DepartmentGlossaryEntryRecord, int(entry_id))
+        if record is None:
+            return False
+        record.status = STATUS_DISABLED
+        record.updated_by_work_id = str(updated_by_work_id or "").strip() or record.updated_by_work_id
+        record.updated_at = job_store.utcnow()
+        return True
+
+
+def list_department_glossary_entries(
+    library_id: int,
+    *,
+    active_only: bool = False,
+    source_lang: str | None = None,
+    target_lang: str | None = None,
+) -> list[DepartmentGlossaryEntry]:
+    with job_store.session_scope() as session:
+        stmt = select(job_store.DepartmentGlossaryEntryRecord).where(
+            job_store.DepartmentGlossaryEntryRecord.library_id == int(library_id)
+        )
+        if source_lang is not None:
+            stmt = stmt.where(
+                job_store.DepartmentGlossaryEntryRecord.source_lang == _normalize_glossary_lang(source_lang)
+            )
+        if target_lang is not None:
+            stmt = stmt.where(
+                job_store.DepartmentGlossaryEntryRecord.target_lang == _normalize_glossary_lang(target_lang)
+            )
+        if active_only:
+            stmt = stmt.where(job_store.DepartmentGlossaryEntryRecord.status == STATUS_ACTIVE)
+        stmt = stmt.order_by(
+            job_store.DepartmentGlossaryEntryRecord.priority.desc(),
+            job_store.DepartmentGlossaryEntryRecord.id.asc(),
+        )
+        return [_entry_from_record(record) for record in session.scalars(stmt).all()]
+
+
+def load_department_glossary_pairs(
+    library_id: int | None = None,
+    *,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+) -> list[tuple[str, str]]:
+    if library_id is None:
+        library_id = get_or_create_default_department_glossary().library_id
+    entries = list_department_glossary_entries(
+        int(library_id),
+        active_only=True,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    pairs = [(entry.source_term, entry.target_term) for entry in entries]
+    pairs.sort(key=lambda pair: (-len(pair[0]), pair[0]))
+    return pairs
 
 
 def global_glossary_path() -> Path:
