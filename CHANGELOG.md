@@ -18,6 +18,15 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.4.0 - 2026-09-04
+
+### Changed
+
+- Glossary 管理 API 改由預設「法規文管部」Department Glossary SQL 資料提供相容欄位。
+- `/api/glossary/library` 保留 `system_glossary`、`user_glossary`、`effective_glossary`，並新增 `libraries`、`selected_library`、`entries` library-aware payload。
+- 既有 `/api/glossary` 與 system glossary Excel import/apply/export endpoints 保留 request/response shape，但寫入與讀取預設 Department Glossary SQL 資料。
+- AUTH_ENABLED 時，glossary 寫入路徑限定 admin 使用者。
+
 ## 0.3.0 - 2026-09-04
 
 ### Added

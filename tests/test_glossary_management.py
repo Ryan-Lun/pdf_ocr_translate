@@ -1,14 +1,29 @@
 from __future__ import annotations
 
-import json
 import zipfile
 from io import BytesIO
 
-from app.services import glossary, state
+from app.services import glossary, job_store
 
 
-def _write_glossary(path, items):
-    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def _clear_department_glossary():
+    with job_store.session_scope() as session:
+        session.query(job_store.DepartmentGlossaryEntryRecord).delete()
+        session.query(job_store.DepartmentGlossaryLibraryRecord).delete()
+
+
+def _seed_department_glossary(entries: list[tuple[str, str]]):
+    library = glossary.get_or_create_default_department_glossary()
+    for source_term, target_term in entries:
+        glossary.upsert_department_glossary_entry(
+            library_id=library.library_id,
+            source_lang="zh",
+            target_lang="en",
+            source_term=source_term,
+            target_term=target_term,
+        )
+    return library
 
 
 def _build_xlsx(rows):
@@ -89,15 +104,9 @@ def test_glossary_page_ok(client):
     assert "詞彙庫管理" in resp.get_data(as_text=True)
 
 
-def test_glossary_library_payload_and_user_override(client, tmp_path, monkeypatch):
-    system_path = tmp_path / "system.json"
-    global_path = tmp_path / "global.json"
-    _write_glossary(system_path, [{"cn": "批號", "en": "Lot No."}, {"cn": "製造日期", "en": "Manufacturing Date"}])
-    _write_glossary(global_path, [{"cn": "批號", "en": "Batch No."}])
-
-    monkeypatch.setattr(state, "SYSTEM_GLOSSARY_PATH", str(system_path))
-    monkeypatch.setattr(state, "GLOBAL_GLOSSARY_PATH", str(global_path))
-    glossary.invalidate_glossary_cache()
+def test_glossary_library_payload_maps_to_default_department_glossary(client):
+    _clear_department_glossary()
+    _seed_department_glossary([("批號", "Lot No."), ("製造日期", "Manufacturing Date")])
 
     resp = client.get("/api/glossary/library")
     assert resp.status_code == 200
@@ -108,15 +117,15 @@ def test_glossary_library_payload_and_user_override(client, tmp_path, monkeypatc
         {"cn": "批號", "en": "Lot No."},
         {"cn": "製造日期", "en": "Manufacturing Date"},
     ]
-    assert payload["user_glossary"] == [{"cn": "批號", "en": "Batch No."}]
+    assert payload["user_glossary"] == []
     assert payload["effective_glossary"] == [
         {
             "cn": "批號",
-            "en": "Batch No.",
-            "source": "user",
-            "overridden": True,
+            "en": "Lot No.",
+            "source": "system",
+            "overridden": False,
             "system_en": "Lot No.",
-            "user_en": "Batch No.",
+            "user_en": None,
         },
         {
             "cn": "製造日期",
@@ -127,21 +136,13 @@ def test_glossary_library_payload_and_user_override(client, tmp_path, monkeypatc
             "user_en": None,
         },
     ]
-    assert glossary.load_combined_glossary() == [
-        ("製造日期", "Manufacturing Date"),
-        ("批號", "Batch No."),
-    ]
+    assert payload["libraries"][0]["code"] == glossary.DEFAULT_DEPARTMENT_GLOSSARY_CODE
+    assert payload["selected_library"] == payload["libraries"][0]
+    assert [entry["cn"] for entry in payload["entries"]] == ["批號", "製造日期"]
 
 
-def test_glossary_post_updates_effective_override(client, tmp_path, monkeypatch):
-    system_path = tmp_path / "system.json"
-    global_path = tmp_path / "global.json"
-    _write_glossary(system_path, [{"cn": "批號", "en": "Lot No."}])
-    _write_glossary(global_path, [])
-
-    monkeypatch.setattr(state, "SYSTEM_GLOSSARY_PATH", str(system_path))
-    monkeypatch.setattr(state, "GLOBAL_GLOSSARY_PATH", str(global_path))
-    glossary.invalidate_glossary_cache()
+def test_glossary_post_updates_default_department_glossary(client):
+    _clear_department_glossary()
 
     save_resp = client.post(
         "/api/glossary",
@@ -152,19 +153,14 @@ def test_glossary_post_updates_effective_override(client, tmp_path, monkeypatch)
     payload = client.get("/api/glossary/library").get_json()
     effective = payload["effective_glossary"]
     assert effective[0]["cn"] == "批號"
-    assert effective[0]["source"] == "user"
-    assert effective[0]["overridden"] is True
+    assert effective[0]["source"] == "system"
+    assert effective[0]["overridden"] is False
     assert effective[0]["en"] == "Batch No."
 
 
-def test_system_glossary_excel_preview_and_apply(client, tmp_path, monkeypatch):
-    global_path = tmp_path / "global.json"
-    system_path = tmp_path / "system.json"
-    _write_glossary(system_path, [{"cn": "批號", "en": "Lot No."}, {"cn": "製造日期", "en": "Manufacturing Date"}])
-    _write_glossary(global_path, [])
-    monkeypatch.setattr(state, "GLOBAL_GLOSSARY_PATH", str(global_path))
-    monkeypatch.setattr(state, "SYSTEM_GLOSSARY_PATH", str(system_path))
-    glossary.invalidate_glossary_cache()
+def test_system_glossary_excel_preview_and_apply(client):
+    _clear_department_glossary()
+    _seed_department_glossary([("批號", "Lot No."), ("製造日期", "Manufacturing Date")])
 
     workbook = _build_xlsx(
         [
@@ -206,14 +202,9 @@ def test_system_glossary_excel_preview_and_apply(client, tmp_path, monkeypatch):
     assert "重複詞彙列" in payload["error"]
 
 
-def test_system_glossary_excel_apply_succeeds_without_blocking_issues(client, tmp_path, monkeypatch):
-    global_path = tmp_path / "global.json"
-    system_path = tmp_path / "system.json"
-    _write_glossary(system_path, [{"cn": "批號", "en": "Lot No."}])
-    _write_glossary(global_path, [])
-    monkeypatch.setattr(state, "GLOBAL_GLOSSARY_PATH", str(global_path))
-    monkeypatch.setattr(state, "SYSTEM_GLOSSARY_PATH", str(system_path))
-    glossary.invalidate_glossary_cache()
+def test_system_glossary_excel_apply_succeeds_without_blocking_issues(client):
+    _clear_department_glossary()
+    _seed_department_glossary([("批號", "Lot No.")])
 
     workbook = _build_xlsx(
         [
@@ -266,14 +257,9 @@ def test_system_glossary_excel_preview_requires_cn_en_header(client):
     assert "cn" in payload["error"]
 
 
-def test_system_glossary_export_returns_xlsx(client, tmp_path, monkeypatch):
-    system_path = tmp_path / "system.json"
-    global_path = tmp_path / "global.json"
-    _write_glossary(system_path, [{"cn": "批號", "en": "Lot No."}])
-    _write_glossary(global_path, [])
-    monkeypatch.setattr(state, "SYSTEM_GLOSSARY_PATH", str(system_path))
-    monkeypatch.setattr(state, "GLOBAL_GLOSSARY_PATH", str(global_path))
-    glossary.invalidate_glossary_cache()
+def test_system_glossary_export_returns_xlsx(client):
+    _clear_department_glossary()
+    _seed_department_glossary([("批號", "Lot No.")])
 
     resp = client.get("/api/glossary/system-export")
     assert resp.status_code == 200
@@ -281,3 +267,104 @@ def test_system_glossary_export_returns_xlsx(client, tmp_path, monkeypatch):
     assert "system_glossary.xlsx" in resp.headers.get("Content-Disposition", "")
     parsed = glossary.parse_system_glossary_excel(resp.data)
     assert parsed["items"] == [{"cn": "批號", "en": "Lot No."}]
+
+
+def test_glossary_post_syncs_default_department_library_without_changing_request_shape(client):
+    _clear_department_glossary()
+
+    resp = client.post(
+        "/api/glossary",
+        json={"glossary": [{"cn": "外觀", "en": "Appearance"}]},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["ok"] is True
+    assert payload["glossary"] == [{"cn": "外觀", "en": "Appearance"}]
+    library_payload = client.get("/api/glossary/library").get_json()
+    assert library_payload["system_glossary"] == [{"cn": "外觀", "en": "Appearance"}]
+    library = glossary.list_department_glossary_libraries()[0]
+    entries = glossary.list_department_glossary_entries(library.library_id, active_only=True)
+    assert [(entry.source_term, entry.target_term) for entry in entries] == [("外觀", "Appearance")]
+
+
+def test_glossary_post_sync_disables_removed_department_entries(client):
+    _clear_department_glossary()
+    library = _seed_department_glossary([("外觀", "Appearance"), ("製程規範", "Process Specification")])
+
+    resp = client.post(
+        "/api/glossary",
+        json={"glossary": [{"cn": "外觀", "en": "Appearance"}]},
+    )
+
+    assert resp.status_code == 200
+    active = glossary.list_department_glossary_entries(library.library_id, active_only=True)
+    all_entries = glossary.list_department_glossary_entries(library.library_id)
+    assert [entry.source_term for entry in active] == ["外觀"]
+    assert {entry.source_term: entry.status for entry in all_entries} == {
+        "外觀": "active",
+        "製程規範": "disabled",
+    }
+
+
+def test_system_glossary_import_apply_writes_department_glossary_sql(client):
+    _clear_department_glossary()
+
+    resp = client.post(
+        "/api/glossary/system-import-apply",
+        json={
+            "items": [{"cn": "製程規範", "en": "Process Specification"}],
+            "duplicates": [],
+            "invalid_rows": [],
+        },
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["system_glossary"] == [{"cn": "製程規範", "en": "Process Specification"}]
+    assert payload["entries"][0]["cn"] == "製程規範"
+    library = glossary.list_department_glossary_libraries()[0]
+    entries = glossary.list_department_glossary_entries(library.library_id, active_only=True)
+    assert [(entry.source_term, entry.target_term) for entry in entries] == [("製程規範", "Process Specification")]
+
+
+def test_glossary_write_paths_require_admin_when_auth_enabled(client, monkeypatch):
+    _clear_department_glossary()
+    client.application.config["AUTH_ENABLED"] = True
+    client.application.config["AUTH_STUB_ENABLED"] = True
+    client.post("/auth/login", data={"username": "editor1", "display_name": "Editor One"})
+    monkeypatch.setattr("app.blueprints.api.glossary_routes.authz_service.user_is_admin", lambda _user: False)
+
+    save_resp = client.post("/api/glossary", json={"glossary": [{"cn": "外觀", "en": "Appearance"}]})
+    apply_resp = client.post(
+        "/api/glossary/system-import-apply",
+        json={"items": [{"cn": "外觀", "en": "Appearance"}], "duplicates": [], "invalid_rows": []},
+    )
+
+    assert save_resp.status_code == 403
+    assert apply_resp.status_code == 403
+    assert glossary.list_department_glossary_libraries() == []
+
+
+
+def test_glossary_write_paths_allow_admin_when_auth_enabled(client, monkeypatch):
+    _clear_department_glossary()
+    client.application.config["AUTH_ENABLED"] = True
+    client.application.config["AUTH_STUB_ENABLED"] = True
+    client.post("/auth/login", data={"username": "admin1", "display_name": "Admin One"})
+    monkeypatch.setattr("app.blueprints.api.glossary_routes.authz_service.user_is_admin", lambda _user: True)
+
+    save_resp = client.post("/api/glossary", json={"glossary": [{"cn": "外觀", "en": "Appearance"}]})
+    apply_resp = client.post(
+        "/api/glossary/system-import-apply",
+        json={"items": [{"cn": "製程規範", "en": "Process Specification"}], "duplicates": [], "invalid_rows": []},
+    )
+
+    assert save_resp.status_code == 200
+    assert apply_resp.status_code == 200
+    library = glossary.list_department_glossary_libraries()[0]
+    entries = glossary.list_department_glossary_entries(library.library_id, active_only=True)
+    assert {entry.source_term: entry.target_term for entry in entries} == {
+        "外觀": "Appearance",
+        "製程規範": "Process Specification",
+    }

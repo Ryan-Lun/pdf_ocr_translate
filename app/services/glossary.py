@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TypeAlias
 import zipfile
 
-from sqlalchemy import select
+from sqlalchemy import select, true
 from xml.etree import ElementTree as ET
 
 from lang_utils import normalize_lang_code
@@ -302,7 +302,7 @@ def list_department_glossary_libraries(*, active_only: bool = False) -> list[Dep
     with job_store.session_scope() as session:
         stmt = select(job_store.DepartmentGlossaryLibraryRecord)
         if active_only:
-            stmt = stmt.where(job_store.DepartmentGlossaryLibraryRecord.is_active.is_(True))
+            stmt = stmt.where(job_store.DepartmentGlossaryLibraryRecord.is_active == true())
         stmt = stmt.order_by(
             job_store.DepartmentGlossaryLibraryRecord.is_default.desc(),
             job_store.DepartmentGlossaryLibraryRecord.name.asc(),
@@ -539,6 +539,81 @@ def _department_glossary_import_item_detail(
         )
     accepted_sources.add(source_term)
     return None
+
+
+def _department_entry_to_compat_item(entry: DepartmentGlossaryEntry) -> dict[str, str]:
+    return {"cn": entry.source_term, "en": entry.target_term}
+
+
+def _department_entry_to_payload(entry: DepartmentGlossaryEntry) -> dict[str, str | int | None]:
+    return {
+        "id": entry.entry_id,
+        "library_id": entry.library_id,
+        "cn": entry.source_term,
+        "en": entry.target_term,
+        "source_lang": entry.source_lang,
+        "target_lang": entry.target_lang,
+        "status": entry.status,
+        "priority": entry.priority,
+        "notes": entry.notes,
+    }
+
+
+def _department_library_to_payload(library: DepartmentGlossaryLibrary) -> dict[str, str | int | bool]:
+    return {
+        "id": library.library_id,
+        "code": library.code,
+        "name": library.name,
+        "department_code": library.department_code,
+        "is_default": library.is_default,
+        "is_active": library.is_active,
+    }
+
+
+def load_default_department_glossary_items() -> list[dict[str, str]]:
+    library = get_or_create_default_department_glossary()
+    entries = list_department_glossary_entries(library.library_id, active_only=True)
+    items = [_department_entry_to_compat_item(entry) for entry in entries]
+    items.sort(key=lambda item: item["cn"])
+    return items
+
+
+def sync_default_department_glossary_items(
+    items: list[dict[str, str]],
+    *,
+    replace: bool = True,
+    updated_by_work_id: str | None = None,
+) -> list[dict[str, str]]:
+    library = get_or_create_default_department_glossary()
+    cleaned_by_cn: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        cn = str(item.get("cn") or "").strip()
+        en = str(item.get("en") or "").strip()
+        if cn and en:
+            cleaned_by_cn[cn] = en
+    for cn, en in cleaned_by_cn.items():
+        upsert_department_glossary_entry(
+            library_id=library.library_id,
+            source_lang="zh",
+            target_lang="en",
+            source_term=cn,
+            target_term=en,
+            updated_by_work_id=updated_by_work_id,
+        )
+    if replace:
+        for entry in list_department_glossary_entries(library.library_id, active_only=True):
+            if entry.source_term not in cleaned_by_cn:
+                disable_department_glossary_entry(
+                    entry.entry_id,
+                    updated_by_work_id=updated_by_work_id,
+                )
+    return load_default_department_glossary_items()
+
+
+def apply_default_department_glossary_import(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    return sync_default_department_glossary_items(items, replace=False)
 
 
 def import_department_glossary_json(
@@ -906,32 +981,32 @@ def glossary_pairs_for_translation(
     return pairs
 
 
-def build_glossary_management_payload() -> dict[str, list[dict[str, str | bool | None]]]:
-    system_items = load_system_glossary()
-    user_items = load_global_glossary()
-    system_by_cn = {item["cn"]: item["en"] for item in system_items}
-    user_by_cn = {item["cn"]: item["en"] for item in user_items}
-
-    effective_items: list[dict[str, str | bool | None]] = []
-    for cn in sorted(set(system_by_cn) | set(user_by_cn)):
-        system_en = system_by_cn.get(cn)
-        user_en = user_by_cn.get(cn)
-        has_user = user_en is not None
-        effective_items.append(
-            {
-                "cn": cn,
-                "en": user_en if has_user else system_en or "",
-                "source": "user" if has_user else "system",
-                "overridden": bool(has_user and system_en is not None),
-                "system_en": system_en,
-                "user_en": user_en,
-            }
-        )
+def build_glossary_management_payload() -> dict[str, object]:
+    selected_library = get_or_create_default_department_glossary()
+    libraries = list_department_glossary_libraries(active_only=True)
+    entries = list_department_glossary_entries(selected_library.library_id, active_only=True)
+    entries.sort(key=lambda entry: entry.source_term)
+    system_items = [_department_entry_to_compat_item(entry) for entry in entries]
+    entry_payload = [_department_entry_to_payload(entry) for entry in entries]
+    effective_items: list[dict[str, str | bool | None]] = [
+        {
+            "cn": item["cn"],
+            "en": item["en"],
+            "source": "system",
+            "overridden": False,
+            "system_en": item["en"],
+            "user_en": None,
+        }
+        for item in system_items
+    ]
 
     return {
         "system_glossary": system_items,
-        "user_glossary": user_items,
+        "user_glossary": [],
         "effective_glossary": effective_items,
+        "libraries": [_department_library_to_payload(library) for library in libraries],
+        "selected_library": _department_library_to_payload(selected_library),
+        "entries": entry_payload,
     }
 
 
@@ -1055,7 +1130,7 @@ def parse_system_glossary_excel(file_bytes: bytes) -> dict[str, object]:
 
 
 def build_system_glossary_import_preview(items: list[dict[str, str]]) -> dict[str, object]:
-    current_items = load_system_glossary()
+    current_items = load_default_department_glossary_items()
     current_by_cn = {item["cn"]: item["en"] for item in current_items}
     additions = 0
     updates = 0
@@ -1100,19 +1175,7 @@ def build_system_glossary_import_preview(items: list[dict[str, str]]) -> dict[st
 
 
 def apply_system_glossary_import(items: list[dict[str, str]]) -> list[dict[str, str]]:
-    merged_by_cn = {item["cn"]: item["en"] for item in load_system_glossary()}
-    for item in items:
-        cn = str(item.get("cn") or "").strip()
-        en = str(item.get("en") or "").strip()
-        if not cn or not en:
-            continue
-        merged_by_cn[cn] = en
-    merged_items = [
-        {"cn": cn, "en": en}
-        for cn, en in sorted(merged_by_cn.items(), key=lambda pair: pair[0])
-    ]
-    write_system_glossary(merged_items)
-    return merged_items
+    return apply_default_department_glossary_import(items)
 
 
 def _escape_xml_text(value: str) -> str:
@@ -1204,7 +1267,7 @@ def _build_xlsx_bytes(rows: list[list[str]], sheet_name: str = "Sheet1") -> byte
 
 
 def export_system_glossary_excel() -> bytes:
-    items = load_system_glossary()
+    items = load_default_department_glossary_items()
     if xlsxwriter is None:
         rows = [["cn", "en"]]
         rows.extend([[item["cn"], item["en"]] for item in items])

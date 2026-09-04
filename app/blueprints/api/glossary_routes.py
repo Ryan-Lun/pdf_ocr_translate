@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from .shared import (
     _forbidden_json,
+    authz_service,
+    current_app,
+    current_user,
     _job_access_denied,
     abort,
     api_bp,
@@ -21,17 +24,26 @@ from .shared import (
 )
 
 
+def _require_glossary_admin_for_write() -> object | None:
+    if current_app.config.get("AUTH_ENABLED", False) and not authz_service.user_is_admin(current_user):
+        return _forbidden_json()
+    return None
+
+
 @api_bp.route("/glossary", methods=["GET", "POST"], endpoint="global_glossary")
 def global_glossary():
     if request.method == "GET":
-        return jsonify({"ok": True, "glossary": glossary.load_global_glossary()})
+        return jsonify({"ok": True, "glossary": glossary.load_default_department_glossary_items()})
+    forbidden = _require_glossary_admin_for_write()
+    if forbidden is not None:
+        return forbidden
     payload = request.get_json(force=True) or {}
     items = payload.get("glossary", [])
     if not isinstance(items, list):
         return jsonify({"ok": False, "error": "Invalid glossary payload."}), 400
-    glossary.write_global_glossary(items)
+    synced_items = glossary.sync_default_department_glossary_items(items)
     jobs.notify_jobs_update()
-    return jsonify({"ok": True, "glossary": glossary.load_global_glossary()})
+    return jsonify({"ok": True, "glossary": synced_items})
 
 
 @api_bp.route("/glossary/library", methods=["GET"], endpoint="glossary_library")
@@ -68,6 +80,9 @@ def glossary_system_import_preview():
 
 @api_bp.route("/glossary/system-import-apply", methods=["POST"], endpoint="glossary_system_import_apply")
 def glossary_system_import_apply():
+    forbidden = _require_glossary_admin_for_write()
+    if forbidden is not None:
+        return forbidden
     payload = request.get_json(force=True) or {}
     items = payload.get("items", [])
     duplicates = payload.get("duplicates", [])
