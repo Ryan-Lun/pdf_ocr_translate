@@ -18,6 +18,18 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.3.0 - 2026-09-04
+
+### Added
+
+- 新增 Department Glossary JSON 匯入 CLI，支援 dry-run 與 apply 模式。
+- 匯入既有 JSON glossary 到預設「法規文管部」詞彙庫，並回報新增、更新、未變更、無效項目與重複來源詞。
+- 匯入流程可重複執行且不會建立重複 active entries；既有 JSON 檔不會被刪除或改寫。
+
+### Migration
+
+- 使用此 CLI 前需先具備 `0.2.0` 的 Department Glossary SQL schema。
+
 ## 0.2.0 - 2026-09-04
 
 ### Added

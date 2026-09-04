@@ -72,6 +72,48 @@ class DepartmentGlossaryEntry:
     updated_by_work_id: str | None = None
 
 
+IMPORT_ACTION_CREATED = "created"
+IMPORT_ACTION_UPDATED = "updated"
+IMPORT_ACTION_UNCHANGED = "unchanged"
+IMPORT_ACTION_WOULD_CREATE = "would_create"
+IMPORT_ACTION_WOULD_UPDATE = "would_update"
+IMPORT_ACTION_INVALID = "invalid"
+IMPORT_ACTION_DUPLICATE = "duplicate"
+IMPORT_REASON_NEW_ENTRY = "new_entry"
+IMPORT_REASON_EXISTING_TERM_UPDATED = "existing_term_updated"
+IMPORT_REASON_EXISTING_TERM_UNCHANGED = "existing_term_unchanged"
+IMPORT_REASON_MISSING_SOURCE_TERM = "missing_source_term"
+IMPORT_REASON_MISSING_TARGET_TERM = "missing_target_term"
+IMPORT_REASON_ITEM_MUST_BE_OBJECT = "item_must_be_object"
+IMPORT_REASON_JSON_MUST_BE_LIST = "json_must_be_list"
+IMPORT_REASON_DUPLICATE_SOURCE_TERM = "duplicate_source_term"
+
+
+@dataclass(frozen=True)
+class DepartmentGlossaryImportDetail:
+    row_number: int
+    action: str
+    reason: str
+    source_term: str = ""
+    target_term: str = ""
+    entry_id: int | None = None
+
+
+@dataclass(frozen=True)
+class DepartmentGlossaryImportSummary:
+    dry_run: bool
+    library_id: int | None
+    scanned: int = 0
+    created: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    would_create: int = 0
+    would_update: int = 0
+    invalid: int = 0
+    duplicates: int = 0
+    details: tuple[DepartmentGlossaryImportDetail, ...] = ()
+
+
 @dataclass(frozen=True)
 class RequiredGlossaryTerm:
     id: str
@@ -394,6 +436,266 @@ def load_department_glossary_pairs(
     pairs = [(entry.source_term, entry.target_term) for entry in entries]
     pairs.sort(key=lambda pair: (-len(pair[0]), pair[0]))
     return pairs
+
+
+def _find_department_glossary_library_by_code(code: str) -> DepartmentGlossaryLibrary | None:
+    cleaned_code = str(code or "").strip()
+    if not cleaned_code:
+        return None
+    with job_store.session_scope() as session:
+        record = session.scalar(
+            select(job_store.DepartmentGlossaryLibraryRecord).where(
+                job_store.DepartmentGlossaryLibraryRecord.code == cleaned_code
+            )
+        )
+        return _library_from_record(record) if record is not None else None
+
+
+def _import_summary_from_details(
+    *,
+    dry_run: bool,
+    library_id: int | None,
+    scanned: int,
+    details: list[DepartmentGlossaryImportDetail],
+) -> DepartmentGlossaryImportSummary:
+    counts = {
+        IMPORT_ACTION_CREATED: 0,
+        IMPORT_ACTION_UPDATED: 0,
+        IMPORT_ACTION_UNCHANGED: 0,
+        IMPORT_ACTION_WOULD_CREATE: 0,
+        IMPORT_ACTION_WOULD_UPDATE: 0,
+        IMPORT_ACTION_INVALID: 0,
+        IMPORT_ACTION_DUPLICATE: 0,
+    }
+    for detail in details:
+        counts[detail.action] = counts.get(detail.action, 0) + 1
+    return DepartmentGlossaryImportSummary(
+        dry_run=dry_run,
+        library_id=library_id,
+        scanned=scanned,
+        created=counts[IMPORT_ACTION_CREATED],
+        updated=counts[IMPORT_ACTION_UPDATED],
+        unchanged=counts[IMPORT_ACTION_UNCHANGED],
+        would_create=counts[IMPORT_ACTION_WOULD_CREATE],
+        would_update=counts[IMPORT_ACTION_WOULD_UPDATE],
+        invalid=counts[IMPORT_ACTION_INVALID],
+        duplicates=counts[IMPORT_ACTION_DUPLICATE],
+        details=tuple(details),
+    )
+
+
+def _department_glossary_import_existing_entries(
+    *,
+    library_id: int | None,
+    source_lang: str,
+    target_lang: str,
+) -> dict[str, DepartmentGlossaryEntry]:
+    if library_id is None:
+        return {}
+    entries = list_department_glossary_entries(
+        library_id,
+        active_only=True,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    return {entry.source_term: entry for entry in entries}
+
+
+def _department_glossary_import_item_detail(
+    item: object,
+    *,
+    row_number: int,
+    accepted_sources: set[str],
+) -> DepartmentGlossaryImportDetail | None:
+    if not isinstance(item, dict):
+        return DepartmentGlossaryImportDetail(
+            row_number=row_number,
+            action=IMPORT_ACTION_INVALID,
+            reason=IMPORT_REASON_ITEM_MUST_BE_OBJECT,
+        )
+    source_term = str(item.get("cn") or item.get("source_term") or "").strip()
+    target_term = str(item.get("en") or item.get("target_term") or "").strip()
+    if not source_term:
+        return DepartmentGlossaryImportDetail(
+            row_number=row_number,
+            action=IMPORT_ACTION_INVALID,
+            reason=IMPORT_REASON_MISSING_SOURCE_TERM,
+            target_term=target_term,
+        )
+    if not target_term:
+        return DepartmentGlossaryImportDetail(
+            row_number=row_number,
+            action=IMPORT_ACTION_INVALID,
+            reason=IMPORT_REASON_MISSING_TARGET_TERM,
+            source_term=source_term,
+        )
+    if source_term in accepted_sources:
+        return DepartmentGlossaryImportDetail(
+            row_number=row_number,
+            action=IMPORT_ACTION_DUPLICATE,
+            reason=IMPORT_REASON_DUPLICATE_SOURCE_TERM,
+            source_term=source_term,
+            target_term=target_term,
+        )
+    accepted_sources.add(source_term)
+    return None
+
+
+def import_department_glossary_json(
+    json_path: Path | str,
+    *,
+    apply: bool = False,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+    created_by_work_id: str | None = None,
+    updated_by_work_id: str | None = None,
+) -> DepartmentGlossaryImportSummary:
+    path = Path(json_path)
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, list):
+        return DepartmentGlossaryImportSummary(
+            dry_run=not apply,
+            library_id=None,
+            scanned=0,
+            invalid=1,
+            details=(
+                DepartmentGlossaryImportDetail(
+                    row_number=1,
+                    action=IMPORT_ACTION_INVALID,
+                    reason=IMPORT_REASON_JSON_MUST_BE_LIST,
+                ),
+            ),
+        )
+
+    normalized_source_lang = _normalize_glossary_lang(source_lang)
+    normalized_target_lang = _normalize_glossary_lang(target_lang)
+    library = (
+        get_or_create_default_department_glossary()
+        if apply
+        else _find_department_glossary_library_by_code(DEFAULT_DEPARTMENT_GLOSSARY_CODE)
+    )
+    existing_by_source = _department_glossary_import_existing_entries(
+        library_id=library.library_id if library is not None else None,
+        source_lang=normalized_source_lang,
+        target_lang=normalized_target_lang,
+    )
+
+    details: list[DepartmentGlossaryImportDetail] = []
+    accepted_sources: set[str] = set()
+    for index, item in enumerate(payload, start=2):
+        item_detail = _department_glossary_import_item_detail(
+            item,
+            row_number=index,
+            accepted_sources=accepted_sources,
+        )
+        if item_detail is not None:
+            details.append(item_detail)
+            continue
+        assert isinstance(item, dict)
+        source_term = str(item.get("cn") or item.get("source_term") or "").strip()
+        target_term = str(item.get("en") or item.get("target_term") or "").strip()
+
+        existing = existing_by_source.get(source_term)
+        if existing is None:
+            if not apply:
+                details.append(
+                    DepartmentGlossaryImportDetail(
+                        row_number=index,
+                        action=IMPORT_ACTION_WOULD_CREATE,
+                        reason=IMPORT_REASON_NEW_ENTRY,
+                        source_term=source_term,
+                        target_term=target_term,
+                    )
+                )
+                continue
+            entry_id = upsert_department_glossary_entry(
+                library_id=library.library_id,
+                source_lang=normalized_source_lang,
+                target_lang=normalized_target_lang,
+                source_term=source_term,
+                target_term=target_term,
+                created_by_work_id=created_by_work_id,
+                updated_by_work_id=updated_by_work_id,
+            )
+            details.append(
+                DepartmentGlossaryImportDetail(
+                    row_number=index,
+                    action=IMPORT_ACTION_CREATED,
+                    reason=IMPORT_REASON_NEW_ENTRY,
+                    source_term=source_term,
+                    target_term=target_term,
+                    entry_id=entry_id,
+                )
+            )
+            existing_by_source[source_term] = DepartmentGlossaryEntry(
+                entry_id=entry_id,
+                library_id=library.library_id,
+                source_lang=normalized_source_lang,
+                target_lang=normalized_target_lang,
+                source_term=source_term,
+                target_term=target_term,
+                status=STATUS_ACTIVE,
+            )
+            continue
+
+        if existing.target_term == target_term:
+            details.append(
+                DepartmentGlossaryImportDetail(
+                    row_number=index,
+                    action=IMPORT_ACTION_UNCHANGED,
+                    reason=IMPORT_REASON_EXISTING_TERM_UNCHANGED,
+                    source_term=source_term,
+                    target_term=target_term,
+                    entry_id=existing.entry_id,
+                )
+            )
+            continue
+        if not apply:
+            details.append(
+                DepartmentGlossaryImportDetail(
+                    row_number=index,
+                    action=IMPORT_ACTION_WOULD_UPDATE,
+                    reason=IMPORT_REASON_EXISTING_TERM_UPDATED,
+                    source_term=source_term,
+                    target_term=target_term,
+                    entry_id=existing.entry_id,
+                )
+            )
+            continue
+        entry_id = upsert_department_glossary_entry(
+            library_id=library.library_id,
+            source_lang=normalized_source_lang,
+            target_lang=normalized_target_lang,
+            source_term=source_term,
+            target_term=target_term,
+            updated_by_work_id=updated_by_work_id or created_by_work_id,
+        )
+        details.append(
+            DepartmentGlossaryImportDetail(
+                row_number=index,
+                action=IMPORT_ACTION_UPDATED,
+                reason=IMPORT_REASON_EXISTING_TERM_UPDATED,
+                source_term=source_term,
+                target_term=target_term,
+                entry_id=entry_id,
+            )
+        )
+        existing_by_source[source_term] = DepartmentGlossaryEntry(
+            entry_id=entry_id,
+            library_id=library.library_id,
+            source_lang=normalized_source_lang,
+            target_lang=normalized_target_lang,
+            source_term=source_term,
+            target_term=target_term,
+            status=STATUS_ACTIVE,
+        )
+
+    return _import_summary_from_details(
+        dry_run=not apply,
+        library_id=library.library_id if library is not None else None,
+        scanned=len(payload),
+        details=details,
+    )
 
 
 def global_glossary_path() -> Path:
