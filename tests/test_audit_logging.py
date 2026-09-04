@@ -217,8 +217,9 @@ def test_record_system_error_sends_teams_alert_and_persists_row(audit_app, monke
     assert calls[0]["url"] == "https://teams.example/webhook"
     assert calls[0]["timeout"] == 2.0
     assert calls[0]["json"]["source"] == "worker.loop"
-    assert calls[0]["json"]["message"] == "Worker loop failure"
+    assert calls[0]["json"]["message"] == "Worker loop failure: boom"
     assert calls[0]["json"]["exception_type"] == "RuntimeError"
+    assert calls[0]["json"]["alert_summary"] == "boom"
     assert calls[0]["json"]["job_id"] == "c" * 32
     assert calls[0]["json"]["worker_id"] == "worker-test"
     assert calls[0]["json"]["stage"] == "failed"

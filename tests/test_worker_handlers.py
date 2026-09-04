@@ -8,7 +8,7 @@ import uuid
 import pytest
 from sqlalchemy import delete
 
-from app.services import job_store, jobs, worker
+from app.services import alerts, job_store, jobs, worker
 
 
 def _job_id() -> str:
@@ -328,12 +328,25 @@ def test_word_handler_defaults_and_normalizes_options(
 def test_worker_loop_records_orphan_recovery_exception_and_continues(app, monkeypatch):
     _delete_system_errors()
     recovery_calls = {"count": 0}
+    alert_calls = []
+    app.config.update(
+        TEAMS_ALERT_ENABLED=True,
+        TEAMS_ALERT_WEBHOOK_URL="https://teams.example/webhook",
+        TEAMS_ALERT_DEDUP_SECONDS=0,
+        TEAMS_ALERT_HOST="test-host",
+    )
+
+    def fake_post(url, *, json, timeout):
+        alert_calls.append({"url": url, "json": json, "timeout": timeout})
+        return type("Response", (), {"status_code": 204, "text": ""})()
+
+    monkeypatch.setattr(alerts.requests, "post", fake_post)
 
     def fail_then_stop_recovery():
         recovery_calls["count"] += 1
         if recovery_calls["count"] > 1:
             raise KeyboardInterrupt
-        raise RuntimeError("recovery unavailable")
+        raise RuntimeError("Database connection failed: login timeout expired")
 
     monkeypatch.setattr(
         worker.job_store,
@@ -354,8 +367,16 @@ def test_worker_loop_records_orphan_recovery_exception_and_continues(app, monkey
         assert rows[0].component == "worker.loop"
         assert rows[0].message == "Worker orphan recovery failure"
         assert rows[0].job_id is None
+        assert detail["exception_message"] == "Database connection failed: login timeout expired"
         assert detail["worker_id"] == "worker-test"
         assert detail["failure_kind"] == "orphan_recovery_failed"
+        assert len(alert_calls) == 1
+        assert alert_calls[0]["json"]["message"] == (
+            "Worker orphan recovery failure: Database connection failed: login timeout expired"
+        )
+        assert alert_calls[0]["json"]["alert_summary"] == (
+            "Database connection failed: login timeout expired"
+        )
         assert recovery_calls["count"] == 2
     finally:
         _delete_system_errors()

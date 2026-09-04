@@ -68,13 +68,14 @@ def test_teams_alert_posts_safe_payload_when_enabled():
                 "status": "ERROR",
                 "host": "translate-prod-01",
                 "time": "1970-01-01 08:16:40",
-                "message": "OCR API 請求連續失敗 3 次",
+                "message": "OCR API 請求連續失敗 3 次: internal secret",
                 "source": "ocr.pipeline",
                 "environment": "production",
                 "job_id": "abc123",
                 "job_type": "ocr_overlay",
                 "stage": "ocr",
                 "exception_type": "RuntimeError",
+                "alert_summary": "internal secret",
                 "path": "/api/job/abc123",
                 "method": "POST",
                 "endpoint": "api.batch_translate",
@@ -82,6 +83,73 @@ def test_teams_alert_posts_safe_payload_when_enabled():
             },
         }
     ]
+
+
+def test_teams_alert_sanitizes_and_truncates_alert_summary():
+    calls = []
+
+    def fake_post(url, *, json, timeout):
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return FakeResponse(202, "accepted")
+
+    config = {
+        "APP_ENV": "production",
+        "TEAMS_ALERT_ENABLED": True,
+        "TEAMS_ALERT_WEBHOOK_URL": "https://teams.example/webhook",
+    }
+    long_tail = "x" * 600
+
+    result = alerts.send_teams_alert(
+        config,
+        source="batch.translate",
+        message="Batch translate failed",
+        alert_summary=(
+            "OpenAI request failed\n"
+            "url=https://api.example/v1/jobs?token=secret-token "
+            "api_key=secret-key Authorization Bearer abc.def "
+            f"{long_tail}"
+        ),
+        detail={
+            "exception_message": "fallback should not win",
+            "traceback": "secret stack",
+            "raw_request_body": "secret",
+        },
+        post=fake_post,
+        dedup_cache=alerts.AlertDedupCache(),
+        now=lambda: 1000.0,
+    )
+
+    assert result.sent is True
+    summary = calls[0]["json"]["alert_summary"]
+    assert calls[0]["json"]["message"].startswith(
+        "Batch translate failed: OpenAI request failed url=/v1/jobs"
+    )
+    assert summary.startswith("OpenAI request failed url=/v1/jobs")
+    assert len(summary) == alerts.MAX_ALERT_SUMMARY_LENGTH
+    assert "secret-token" not in summary
+    assert "secret-key" not in summary
+    assert "abc.def" not in summary
+    assert "traceback" not in calls[0]["json"]
+    assert "raw_request_body" not in calls[0]["json"]
+
+
+def test_teams_alert_message_includes_exception_summary_fallback():
+    payload = alerts.build_teams_alert_payload(
+        {"APP_ENV": "production", "TEAMS_ALERT_HOST": "host-1"},
+        source="ocr.pipeline",
+        message="OCR pipeline failed",
+        exception_type="RuntimeError",
+        detail={
+            "exception_message": "OCR API request timed out after 0.1 seconds token=secret",
+            "stage": "ocr",
+        },
+        now_ts=1000.0,
+    )
+
+    assert payload["message"] == (
+        "OCR pipeline failed: OCR API request timed out after 0.1 seconds token=[redacted]"
+    )
+    assert payload["alert_summary"] == "OCR API request timed out after 0.1 seconds token=[redacted]"
 
 
 def test_teams_alert_includes_external_service_safe_fields_only():

@@ -8,6 +8,10 @@ This context defines the operational language used by the PDF OCR translation sy
 A runtime operational signal sent to administrators when a system-level error or external-service retry exhaustion needs attention. Alerts are distinct from normal user-facing job status updates.
 _Avoid_: Notification, Incident, Message
 
+**Alert Summary**:
+A safe, human-readable description inside an Alert that helps administrators quickly understand the likely failure. It is distinct from raw traceback data or unfiltered exception details.
+_Avoid_: Raw exception, Traceback, Debug log
+
 **System Error**:
 An operational error record for failures that need administrator visibility, including external-service retry exhaustion and background-process failures. System Errors are the eligibility boundary for Alerts.
 _Avoid_: Job failure, Debug error, User error

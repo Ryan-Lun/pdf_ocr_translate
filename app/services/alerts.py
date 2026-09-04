@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import socket
 import threading
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TEAMS_ALERT_TIMEOUT_SECONDS = 2.0
 DEFAULT_TEAMS_ALERT_DEDUP_SECONDS = 900.0
+MAX_ALERT_SUMMARY_LENGTH = 500
 SAFE_DETAIL_FIELDS = (
     "stage",
     "job_type",
@@ -79,6 +81,7 @@ def send_teams_alert(
     message: str,
     exception_type: str = "",
     job_id: str | None = None,
+    alert_summary: str | None = None,
     detail: Mapping[str, Any] | None = None,
     post: Callable[..., Any] | None = None,
     dedup_cache: AlertDedupCache | None = None,
@@ -121,6 +124,7 @@ def send_teams_alert(
         message=cleaned_message,
         exception_type=cleaned_exception_type,
         job_id=cleaned_job_id,
+        alert_summary=alert_summary,
         detail=detail,
         now_ts=now_ts,
     )
@@ -194,15 +198,22 @@ def build_teams_alert_payload(
     message: str,
     exception_type: str = "",
     job_id: str | None = None,
+    alert_summary: str | None = None,
     detail: Mapping[str, Any] | None = None,
     now_ts: float | None = None,
 ) -> dict[str, Any]:
     timestamp = datetime.fromtimestamp(_default_now() if now_ts is None else now_ts)
+    cleaned_message = _clean_text(message) or "System error"
+    cleaned_alert_summary = _clean_alert_summary(
+        alert_summary
+        or (detail or {}).get("alert_summary")
+        or (detail or {}).get("exception_message")
+    )
     payload: dict[str, Any] = {
         "status": "ERROR",
         "host": _clean_text(config.get("TEAMS_ALERT_HOST")) or socket.gethostname(),
         "time": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-        "message": _clean_text(message)[:500],
+        "message": _compose_alert_message(cleaned_message, cleaned_alert_summary),
         "source": _clean_text(source) or "unknown",
         "environment": _clean_text(config.get("APP_ENV")) or "unknown",
     }
@@ -212,6 +223,8 @@ def build_teams_alert_payload(
     cleaned_exception_type = _clean_text(exception_type)
     if cleaned_exception_type:
         payload["exception_type"] = cleaned_exception_type
+    if cleaned_alert_summary:
+        payload["alert_summary"] = cleaned_alert_summary
     for field in SAFE_DETAIL_FIELDS:
         value = _clean_text((detail or {}).get(field))
         if not value:
@@ -221,6 +234,14 @@ def build_teams_alert_payload(
         if value:
             payload[field] = value
     return payload
+
+
+def _compose_alert_message(message: str, alert_summary: str) -> str:
+    cleaned_message = _clean_text(message) or "System error"
+    cleaned_summary = _clean_text(alert_summary)
+    if not cleaned_summary or cleaned_summary in cleaned_message:
+        return cleaned_message[:MAX_ALERT_SUMMARY_LENGTH]
+    return f"{cleaned_message}: {cleaned_summary}"[:MAX_ALERT_SUMMARY_LENGTH]
 
 
 def _default_now() -> float:
@@ -255,6 +276,35 @@ def _float_config(
 
 def _clean_text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
+
+
+def _clean_alert_summary(value: Any) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    text = _strip_urls_to_paths(text)
+    text = _redact_sensitive_pairs(text)
+    return text[:MAX_ALERT_SUMMARY_LENGTH]
+
+
+def _strip_urls_to_paths(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        parsed = urlsplit(match.group(0))
+        return parsed.path or "[url]"
+
+    return re.sub(r"https?://[^\s]+", replace, value)
+
+
+def _redact_sensitive_pairs(value: str) -> str:
+    patterns = (
+        r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret|credential)\s*[:=]\s*[^\s,;]+",
+        r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]+",
+        r"(?i)([?&](?:token|key|code|secret|password|signature|sig)=)[^&\s]+",
+    )
+    redacted = value
+    for pattern in patterns:
+        redacted = re.sub(pattern, lambda match: f"{match.group(1)}=[redacted]", redacted)
+    return redacted
 
 
 def _path_without_query(value: str) -> str:
