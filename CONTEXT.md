@@ -28,6 +28,14 @@ _Avoid_: User cancellation, Upload error
 An approved glossary translation that must appear exactly as the chosen target-language term while allowing the surrounding sentence syntax to be translated naturally.
 _Avoid_: Hint, synonym, protected content
 
+**Department Glossary**:
+A glossary library scoped to a department's approved terminology, selected so terms from different departments are not mixed in the same translation job.
+_Avoid_: System glossary, global glossary, personal glossary
+
+**Effective Glossary**:
+The set of glossary entries actually applied to a translation job after the selected Department Glossary and any allowed override rules are resolved.
+_Avoid_: All glossary entries, Translation Memory, glossary database
+
 **Exact Protected Content**:
 Source content that must remain byte-for-byte unchanged in the translated output, such as user-defined do-not-translate terms, identifiers, model numbers, URLs, and email addresses.
 _Avoid_: Required glossary term, terminology preference
