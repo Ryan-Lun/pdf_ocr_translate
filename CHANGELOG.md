@@ -18,6 +18,13 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.1.1 - 2026-09-04
+
+### Fixed
+
+- 改善 Teams Alert 警報內容，將清洗後的錯誤摘要附加到警報訊息，讓 OCR API timeout、資料庫連線等系統錯誤可直接從 Teams 判斷原因。
+- 保留 Teams Alert 敏感資訊防護，避免 traceback、credential、raw request body、完整 URL query 等內容外洩。
+
 ## 0.1.0 - 2026-09-03
 
 ### Added

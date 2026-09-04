@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import tomllib
@@ -67,12 +68,13 @@ def test_version_management_docs_and_changelog_exist():
     version_docs = Path("docs/system-description/21-版本號與Changelog管理.md").read_text(encoding="utf-8")
     index = Path("docs/system-description/README.md").read_text(encoding="utf-8")
 
-    assert f"{_project_version()} - 2026-09-03" in changelog
+    assert re.search(rf"^## {re.escape(_project_version())} - \d{{4}}-\d{{2}}-\d{{2}}$", changelog, re.MULTILINE)
     assert "Semantic Versioning" in changelog
     assert "MAJOR.MINOR.PATCH" in version_docs
     assert "pyproject.toml" in version_docs
     assert "CHANGELOG.md" in version_docs
     assert "21-版本號與Changelog管理.md" in index
+
 
 def test_index_uses_versioned_static_assets(client):
     from app.version import APP_VERSION
