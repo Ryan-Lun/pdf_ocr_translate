@@ -25,6 +25,7 @@
 | `19-Glossary自然語法人工驗收指引.md` | 附錄 D. Glossary 自然語法人工驗收指引 |
 | `20-Stage2兩階段翻譯設定與驗收指引.md` | 附錄 E. Stage 2 兩階段翻譯設定與驗收指引 |
 | `21-版本號與Changelog管理.md` | 附錄 F. 版本號與 Changelog 管理 |
+| `22-DepartmentGlossarySQLTransition.md` | 附錄 G. Department Glossary SQL Transition 操作指引 |
 
 ## 待補充項目
 

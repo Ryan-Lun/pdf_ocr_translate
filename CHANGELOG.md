@@ -18,6 +18,16 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.6.1 - 2026-09-07
+
+### Added
+
+- 新增 Department Glossary SQL transition 操作指引，涵蓋 SQL-first 模型、JSON dry-run/apply 匯入、API 與翻譯人工驗收、job trace、rollback/fallback 與版本更新提醒。
+
+### Changed
+
+- 補齊環境與 release 文件檢查，讓 `TRANSLATION_GLOSSARY_SOURCE`、`GLOSSARY_CONTEXT_ARTIFACT_ENABLED`、`glossary_hits.json` 與 `department_glossary_*` trace 的操作說明可被測試鎖住。
+
 ## 0.6.0 - 2026-09-07
 
 ### Added
