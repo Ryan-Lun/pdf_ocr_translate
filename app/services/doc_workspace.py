@@ -194,6 +194,7 @@ def enqueue_doc_job_from_upload(
     creator_name: str = "",
     owner_work_id: str = "",
     system_prompt: str | None = None,
+    department_glossary_context: dict[str, object] | None = None,
 ) -> str:
     job_id = uuid.uuid4().hex
     job_dir = jobs.job_dir(job_id, job_root=jobs.job_root_for_type("doc_workspace"))
@@ -201,6 +202,10 @@ def enqueue_doc_job_from_upload(
     now_ts = time.time()
     custom_system_prompt = str(system_prompt or "").strip()
     owner = str(owner_work_id or "").strip()
+    department_glossary_config = glossary.add_department_glossary_context_to_config(
+        {},
+        department_glossary_context or {},
+    )
     meta = {
         "job_name": display_name,
         "job_type": "doc_workspace",
@@ -211,6 +216,7 @@ def enqueue_doc_job_from_upload(
         "system_prompt": custom_system_prompt,
         "creator_name": creator_name,
         "owner_work_id": owner,
+        **department_glossary_config,
     }
     payload = {
         "source_lang": source_lang,
@@ -218,6 +224,7 @@ def enqueue_doc_job_from_upload(
         "system_prompt": custom_system_prompt,
         "creator_name": creator_name,
         "owner_work_id": owner,
+        **department_glossary_config,
     }
     jobs.create_job_state(
         job_dir,

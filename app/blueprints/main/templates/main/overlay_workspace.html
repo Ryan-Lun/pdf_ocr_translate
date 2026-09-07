@@ -89,6 +89,15 @@
               </select>
             </label>
             <label>
+              <span>部門詞彙庫</span>
+              <select name="department_glossary_library_id" required>
+                <option value="" selected>請選擇部門詞彙庫</option>
+                {% for library in department_glossary_libraries %}
+                <option value="{{ library.library_id }}">{{ library.name }} ({{ library.department_code }})</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
               <span>翻譯模型</span>
               <select id="translateModelSelect" name="model">
                 <option value="{{ batch_model }}" data-mode="batch" selected>{{ batch_model }}</option>

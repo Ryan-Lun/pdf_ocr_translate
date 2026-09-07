@@ -7,7 +7,7 @@ from uuid import uuid4
 from flask import Blueprint, abort, redirect, render_template, request, url_for
 from flask_login import current_user
 
-from ...services import audit_service, authz_service, doc_workspace, document_templates, jobs, pipeline, state, submit_quota, word_translate
+from ...services import audit_service, authz_service, doc_workspace, document_templates, glossary, jobs, pipeline, state, submit_quota, word_translate
 
 main_bp = Blueprint(
     "main",
@@ -16,6 +16,30 @@ main_bp = Blueprint(
     static_folder="static",
     static_url_path="/static/main",
 )
+
+
+def _active_department_glossary_libraries() -> list[glossary.DepartmentGlossaryLibrary]:
+    return glossary.list_department_glossary_libraries(active_only=True)
+
+
+def _department_glossary_source_lang(source_lang: str) -> str:
+    return "zh" if str(source_lang or "").strip().lower() == "auto" else source_lang
+
+
+def _resolve_department_glossary_submission(
+    *,
+    source_lang: str,
+    target_lang: str,
+) -> dict[str, object]:
+    try:
+        selected = glossary.resolve_selected_department_glossary(
+            request.form.get("department_glossary_library_id"),
+            source_lang=_department_glossary_source_lang(source_lang),
+            target_lang=target_lang,
+        )
+    except glossary.DepartmentGlossarySelectionError as exc:
+        abort(400, exc.user_message)
+    return selected.to_context()
 
 
 def _safe_upload_name(filename: str, fallback_ext: str) -> str:
@@ -120,6 +144,7 @@ def overlay_workspace() -> str:
         "main/overlay_workspace.html",
         batch_model=state.AZURE_BATCH_MODEL,
         realtime_model=state.PDF_REALTIME_TRANSLATE_MODEL,
+        department_glossary_libraries=_active_department_glossary_libraries(),
     )
 
 
@@ -161,12 +186,18 @@ def template_editor_page(job_id: str) -> str:
 
 @main_bp.route("/workspace/pdf-doc", methods=["GET"], endpoint="doc_workspace_page")
 def doc_workspace_page() -> str:
-    return render_template("main/doc_workspace.html")
+    return render_template(
+        "main/doc_workspace.html",
+        department_glossary_libraries=_active_department_glossary_libraries(),
+    )
 
 
 @main_bp.route("/workspace/word", methods=["GET"], endpoint="word_workspace_page")
 def word_workspace_page() -> str:
-    return render_template("main/word_workspace.html")
+    return render_template(
+        "main/word_workspace.html",
+        department_glossary_libraries=_active_department_glossary_libraries(),
+    )
 
 
 @main_bp.route("/upload", methods=["POST"], endpoint="upload")
@@ -210,6 +241,10 @@ def upload() -> str:
     _enforce_submit_quota(creator_name)
     if keep_lang not in {"all", "zh", "en"}:
         keep_lang = "all"
+    department_glossary_context = _resolve_department_glossary_submission(
+        source_lang=translate_source_lang,
+        target_lang=translate_target_lang,
+    )
 
     for file in upload_files:
         if not file or file.filename == "":
@@ -225,6 +260,8 @@ def upload() -> str:
             enqueue_options["owner_work_id"] = owner_work_id
         if page_numbers:
             enqueue_options["page_numbers"] = page_numbers
+        if department_glossary_context:
+            enqueue_options["department_glossary_context"] = department_glossary_context
         created_job_id = pipeline.enqueue_job_from_upload(
             tmp_path,
             display_name,
@@ -352,6 +389,15 @@ def upload_doc_workspace() -> str:
     creator_name = _current_creator_name()
     owner_work_id = _current_owner_work_id()
     _enforce_submit_quota(creator_name)
+    department_glossary_context = _resolve_department_glossary_submission(
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    enqueue_options = (
+        {"department_glossary_context": department_glossary_context}
+        if department_glossary_context
+        else {}
+    )
 
     for file in files:
         if not file or file.filename == "":
@@ -370,6 +416,7 @@ def upload_doc_workspace() -> str:
             creator_name,
             owner_work_id,
             system_prompt=system_prompt,
+            **enqueue_options,
         )
         audit_service.record_audit(
             "job_upload",
@@ -409,6 +456,15 @@ def upload_word_workspace() -> str:
     creator_name = _current_creator_name()
     owner_work_id = _current_owner_work_id()
     _enforce_submit_quota(creator_name)
+    department_glossary_context = _resolve_department_glossary_submission(
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    enqueue_options = (
+        {"department_glossary_context": department_glossary_context}
+        if department_glossary_context
+        else {}
+    )
 
     for file in files:
         if not file or file.filename == "":
@@ -430,6 +486,7 @@ def upload_word_workspace() -> str:
             system_prompt=system_prompt,
             layout_mode=layout_mode,
             translate_tables=translate_tables,
+            **enqueue_options,
         )
         audit_service.record_audit(
             "job_upload",

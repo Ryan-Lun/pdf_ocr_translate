@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 
 from ocr_pipeline.pipeline import PipelineCancelled, run_pipeline
 
-from . import audit_service, batch, jobs, ocr, state
+from . import audit_service, batch, glossary, jobs, ocr, state
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +153,7 @@ def enqueue_job_from_upload(
     document_mode: str,
     creator_name: str = "",
     owner_work_id: str = "",
+    department_glossary_context: dict[str, object] | None = None,
     job_root: Path | None = None,
     job_type: str = "ocr_overlay",
     page_numbers: list[int] | None = None,
@@ -165,6 +166,10 @@ def enqueue_job_from_upload(
     normalized_document_mode = jobs.normalize_document_mode(document_mode)
     normalized_translate_mode = jobs.normalize_translate_mode(translate_mode)
     owner = str(owner_work_id or "").strip()
+    department_glossary_config = glossary.add_department_glossary_context_to_config(
+        {},
+        department_glossary_context or {},
+    )
     meta = {
         "job_name": job_name,
         "creator_name": creator_name,
@@ -174,6 +179,7 @@ def enqueue_job_from_upload(
         "translate_mode": normalized_translate_mode,
         "processing_started_at": now_ts,
         "ocr_started_at": now_ts,
+        **department_glossary_config,
     }
     payload = {
         "dpi": dpi,
@@ -191,6 +197,7 @@ def enqueue_job_from_upload(
         "owner_work_id": owner,
         "processing_started_at": now_ts,
         "ocr_started_at": now_ts,
+        **department_glossary_config,
     }
     jobs.create_job_state(
         job_dir,

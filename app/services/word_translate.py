@@ -1918,6 +1918,7 @@ def enqueue_word_job_from_upload(
     system_prompt: str | None = None,
     layout_mode: str | None = None,
     translate_tables: object = True,
+    department_glossary_context: dict[str, object] | None = None,
 ) -> str:
     job_id = uuid.uuid4().hex
     job_dir = jobs.job_dir(job_id, job_root=jobs.job_root_for_type("word_translate"))
@@ -1939,6 +1940,10 @@ def enqueue_word_job_from_upload(
     normalized_layout_mode = normalize_word_layout_mode(layout_mode)
     normalized_translate_tables = normalize_translate_tables(translate_tables)
     owner = str(owner_work_id or "").strip()
+    department_glossary_config = glossary.add_department_glossary_context_to_config(
+        {},
+        department_glossary_context or {},
+    )
     meta = {
         "job_name": display_name,
         "job_type": "word_translate",
@@ -1954,6 +1959,7 @@ def enqueue_word_job_from_upload(
         "translate_tables": normalized_translate_tables,
         "source_filename": safe_name,
         "progress": 0.0,
+        **department_glossary_config,
     }
     payload = {
         "source_lang": source_lang,
@@ -1966,6 +1972,7 @@ def enqueue_word_job_from_upload(
         "translate_tables": normalized_translate_tables,
         "source_filename": safe_name,
         "processing_started_at": now_ts,
+        **department_glossary_config,
     }
     jobs.create_job_state(
         job_dir,

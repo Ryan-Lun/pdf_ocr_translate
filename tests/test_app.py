@@ -9,7 +9,50 @@ from types import SimpleNamespace
 
 import fitz
 
-from app.services import auth_store, authz_service, doc_workspace, document_templates, job_store, jobs, pipeline, state, translation_memory
+from app.services import (
+    auth_store,
+    authz_service,
+    doc_workspace,
+    document_templates,
+    glossary,
+    job_store,
+    jobs,
+    pipeline,
+    state,
+    translation_memory,
+    word_translate,
+)
+
+
+def _clear_department_glossary() -> None:
+    with job_store.session_scope() as session:
+        session.query(job_store.DepartmentGlossaryEntryRecord).delete()
+        session.query(job_store.DepartmentGlossaryLibraryRecord).delete()
+
+
+def _create_department_glossary_library(
+    *,
+    code: str = "reg-doc",
+    name: str = "法規文管部",
+    department_code: str = "DOC",
+    is_active: bool = True,
+    entries: list[tuple[str, str]] | None = None,
+) -> glossary.DepartmentGlossaryLibrary:
+    library = glossary.get_or_create_department_glossary_library(
+        code=code,
+        name=name,
+        department_code=department_code,
+        is_active=is_active,
+    )
+    for source_term, target_term in entries or []:
+        glossary.upsert_department_glossary_entry(
+            library_id=library.library_id,
+            source_lang="zh",
+            target_lang="en",
+            source_term=source_term,
+            target_term=target_term,
+        )
+    return library
 
 
 def test_index_ok(client):
@@ -22,6 +65,189 @@ def test_overlay_templates_page_ok(client):
     resp = client.get("/workspace/pdf-overlay/templates")
     assert resp.status_code == 200
     assert "text/html" in resp.content_type
+
+
+def test_upload_workspaces_show_blank_active_department_glossary_selector(client):
+    _clear_department_glossary()
+    active = _create_department_glossary_library(
+        code="qa",
+        name="品保部",
+        department_code="QA",
+    )
+    inactive = _create_department_glossary_library(
+        code="inactive",
+        name="停用部門",
+        department_code="OFF",
+        is_active=False,
+    )
+
+    for path in ("/workspace/pdf-overlay", "/workspace/pdf-doc", "/workspace/word"):
+        resp = client.get(path)
+        html = resp.get_data(as_text=True)
+        assert resp.status_code == 200
+        assert 'name="department_glossary_library_id"' in html
+        assert '<option value="" selected>請選擇部門詞彙庫</option>' in html
+        assert f'<option value="{active.library_id}">品保部 (QA)</option>' in html
+        assert f'<option value="{inactive.library_id}">停用部門 (OFF)</option>' not in html
+
+
+def test_upload_workspaces_reject_missing_department_glossary_selection(client, tmp_path, monkeypatch):
+    _clear_department_glossary()
+    _create_department_glossary_library()
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._enforce_submit_quota", lambda creator_name: None)
+
+    cases = [
+        ("/upload", "pdf", "sample.pdf", b"%PDF-1.4"),
+        ("/upload-doc-workspace", "pdf", "source.pdf", b"%PDF-1.4"),
+        ("/upload-word-workspace", "docx", "source.docx", b"docx"),
+    ]
+    for url, field_name, filename, content in cases:
+        resp = client.post(
+            url,
+            data={field_name: (io.BytesIO(content), filename)},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 400
+        assert "請選擇部門詞彙庫" in resp.get_data(as_text=True)
+
+
+def test_upload_workspaces_pass_selected_department_glossary_metadata(client, tmp_path, monkeypatch):
+    _clear_department_glossary()
+    library = _create_department_glossary_library(
+        code="qa",
+        name="品保部",
+        department_code="QA",
+        entries=[("外觀", "Appearance")],
+    )
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._enforce_submit_quota", lambda creator_name: None)
+    captured: dict[str, dict[str, object]] = {}
+
+    def fake_pdf_enqueue(*args, **kwargs):
+        captured["pdf"] = kwargs.get("department_glossary_context")
+        return "a" * 32
+
+    def fake_doc_enqueue(*args, **kwargs):
+        captured["doc"] = kwargs.get("department_glossary_context")
+        return "b" * 32
+
+    def fake_word_enqueue(*args, **kwargs):
+        captured["word"] = kwargs.get("department_glossary_context")
+        return "c" * 32
+
+    monkeypatch.setattr("app.blueprints.main.routes.pipeline.enqueue_job_from_upload", fake_pdf_enqueue)
+    monkeypatch.setattr("app.blueprints.main.routes.doc_workspace.enqueue_doc_job_from_upload", fake_doc_enqueue)
+    monkeypatch.setattr("app.blueprints.main.routes.word_translate.enqueue_word_job_from_upload", fake_word_enqueue)
+
+    form_value = str(library.library_id)
+    for key, url, field_name, filename, content in [
+        ("pdf", "/upload", "pdf", "sample.pdf", b"%PDF-1.4"),
+        ("doc", "/upload-doc-workspace", "pdf", "source.pdf", b"%PDF-1.4"),
+        ("word", "/upload-word-workspace", "docx", "source.docx", b"docx"),
+    ]:
+        resp = client.post(
+            url,
+            data={
+                "department_glossary_library_id": form_value,
+                field_name: (io.BytesIO(content), filename),
+            },
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 302
+        assert captured[key] == {
+            "source": "sql",
+            "library_id": library.library_id,
+            "library_code": "qa",
+            "library_name": "品保部",
+            "department_code": "QA",
+            "entry_count": 1,
+        }
+
+
+def test_enqueue_user_facing_jobs_persist_department_glossary_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "PDF_OVERLAY_JOB_ROOT", tmp_path / "pdf_overlay")
+    monkeypatch.setattr(state, "DOC_WORKSPACE_JOB_ROOT", tmp_path / "pdf_rebuild")
+    monkeypatch.setattr(state, "WORD_TRANSLATE_JOB_ROOT", tmp_path / "word_overlay")
+    monkeypatch.setattr("app.services.pipeline.jobs.job_store.register_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.pipeline.jobs.notify_jobs_update", lambda: None)
+    monkeypatch.setattr("app.services.doc_workspace.jobs.job_store.register_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.doc_workspace.jobs.notify_jobs_update", lambda: None)
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.register_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.word_translate.jobs.notify_jobs_update", lambda: None)
+
+    selected_context = {
+        "source": "sql",
+        "library_id": 10,
+        "library_code": "qa",
+        "library_name": "品保部",
+        "department_code": "QA",
+        "entry_count": 3,
+    }
+    expected = {
+        "department_glossary_source": "sql",
+        "department_glossary_library_id": 10,
+        "department_glossary_library_code": "qa",
+        "department_glossary_library_name": "品保部",
+        "department_glossary_department_code": "QA",
+        "department_glossary_entry_count": 3,
+    }
+
+    source_pdf = tmp_path / "source.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4")
+    source_docx = tmp_path / "source.docx"
+    source_docx.write_bytes(b"docx")
+
+    job_cases = [
+        (
+            pipeline.enqueue_job_from_upload(
+                source_pdf,
+                "sample",
+                200,
+                1,
+                None,
+                "auto",
+                "en",
+                "batch-model",
+                "batch",
+                "all",
+                True,
+                "form",
+                department_glossary_context=selected_context,
+            ),
+            state.JOB_ROOT,
+        ),
+        (
+            doc_workspace.enqueue_doc_job_from_upload(
+                source_pdf,
+                "sample",
+                "auto",
+                "en",
+                department_glossary_context=selected_context,
+            ),
+            jobs.job_root_for_type("doc_workspace"),
+        ),
+        (
+            word_translate.enqueue_word_job_from_upload(
+                source_docx,
+                "sample",
+                "auto",
+                "en",
+                department_glossary_context=selected_context,
+            ),
+            jobs.job_root_for_type("word_translate"),
+        ),
+    ]
+
+    for job_id, root in job_cases:
+        meta = jobs.load_job_meta(root / job_id) or {}
+        payload = job_store.deserialize_payload(job_store.get_job(job_id))
+        for key, value in expected.items():
+            assert meta[key] == value
+            assert payload[key] == value
 
 
 def test_job_roots_are_separated_by_feature(tmp_path, monkeypatch):
@@ -338,6 +564,7 @@ def test_upload_missing_pdf(client):
 def test_upload_pdf_overlay_accepts_explicit_page_numbers(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._resolve_department_glossary_submission", lambda **kwargs: {})
     captured: list[dict[str, object]] = []
 
     def fake_enqueue(
@@ -400,6 +627,7 @@ def test_upload_pdf_overlay_accepts_explicit_page_numbers(client, tmp_path, monk
 def test_upload_pdf_overlay_uses_defaults_for_blank_page_fields(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._resolve_department_glossary_submission", lambda **kwargs: {})
     captured: list[dict[str, object]] = []
 
     def fake_enqueue(
@@ -459,6 +687,7 @@ def test_upload_pdf_overlay_rejects_non_numeric_page_selection(client, tmp_path,
 def test_upload_pdf_overlay_accepts_realtime_mode(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._resolve_department_glossary_submission", lambda **kwargs: {})
     captured: list[dict[str, str]] = []
 
     def fake_enqueue(
@@ -527,6 +756,7 @@ def test_upload_pdf_overlay_accepts_realtime_mode(client, tmp_path, monkeypatch)
 def test_upload_pdf_overlay_accepts_general_force_translate_mode(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._resolve_department_glossary_submission", lambda **kwargs: {})
     captured: list[dict[str, str]] = []
 
     def fake_enqueue(
@@ -585,6 +815,7 @@ def test_upload_pdf_overlay_accepts_general_force_translate_mode(client, tmp_pat
 def test_upload_pdf_overlay_only_other_mode_keeps_explicit_source_lang(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._resolve_department_glossary_submission", lambda **kwargs: {})
     captured: list[dict[str, str]] = []
 
     def fake_enqueue(
@@ -643,6 +874,7 @@ def test_upload_pdf_overlay_only_other_mode_keeps_explicit_source_lang(client, t
 def test_upload_pdf_overlay_non_other_mode_forces_auto_source_lang(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._resolve_department_glossary_submission", lambda **kwargs: {})
     captured: list[dict[str, str]] = []
 
     def fake_enqueue(
@@ -2036,6 +2268,7 @@ def test_save_job_writes_only_changed_non_prefilled_tm_boxes(client, tmp_path, m
 def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._resolve_department_glossary_submission", lambda **kwargs: {})
     captured: list[dict[str, str]] = []
 
     def fake_enqueue(
@@ -2094,6 +2327,7 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
 def test_upload_word_workspace_defaults_to_translate_tables(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._resolve_department_glossary_submission", lambda **kwargs: {})
     monkeypatch.setattr("app.blueprints.main.routes._enforce_submit_quota", lambda creator_name: None)
     captured: list[dict[str, object]] = []
 
@@ -2131,6 +2365,7 @@ def test_upload_word_workspace_defaults_to_translate_tables(client, tmp_path, mo
 def test_upload_word_workspace_defaults_invalid_layout_mode(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._resolve_department_glossary_submission", lambda **kwargs: {})
     monkeypatch.setattr("app.blueprints.main.routes._enforce_submit_quota", lambda creator_name: None)
     captured: list[dict[str, str]] = []
 
@@ -2173,6 +2408,7 @@ def test_upload_word_workspace_defaults_invalid_layout_mode(client, tmp_path, mo
 def test_upload_word_workspace_preserves_chinese_display_name(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._resolve_department_glossary_submission", lambda **kwargs: {})
     captured: list[dict[str, str]] = []
 
     def fake_enqueue(
@@ -2222,6 +2458,7 @@ def test_upload_word_workspace_preserves_chinese_display_name(client, tmp_path, 
 def test_upload_doc_workspace_passes_source_language(client, tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr("app.blueprints.main.routes._resolve_department_glossary_submission", lambda **kwargs: {})
     captured: list[dict[str, str]] = []
 
     def fake_enqueue(

@@ -18,6 +18,22 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.6.4 - 2026-09-07
+
+### Added
+
+- PDF 原版面翻譯、PDF 翻譯重建與 Word 原版面翻譯上傳表單新增空白預設的 Department Glossary selector，只列出 active libraries，顯示格式為 `name (department_code)`。
+- 三個 user-facing job submission route 會使用 Selected Department Glossary contract 驗證 `department_glossary_library_id`，缺漏或不可用選擇會回傳 `請選擇部門詞彙庫` 等 400 validation message。
+- 三種新 job 建立流程會把 selected Department Glossary metadata 寫入 job meta 與 SQL payload：library id、code、name、department code、creation-time active entry count。
+
+### Validation
+
+- 已執行 `PYTHONPATH=. .venv/bin/python -m py_compile app/blueprints/main/routes.py app/services/pipeline.py app/services/doc_workspace.py app/services/word_translate.py tests/test_app.py`，結果通過。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_app.py -k 'upload_workspaces or enqueue_user_facing_jobs_persist_department_glossary_metadata or upload_pdf_overlay or upload_word_workspace or upload_doc_workspace or upload_rejects_when_submit_quota' -q`，結果為 17 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_word_translate.py -q`，結果為 63 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_department_glossary_sql.py -q`，結果為 16 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests -q`，結果為 525 passed、8 failed；失敗集中於既有 `tests/test_app.py` 與 `tests/test_operations_cli.py` baseline，未出現在 #73 新增 Selected Department Glossary submission tests。
+
 ## 0.6.3 - 2026-09-07
 
 ### Added
