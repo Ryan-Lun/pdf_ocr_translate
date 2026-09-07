@@ -18,6 +18,23 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.6.6 - 2026-09-07
+
+### Changed
+
+- Editor 單框重翻、多框重翻與區域補翻改為沿用 job 的 Selected Department Glossary，在執行時從 job config/meta/SQL payload 解析 selected library 並載入目前 SQL active entries。
+- Editor retranslation request 內即使帶入 `department_glossary_library_id`，也不會覆寫原 job 的 selected glossary，避免同一份文件術語來源不一致。
+- Editor retranslation 會同步更新 job 的 Department Glossary trace metadata/context artifact，讓補翻後仍可追溯 glossary 來源。
+
+### Validation
+
+- 已執行 `PYTHONPATH=. .venv/bin/python -m py_compile app/services/job_glossary.py app/blueprints/api/shared.py app/services/__init__.py app/blueprints/api/editor_routes.py tests/test_editor_selected_department_glossary.py`，結果通過。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_editor_selected_department_glossary.py -q`，結果為 3 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_api_route_registration.py tests/test_api_timeout.py -q`，結果為 8 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_app.py -k 'retranslate_region or retranslate_box or retranslate_boxes or glossary_retranslate or region_ocr_preview' -q`，結果為 6 passed、63 deselected。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_glossary_job_traceability.py -q`，結果為 7 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests -q`，結果為 536 passed、8 failed；8 個失敗仍集中於既有 `tests/test_app.py` 與 `tests/test_operations_cli.py` baseline，未出現在 #75 新增 Editor Selected Department Glossary tests。
+
 ## 0.6.5 - 2026-09-07
 
 ### Changed

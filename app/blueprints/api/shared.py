@@ -11,7 +11,7 @@ import fitz
 from flask import Blueprint, Response, abort, current_app, jsonify, request, send_file, stream_with_context, url_for
 from flask_login import current_user
 
-from ...services import audit_service, auth_store, authz_service, batch, doc_workspace, document_templates, glossary, jobs, ocr, state, translation_memory, word_translate
+from ...services import audit_service, auth_store, authz_service, batch, doc_workspace, document_templates, glossary, job_glossary, jobs, ocr, state, translation_memory, word_translate
 
 logger = logging.getLogger(__name__)
 

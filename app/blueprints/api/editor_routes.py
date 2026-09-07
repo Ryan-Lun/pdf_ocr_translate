@@ -14,6 +14,7 @@ from .shared import (
     api_bp,
     batch,
     glossary,
+    job_glossary,
     jobs,
     json,
     jsonify,
@@ -649,13 +650,21 @@ def _retranslate_boxes(
         source_texts.append(source_text)
 
     try:
+        glossary_entries = job_glossary.load_and_trace_job_department_glossary_entries(
+            job_id=job_id,
+            job_dir=job_dir,
+            config=config,
+            meta=meta,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
         translations = batch.translate_texts_for_region(
             source_texts,
             target_lang=target_lang,
             source_lang=source_lang,
             model_name=model_name,
             system_prompt=system_prompt,
-            glossary_entries=glossary.load_combined_glossary(),
+            glossary_entries=glossary_entries,
         )
     except Exception as exc:
         logger.exception(
@@ -668,6 +677,20 @@ def _retranslate_boxes(
 
     if len(translations) != len(normalized_targets):
         return {"ok": False, "error": "Translation result count mismatch."}, 500
+
+    job_glossary.write_editor_required_glossary_hits(
+        job_dir=job_dir,
+        glossary_entries=glossary_entries,
+        source_items=[
+            (
+                f"editor_box:p{int(item['page_index_0based'])}-b{int(item['box_id'])}",
+                str(item["source_text"]),
+            )
+            for item in normalized_targets
+        ],
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
 
     edits_map = jobs.load_edits_map(job_dir)
     updated_items: list[dict[str, object]] = []
@@ -860,17 +883,34 @@ def retranslate_region(job_id: str):
             ]
             source_lines = [item for item in source_lines if item]
             merged_source_text = "\n".join(source_lines).strip()
+        glossary_entries = job_glossary.load_and_trace_job_department_glossary_entries(
+            job_id=job_id,
+            job_dir=job_dir,
+            config=config,
+            meta=meta,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
         translations = batch.translate_texts_for_region(
             [merged_source_text] if merged_source_text else [],
             target_lang=target_lang,
             source_lang=source_lang,
             model_name=model_name,
             system_prompt=system_prompt,
-            glossary_entries=glossary.load_combined_glossary(),
+            glossary_entries=glossary_entries,
         )
     except Exception as exc:
         logger.exception("Region retranslate failed job_id=%s page=%s error=%s", job_id, page_idx, exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+    if merged_source_text:
+        job_glossary.write_editor_required_glossary_hits(
+            job_dir=job_dir,
+            glossary_entries=glossary_entries,
+            source_items=[(f"editor_region:p{page_idx}", merged_source_text)],
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
 
     edits_map = jobs.load_edits_map(job_dir)
     page_boxes = list(edits_map.get(page_idx) or [])
