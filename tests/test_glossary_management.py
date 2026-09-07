@@ -101,7 +101,11 @@ def _build_xlsx(rows):
 def test_glossary_page_ok(client):
     resp = client.get("/workspace/glossary")
     assert resp.status_code == 200
-    assert "詞彙庫管理" in resp.get_data(as_text=True)
+    html = resp.get_data(as_text=True)
+    assert "詞彙庫管理" in html
+    assert 'id="libraryNewBtn"' in html
+    assert 'id="libraryList"' in html
+    assert 'id="disableLibraryBtn"' in html
 
 
 def test_glossary_library_payload_maps_to_default_department_glossary(client):
@@ -330,6 +334,7 @@ def test_system_glossary_import_apply_writes_department_glossary_sql(client):
 
 def test_glossary_write_paths_require_admin_when_auth_enabled(client, monkeypatch):
     _clear_department_glossary()
+    library = glossary.create_department_glossary_library(name="品保部", department_code="QA")
     client.application.config["AUTH_ENABLED"] = True
     client.application.config["AUTH_STUB_ENABLED"] = True
     client.post("/auth/login", data={"username": "editor1", "display_name": "Editor One"})
@@ -340,11 +345,22 @@ def test_glossary_write_paths_require_admin_when_auth_enabled(client, monkeypatc
         "/api/glossary/system-import-apply",
         json={"items": [{"cn": "外觀", "en": "Appearance"}], "duplicates": [], "invalid_rows": []},
     )
+    create_library_resp = client.post(
+        "/api/glossary/libraries",
+        json={"name": "品保二部", "department_code": "QA2"},
+    )
+    update_library_resp = client.patch(
+        f"/api/glossary/libraries/{library.library_id}",
+        json={"name": "品保部更新", "department_code": "QAD"},
+    )
+    disable_library_resp = client.post(f"/api/glossary/libraries/{library.library_id}/disable")
 
     assert save_resp.status_code == 403
     assert apply_resp.status_code == 403
-    assert glossary.list_department_glossary_libraries() == []
-
+    assert create_library_resp.status_code == 403
+    assert update_library_resp.status_code == 403
+    assert disable_library_resp.status_code == 403
+    assert glossary.resolve_selected_department_glossary(library.library_id).is_active is True
 
 
 def test_glossary_write_paths_allow_admin_when_auth_enabled(client, monkeypatch):
@@ -359,12 +375,198 @@ def test_glossary_write_paths_allow_admin_when_auth_enabled(client, monkeypatch)
         "/api/glossary/system-import-apply",
         json={"items": [{"cn": "製程規範", "en": "Process Specification"}], "duplicates": [], "invalid_rows": []},
     )
+    create_library_resp = client.post(
+        "/api/glossary/libraries",
+        json={"name": "品保部", "department_code": "QA"},
+    )
 
     assert save_resp.status_code == 200
     assert apply_resp.status_code == 200
+    assert create_library_resp.status_code == 200
     library = glossary.list_department_glossary_libraries()[0]
     entries = glossary.list_department_glossary_entries(library.library_id, active_only=True)
     assert {entry.source_term: entry.target_term for entry in entries} == {
         "外觀": "Appearance",
         "製程規範": "Process Specification",
     }
+
+
+def test_department_glossary_library_lifecycle_api_create_update_disable(client):
+    _clear_department_glossary()
+
+    create_resp = client.post(
+        "/api/glossary/libraries",
+        json={"name": "品保部詞彙", "department_code": "QA"},
+    )
+
+    assert create_resp.status_code == 200
+    created = create_resp.get_json()["library"]
+    assert created["name"] == "品保部詞彙"
+    assert created["department_code"] == "QA"
+    assert created["is_active"] is True
+    assert created["is_default"] is False
+    assert created["code"]
+
+    update_resp = client.patch(
+        f"/api/glossary/libraries/{created['id']}",
+        json={
+            "name": "品質保證部詞彙",
+            "department_code": "QAD",
+            "code": "attempted-code-change",
+        },
+    )
+
+    assert update_resp.status_code == 200
+    updated = update_resp.get_json()["library"]
+    assert updated["id"] == created["id"]
+    assert updated["code"] == created["code"]
+    assert updated["name"] == "品質保證部詞彙"
+    assert updated["department_code"] == "QAD"
+
+    disable_resp = client.post(f"/api/glossary/libraries/{created['id']}/disable")
+
+    assert disable_resp.status_code == 200
+    disabled = disable_resp.get_json()["library"]
+    assert disabled["is_active"] is False
+    assert disabled["code"] == created["code"]
+    active_library_ids = [
+        item.library_id
+        for item in glossary.list_department_glossary_libraries(active_only=True)
+    ]
+    assert created["id"] not in active_library_ids
+
+
+def test_department_glossary_library_create_requires_name_and_department_code(client):
+    _clear_department_glossary()
+
+    missing_name = client.post(
+        "/api/glossary/libraries",
+        json={"name": "", "department_code": "QA"},
+    )
+    missing_department = client.post(
+        "/api/glossary/libraries",
+        json={"name": "品保部詞彙", "department_code": ""},
+    )
+
+    assert missing_name.status_code == 400
+    assert "名稱" in missing_name.get_json()["error"]
+    assert missing_department.status_code == 400
+    assert "部門代碼" in missing_department.get_json()["error"]
+
+
+def test_department_glossary_library_management_payload_includes_inactive_libraries(client):
+    _clear_department_glossary()
+    active = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    inactive = glossary.create_department_glossary_library(name="停用部門", department_code="OFF")
+    glossary.disable_department_glossary_library(inactive.library_id)
+
+    payload = client.get("/api/glossary/library").get_json()
+
+    library_ids = [item["id"] for item in payload["libraries"]]
+    assert active.library_id in library_ids
+    assert inactive.library_id in library_ids
+    inactive_payload = next(item for item in payload["libraries"] if item["id"] == inactive.library_id)
+    assert inactive_payload["is_active"] is False
+
+
+def test_inactive_department_glossary_libraries_are_hidden_from_new_job_selectors(client):
+    _clear_department_glossary()
+    active = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    inactive = glossary.create_department_glossary_library(name="停用部門", department_code="OFF")
+    glossary.disable_department_glossary_library(inactive.library_id)
+
+    for path in ("/workspace/pdf-overlay", "/workspace/pdf-doc", "/workspace/word"):
+        html = client.get(path).get_data(as_text=True)
+        assert f'<option value="{active.library_id}">品保部 (QA)</option>' in html
+        assert f'<option value="{inactive.library_id}">停用部門 (OFF)</option>' not in html
+
+
+def test_department_glossary_library_disable_is_blocked_for_queued_or_running_jobs(client):
+    _clear_department_glossary()
+    library = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    job_store.create_job(
+        job_id="1" * 32,
+        job_type="ocr_overlay",
+        stage="queued",
+        status="queued",
+        job_name="queued glossary job",
+        payload={"department_glossary_library_id": library.library_id},
+    )
+
+    resp = client.post(f"/api/glossary/libraries/{library.library_id}/disable")
+
+    assert resp.status_code == 409
+    payload = resp.get_json()
+    assert payload["ok"] is False
+    assert "執行中或佇列中" in payload["error"]
+    assert glossary.resolve_selected_department_glossary(library.library_id).is_active is True
+    job_store.delete_job("1" * 32)
+
+
+def test_department_glossary_library_disable_allows_completed_job_trace(client):
+    _clear_department_glossary()
+    library = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    job_store.create_job(
+        job_id="2" * 32,
+        job_type="ocr_overlay",
+        stage="completed",
+        status="completed",
+        job_name="completed glossary job",
+        payload={"department_glossary_library_id": library.library_id},
+    )
+
+    resp = client.post(f"/api/glossary/libraries/{library.library_id}/disable")
+
+    assert resp.status_code == 200
+    selected = glossary.resolve_selected_department_glossary(
+        library.library_id,
+        require_active=False,
+    )
+    assert selected.name == "品保部"
+    assert selected.department_code == "QA"
+    assert selected.is_active is False
+    job_store.delete_job("2" * 32)
+
+
+def test_department_glossary_library_hard_delete_route_is_not_exposed(client):
+    _clear_department_glossary()
+    library = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+
+    resp = client.delete(f"/api/glossary/libraries/{library.library_id}")
+
+    assert resp.status_code == 405
+    assert glossary.resolve_selected_department_glossary(library.library_id).is_active is True
+
+
+def test_default_department_glossary_library_update_survives_management_payload_refresh(client):
+    _clear_department_glossary()
+    default = glossary.get_or_create_default_department_glossary()
+
+    update_resp = client.patch(
+        f"/api/glossary/libraries/{default.library_id}",
+        json={"name": "法規文件管理部", "department_code": "DOC"},
+    )
+
+    assert update_resp.status_code == 200
+    payload = client.get("/api/glossary/library").get_json()
+    selected = payload["selected_library"]
+    assert selected["id"] == default.library_id
+    assert selected["name"] == "法規文件管理部"
+    assert selected["department_code"] == "DOC"
+
+
+def test_default_department_glossary_library_disable_survives_management_payload_refresh(client):
+    _clear_department_glossary()
+    default = glossary.get_or_create_default_department_glossary()
+
+    disable_resp = client.post(f"/api/glossary/libraries/{default.library_id}/disable")
+
+    assert disable_resp.status_code == 200
+    payload = client.get("/api/glossary/library").get_json()
+    selected = payload["selected_library"]
+    assert selected["id"] == default.library_id
+    assert selected["is_active"] is False
+    assert glossary.resolve_selected_department_glossary(
+        default.library_id,
+        require_active=False,
+    ).is_active is False

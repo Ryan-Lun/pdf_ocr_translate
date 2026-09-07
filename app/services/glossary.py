@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from html import escape as _html_escape, unescape as _html_unescape
@@ -81,6 +82,13 @@ class SelectedDepartmentGlossary:
 
 
 class DepartmentGlossarySelectionError(ValueError):
+    def __init__(self, code: str, user_message: str):
+        super().__init__(user_message)
+        self.code = code
+        self.user_message = user_message
+
+
+class DepartmentGlossaryLibraryError(ValueError):
     def __init__(self, code: str, user_message: str):
         super().__init__(user_message)
         self.code = code
@@ -276,6 +284,147 @@ def _entry_from_record(record: job_store.DepartmentGlossaryEntryRecord) -> Depar
     )
 
 
+def _clean_department_glossary_library_name(name: object) -> str:
+    cleaned = " ".join(str(name or "").split()).strip()
+    if not cleaned:
+        raise DepartmentGlossaryLibraryError(
+            "missing_department_glossary_library_name",
+            "請輸入部門詞彙庫名稱",
+        )
+    return cleaned
+
+
+def _clean_department_glossary_department_code(department_code: object) -> str:
+    cleaned = " ".join(str(department_code or "").split()).strip()
+    if not cleaned:
+        raise DepartmentGlossaryLibraryError(
+            "missing_department_glossary_department_code",
+            "請輸入部門代碼",
+        )
+    return cleaned
+
+
+def _slugify_department_glossary_code(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+    return slug[:80].strip("-") or "department-glossary"
+
+
+def _generate_department_glossary_code(
+    *,
+    name: str,
+    department_code: str,
+) -> str:
+    base = _slugify_department_glossary_code(f"{department_code}-{name}")
+    suffix = uuid.uuid4().hex[:8]
+    suffix_text = f"-{suffix}"
+    return f"{base[:100 - len(suffix_text)]}{suffix_text}"
+
+
+def _get_department_glossary_library_record(session, library_id: int):
+    record = session.get(job_store.DepartmentGlossaryLibraryRecord, int(library_id))
+    if record is None:
+        raise DepartmentGlossaryLibraryError(
+            "department_glossary_library_not_found",
+            "部門詞彙庫不存在",
+        )
+    return record
+
+
+def _job_payload_references_department_glossary_library(record, library_id: int) -> bool:
+    payload = job_store.deserialize_payload(record)
+    value = payload.get("department_glossary_library_id")
+    if value is None:
+        return False
+    try:
+        return int(value) == int(library_id)
+    except (TypeError, ValueError):
+        return False
+
+
+def active_job_references_department_glossary_library(library_id: int) -> list[dict[str, str | None]]:
+    with job_store.session_scope() as session:
+        records = session.scalars(
+            select(job_store.JobRecord)
+            .where(job_store.JobRecord.status.in_(("queued", "running", "cancel_requested")))
+            .order_by(job_store.JobRecord.updated_at.desc())
+        ).all()
+        matches = [
+            record
+            for record in records
+            if _job_payload_references_department_glossary_library(record, library_id)
+        ]
+        return [
+            {
+                "job_id": record.job_id,
+                "job_type": record.job_type,
+                "status": record.status,
+                "stage": record.stage,
+                "job_name": record.job_name,
+            }
+            for record in matches
+        ]
+
+
+def create_department_glossary_library(
+    *,
+    name: object,
+    department_code: object,
+) -> DepartmentGlossaryLibrary:
+    cleaned_name = _clean_department_glossary_library_name(name)
+    cleaned_department_code = _clean_department_glossary_department_code(department_code)
+    now = job_store.utcnow()
+    with job_store.session_scope() as session:
+        code = _generate_department_glossary_code(
+            name=cleaned_name,
+            department_code=cleaned_department_code,
+        )
+        record = job_store.DepartmentGlossaryLibraryRecord(
+            code=code,
+            name=cleaned_name,
+            department_code=cleaned_department_code,
+            is_default=False,
+            is_active=True,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(record)
+        session.flush()
+        return _library_from_record(record)
+
+
+def update_department_glossary_library(
+    library_id: int,
+    *,
+    name: object,
+    department_code: object,
+) -> DepartmentGlossaryLibrary:
+    cleaned_name = _clean_department_glossary_library_name(name)
+    cleaned_department_code = _clean_department_glossary_department_code(department_code)
+    with job_store.session_scope() as session:
+        record = _get_department_glossary_library_record(session, int(library_id))
+        record.name = cleaned_name
+        record.department_code = cleaned_department_code
+        record.updated_at = job_store.utcnow()
+        session.flush()
+        return _library_from_record(record)
+
+
+def disable_department_glossary_library(
+    library_id: int,
+) -> DepartmentGlossaryLibrary:
+    blocking_jobs = active_job_references_department_glossary_library(int(library_id))
+    if blocking_jobs:
+        raise DepartmentGlossaryLibraryError(
+            "department_glossary_library_has_active_jobs",
+            "此部門詞彙庫仍有執行中或佇列中的任務，請等待任務完成後再停用。",
+        )
+    with job_store.session_scope() as session:
+        record = _get_department_glossary_library_record(session, int(library_id))
+        record.is_active = False
+        record.updated_at = job_store.utcnow()
+        session.flush()
+        return _library_from_record(record)
+
 def get_or_create_department_glossary_library(
     *,
     code: str,
@@ -319,6 +468,17 @@ def get_or_create_department_glossary_library(
 
 
 def get_or_create_default_department_glossary() -> DepartmentGlossaryLibrary:
+    existing = _find_department_glossary_library_by_code(DEFAULT_DEPARTMENT_GLOSSARY_CODE)
+    if existing is not None:
+        if existing.is_default:
+            return existing
+        with job_store.session_scope() as session:
+            record = _get_department_glossary_library_record(session, existing.library_id)
+            record.is_default = True
+            record.updated_at = job_store.utcnow()
+            session.flush()
+            return _library_from_record(record)
+
     return get_or_create_department_glossary_library(
         code=DEFAULT_DEPARTMENT_GLOSSARY_CODE,
         name=DEFAULT_DEPARTMENT_GLOSSARY_NAME,
@@ -669,6 +829,10 @@ def _department_library_to_payload(library: DepartmentGlossaryLibrary) -> dict[s
         "is_default": library.is_default,
         "is_active": library.is_active,
     }
+
+
+def department_glossary_library_to_payload(library: DepartmentGlossaryLibrary) -> dict[str, str | int | bool]:
+    return _department_library_to_payload(library)
 
 
 def load_default_department_glossary_items() -> list[dict[str, str]]:
@@ -1305,7 +1469,7 @@ def glossary_pairs_for_translation(
 
 def build_glossary_management_payload() -> dict[str, object]:
     selected_library = get_or_create_default_department_glossary()
-    libraries = list_department_glossary_libraries(active_only=True)
+    libraries = list_department_glossary_libraries(active_only=False)
     entries = list_department_glossary_entries(selected_library.library_id, active_only=True)
     entries.sort(key=lambda entry: entry.source_term)
     system_items = [_department_entry_to_compat_item(entry) for entry in entries]

@@ -51,6 +51,87 @@ def glossary_library():
     return jsonify({"ok": True, **glossary.build_glossary_management_payload()})
 
 
+def _glossary_library_error_response(exc: glossary.DepartmentGlossaryLibraryError):
+    status_code = 409 if exc.code == "department_glossary_library_has_active_jobs" else 400
+    if exc.code == "department_glossary_library_not_found":
+        status_code = 404
+    return jsonify({"ok": False, "error": exc.user_message, "code": exc.code}), status_code
+
+
+@api_bp.route("/glossary/libraries", methods=["POST"], endpoint="glossary_libraries_create")
+def glossary_libraries_create():
+    forbidden = _require_glossary_admin_for_write()
+    if forbidden is not None:
+        return forbidden
+    payload = request.get_json(force=True) or {}
+    try:
+        library = glossary.create_department_glossary_library(
+            name=payload.get("name"),
+            department_code=payload.get("department_code"),
+        )
+    except glossary.DepartmentGlossaryLibraryError as exc:
+        return _glossary_library_error_response(exc)
+    jobs.notify_jobs_update()
+    return jsonify(
+        {
+            "ok": True,
+            "library": glossary.department_glossary_library_to_payload(library),
+            **glossary.build_glossary_management_payload(),
+        }
+    )
+
+
+@api_bp.route(
+    "/glossary/libraries/<int:library_id>",
+    methods=["PATCH"],
+    endpoint="glossary_libraries_update",
+)
+def glossary_libraries_update(library_id: int):
+    forbidden = _require_glossary_admin_for_write()
+    if forbidden is not None:
+        return forbidden
+    payload = request.get_json(force=True) or {}
+    try:
+        library = glossary.update_department_glossary_library(
+            library_id,
+            name=payload.get("name"),
+            department_code=payload.get("department_code"),
+        )
+    except glossary.DepartmentGlossaryLibraryError as exc:
+        return _glossary_library_error_response(exc)
+    jobs.notify_jobs_update()
+    return jsonify(
+        {
+            "ok": True,
+            "library": glossary.department_glossary_library_to_payload(library),
+            **glossary.build_glossary_management_payload(),
+        }
+    )
+
+
+@api_bp.route(
+    "/glossary/libraries/<int:library_id>/disable",
+    methods=["POST"],
+    endpoint="glossary_libraries_disable",
+)
+def glossary_libraries_disable(library_id: int):
+    forbidden = _require_glossary_admin_for_write()
+    if forbidden is not None:
+        return forbidden
+    try:
+        library = glossary.disable_department_glossary_library(library_id)
+    except glossary.DepartmentGlossaryLibraryError as exc:
+        return _glossary_library_error_response(exc)
+    jobs.notify_jobs_update()
+    return jsonify(
+        {
+            "ok": True,
+            "library": glossary.department_glossary_library_to_payload(library),
+            **glossary.build_glossary_management_payload(),
+        }
+    )
+
+
 @api_bp.route("/glossary/system-export", methods=["GET"], endpoint="glossary_system_export")
 def glossary_system_export():
     workbook = glossary.export_system_glossary_excel()

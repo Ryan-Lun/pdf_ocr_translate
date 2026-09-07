@@ -18,6 +18,32 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.6.7 - 2026-09-07
+
+### Added
+
+- 詞彙庫管理頁新增 Department Glossary library lifecycle 管理區，可建立、更新與停用部門詞彙庫。
+- 新增 Department Glossary library API，建立時由系統產生不可由 request 覆寫的穩定 code，更新時只允許修改顯示名稱與部門代碼。
+- 停用 library 時會檢查 queued/running/cancel_requested jobs，若仍有任務引用會回傳清楚錯誤並阻擋停用。
+
+### Changed
+
+- 詞彙庫管理 payload 會列出 active 與 inactive libraries，讓歷史 trace 仍能顯示停用 library metadata；新任務上傳 selector 仍只列出 active libraries。
+- 管理 UI 不提供 hard delete，停用後保留 SQL 記錄與歷史追溯能力。
+
+### Fixed
+
+- 修正 default 法規文管部 library 在管理 payload refresh 時被重設，保留管理員改名、部門代碼調整與停用結果。
+
+### Validation
+
+- 已執行 `PYTHONPATH=. .venv/bin/python -m py_compile app/services/glossary.py app/blueprints/api/glossary_routes.py tests/test_glossary_management.py`，結果通過。
+- 已執行 `node --check static/glossary_manager.js`，結果通過。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_glossary_management.py -q`，結果為 21 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_app.py -k 'department_glossary_selector or upload_workspaces_show_blank_active_department_glossary_selector' -q`，結果為 1 passed、87 deselected。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_department_glossary_sql.py tests/test_api_route_registration.py -q`，結果為 17 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests -q`，結果為 545 passed、8 failed；8 個失敗仍集中於既有 `tests/test_app.py` 與 `tests/test_operations_cli.py` baseline，未出現在 #76 新增 Department Glossary library lifecycle tests。
+
 ## 0.6.6 - 2026-09-07
 
 ### Changed

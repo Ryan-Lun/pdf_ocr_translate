@@ -3236,3 +3236,34 @@ body.editor .thumbs {
   line-height: 1;
   pointer-events: none;
 }
+
+.glossary-library-manager {
+  margin-bottom: 18px;
+}
+
+.glossary-library-admin-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  gap: 18px;
+  align-items: start;
+  margin-top: 14px;
+}
+
+.glossary-library-panel {
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  padding: 16px;
+  background: #fff;
+}
+
+.glossary-library-admin-row .glossary-row__translation {
+  color: #52616f;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.86rem;
+}
+
+@media (max-width: 860px) {
+  .glossary-library-admin-layout {
+    grid-template-columns: 1fr;
+  }
+}
