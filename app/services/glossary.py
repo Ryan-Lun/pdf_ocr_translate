@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TypeAlias
 import zipfile
 
-from sqlalchemy import select, true
+from sqlalchemy import func, select, true
 from xml.etree import ElementTree as ET
 
 from lang_utils import normalize_lang_code
@@ -58,6 +58,33 @@ class DepartmentGlossaryLibrary:
     department_code: str
     is_default: bool
     is_active: bool
+
+
+@dataclass(frozen=True)
+class SelectedDepartmentGlossary:
+    library_id: int
+    code: str
+    name: str
+    department_code: str
+    is_active: bool
+    entry_count: int
+
+    def to_context(self) -> dict[str, object]:
+        return {
+            "source": "sql",
+            "library_id": self.library_id,
+            "library_code": self.code,
+            "library_name": self.name,
+            "department_code": self.department_code,
+            "entry_count": self.entry_count,
+        }
+
+
+class DepartmentGlossarySelectionError(ValueError):
+    def __init__(self, code: str, user_message: str):
+        super().__init__(user_message)
+        self.code = code
+        self.user_message = user_message
 
 
 @dataclass(frozen=True)
@@ -312,6 +339,77 @@ def list_department_glossary_libraries(*, active_only: bool = False) -> list[Dep
             job_store.DepartmentGlossaryLibraryRecord.id.asc(),
         )
         return [_library_from_record(record) for record in session.scalars(stmt).all()]
+
+
+def _parse_selected_department_glossary_library_id(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+    try:
+        library_id = int(value)
+    except (TypeError, ValueError):
+        raise DepartmentGlossarySelectionError(
+            "invalid_department_glossary",
+            "選擇的部門詞彙庫格式不正確",
+        ) from None
+    if library_id <= 0:
+        raise DepartmentGlossarySelectionError(
+            "invalid_department_glossary",
+            "選擇的部門詞彙庫格式不正確",
+        )
+    return library_id
+
+
+def resolve_selected_department_glossary(
+    library_id: object,
+    *,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+    require_active: bool = True,
+    allow_default_fallback: bool = False,
+) -> SelectedDepartmentGlossary:
+    parsed_library_id = _parse_selected_department_glossary_library_id(library_id)
+    if parsed_library_id is None:
+        if not allow_default_fallback:
+            raise DepartmentGlossarySelectionError(
+                "missing_department_glossary",
+                "請選擇部門詞彙庫",
+            )
+        parsed_library_id = get_or_create_default_department_glossary().library_id
+
+    normalized_source_lang = _normalize_glossary_lang(source_lang)
+    normalized_target_lang = _normalize_glossary_lang(target_lang)
+    with job_store.session_scope() as session:
+        record = session.get(job_store.DepartmentGlossaryLibraryRecord, int(parsed_library_id))
+        if record is None:
+            raise DepartmentGlossarySelectionError(
+                "department_glossary_not_found",
+                "選擇的部門詞彙庫不存在",
+            )
+        library = _library_from_record(record)
+        if require_active and not library.is_active:
+            raise DepartmentGlossarySelectionError(
+                "department_glossary_inactive",
+                "選擇的部門詞彙庫已停用",
+            )
+        entry_count = session.scalar(
+            select(func.count(job_store.DepartmentGlossaryEntryRecord.id))
+            .where(job_store.DepartmentGlossaryEntryRecord.library_id == library.library_id)
+            .where(job_store.DepartmentGlossaryEntryRecord.source_lang == normalized_source_lang)
+            .where(job_store.DepartmentGlossaryEntryRecord.target_lang == normalized_target_lang)
+            .where(job_store.DepartmentGlossaryEntryRecord.status == STATUS_ACTIVE)
+        )
+    return SelectedDepartmentGlossary(
+        library_id=library.library_id,
+        code=library.code,
+        name=library.name,
+        department_code=library.department_code,
+        is_active=library.is_active,
+        entry_count=int(entry_count or 0),
+    )
 
 
 def upsert_department_glossary_entry(
@@ -1072,6 +1170,7 @@ DEPARTMENT_GLOSSARY_CONTEXT_CONFIG_KEYS = (
     "department_glossary_library_id",
     "department_glossary_library_code",
     "department_glossary_library_name",
+    "department_glossary_department_code",
     "department_glossary_entry_count",
 )
 
@@ -1086,6 +1185,7 @@ def add_department_glossary_context_to_config(
             "department_glossary_library_id": context.get("library_id"),
             "department_glossary_library_code": context.get("library_code"),
             "department_glossary_library_name": context.get("library_name"),
+            "department_glossary_department_code": context.get("department_code"),
             "department_glossary_entry_count": context.get("entry_count"),
         }
     )

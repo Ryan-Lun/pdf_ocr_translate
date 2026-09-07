@@ -206,6 +206,105 @@ def test_combined_glossary_can_load_selected_department_library(app):
     ]
 
 
+def test_selected_department_glossary_resolves_metadata_for_active_library(app):
+    _clear_department_glossary()
+    library = glossary.get_or_create_department_glossary_library(
+        code="quality-assurance",
+        name="品保部",
+        department_code="QA",
+    )
+    glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+    )
+
+    selected = glossary.resolve_selected_department_glossary(
+        str(library.library_id),
+        source_lang="zh-TW",
+        target_lang="English",
+    )
+
+    assert selected.library_id == library.library_id
+    assert selected.code == "quality-assurance"
+    assert selected.name == "品保部"
+    assert selected.department_code == "QA"
+    assert selected.is_active is True
+    assert selected.entry_count == 1
+    assert selected.to_context() == {
+        "source": "sql",
+        "library_id": library.library_id,
+        "library_code": "quality-assurance",
+        "library_name": "品保部",
+        "department_code": "QA",
+        "entry_count": 1,
+    }
+
+
+def test_selected_department_glossary_allows_active_empty_library(app):
+    _clear_department_glossary()
+    library = glossary.get_or_create_department_glossary_library(
+        code="empty-library",
+        name="空白部門",
+        department_code="EMPTY",
+    )
+
+    selected = glossary.resolve_selected_department_glossary(library.library_id)
+
+    assert selected.library_id == library.library_id
+    assert selected.entry_count == 0
+
+
+def test_selected_department_glossary_rejects_missing_unknown_and_inactive_for_user_facing(app):
+    _clear_department_glossary()
+    inactive = glossary.get_or_create_department_glossary_library(
+        code="inactive-library",
+        name="停用部門",
+        department_code="INACTIVE",
+        is_active=False,
+    )
+
+    for raw_value, error_code, user_message in [
+        (None, "missing_department_glossary", "請選擇部門詞彙庫"),
+        ("", "missing_department_glossary", "請選擇部門詞彙庫"),
+        ("abc", "invalid_department_glossary", "選擇的部門詞彙庫格式不正確"),
+        (999999, "department_glossary_not_found", "選擇的部門詞彙庫不存在"),
+        (inactive.library_id, "department_glossary_inactive", "選擇的部門詞彙庫已停用"),
+    ]:
+        try:
+            glossary.resolve_selected_department_glossary(raw_value)
+        except glossary.DepartmentGlossarySelectionError as exc:
+            assert exc.code == error_code
+            assert exc.user_message == user_message
+        else:
+            raise AssertionError(f"expected selection error for {raw_value!r}")
+
+
+def test_selected_department_glossary_can_fallback_to_default_for_legacy_paths(app):
+    _clear_department_glossary()
+    default = glossary.get_or_create_default_department_glossary()
+    glossary.upsert_department_glossary_entry(
+        library_id=default.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="製程規範",
+        target_term="Process Specification",
+    )
+
+    selected = glossary.resolve_selected_department_glossary(
+        None,
+        allow_default_fallback=True,
+    )
+
+    assert selected.library_id == default.library_id
+    assert selected.code == glossary.DEFAULT_DEPARTMENT_GLOSSARY_CODE
+    assert selected.name == "法規文管部"
+    assert selected.department_code == "法規文管部"
+    assert selected.entry_count == 1
+
+
 def test_combined_glossary_rejects_invalid_translation_glossary_source(app, monkeypatch):
     _clear_department_glossary()
     monkeypatch.setattr(glossary.state, "TRANSLATION_GLOSSARY_SOURCE", "ssql")

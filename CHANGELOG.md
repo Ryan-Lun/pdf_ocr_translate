@@ -18,6 +18,19 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.6.3 - 2026-09-07
+
+### Added
+
+- 新增 Selected Department Glossary request/validation contract，可解析 `department_glossary_library_id`、回傳 selected library metadata、允許 active empty library、拒絕 missing/invalid/unknown/inactive user-facing selections，並保留 legacy/internal fallback 到 `法規文管部`。
+- Department Glossary context config 新增 `department_glossary_department_code`，讓後續 job submission、worker 與 editor selected glossary flow 可共用同一份 metadata contract。
+
+### Validation
+
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_department_glossary_sql.py -k selected_department_glossary -q`，結果為 4 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_department_glossary_sql.py tests/test_glossary_job_traceability.py tests/test_sql_glossary_translation_facade.py -q`，結果為 27 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests -q`，結果為 521 passed、8 failed；失敗集中於既有 `tests/test_app.py` 與 `tests/test_operations_cli.py` baseline，未出現在 #72 新增 Selected Department Glossary resolver 測試。
+
 ## 0.6.2 - 2026-09-07
 
 ### Added
