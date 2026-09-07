@@ -438,14 +438,18 @@ def _prepare_realtime_plan(
     target_lang = str(config.get("target_lang") or "en")
     model_name = str(config.get("model") or state.PDF_REALTIME_TRANSLATE_MODEL)
     system_prompt = batch.resolve_batch_prompt(target_lang, config.get("system_prompt"))
-    ocr_pages = batch.ocr.load_ocr_pages(job_dir)
-    pp_pages = batch.ocr.load_pp_pages(job_dir)
-    glossary_entries = batch.glossary.load_combined_glossary()
-    glossary_context = batch.glossary.current_department_glossary_context(
-        glossary_entries=glossary_entries,
+    selected_library_id = batch.glossary.selected_department_glossary_library_id_from_mappings(
+        config,
+        jobs.load_job_meta(job_dir),
+        jobs.job_store.deserialize_payload(jobs.job_store.get_job(Path(job_dir).name)),
+    )
+    glossary_entries, glossary_context = batch.glossary.load_execution_department_glossary(
+        selected_library_id,
         source_lang=source_lang,
         target_lang=target_lang,
     )
+    ocr_pages = batch.ocr.load_ocr_pages(job_dir)
+    pp_pages = batch.ocr.load_pp_pages(job_dir)
     batch.glossary.add_department_glossary_context_to_config(config, glossary_context)
     jobs.write_batch_config(job_dir, config)
     batch.glossary.write_department_glossary_context_artifact(job_dir, glossary_context)

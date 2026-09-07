@@ -500,18 +500,21 @@ def _translate_pandoc_doc(
     debug_job_dir: Path | None = None,
     warning_callback: Callable[[str], None] | None = None,
     glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
+    department_glossary_library_id: object = None,
 ) -> dict[str, Any]:
     api_version = doc.get("pandoc-api-version", [])
     blocks = doc.get("blocks", []) or []
     meta = deepcopy(doc.get("meta", {}) or {})
 
-    client, model = _get_translation_client()
-    glossary_entries = glossary.load_combined_glossary()
-    _write_glossary_context_if_supported(
-        debug_job_dir,
-        glossary_entries,
+    glossary_entries, glossary_context = _load_execution_glossary_entries(
+        department_glossary_library_id,
         source_lang=source_lang,
         target_lang=target_lang,
+    )
+    client, model = _get_translation_client()
+    _write_glossary_context_if_supported(
+        debug_job_dir,
+        glossary_context,
     )
     final_system_prompt = _build_system_prompt(
         target_lang,
@@ -591,6 +594,7 @@ def translate_markdown_file(
     system_prompt: str | None = None,
     debug_job_dir: Path | None = None,
     warning_callback: Callable[[str], None] | None = None,
+    department_glossary_library_id: object = None,
 ) -> Path:
     markdown_text = source_path.read_text(encoding="utf-8")
     doc = markdown_to_doc(markdown_text)
@@ -605,6 +609,7 @@ def translate_markdown_file(
         debug_job_dir=debug_job_dir,
         warning_callback=warning_callback,
         glossary_hit_collector=glossary_hit_collector,
+        department_glossary_library_id=department_glossary_library_id,
     )
     if debug_job_dir is not None:
         glossary.write_required_glossary_hits_artifact(
@@ -643,24 +648,39 @@ def _split_leading_trailing_ws(text: str) -> tuple[str, str, str]:
     return leading, core, trailing
 
 
-def _write_glossary_context_if_supported(
-    debug_job_dir: Path | None,
-    glossary_entries: list[tuple[str, str]],
+def _load_execution_glossary_entries(
+    department_glossary_library_id: object,
     *,
     source_lang: str,
     target_lang: str,
-) -> None:
-    if debug_job_dir is None:
-        return
+) -> tuple[list[tuple[str, str]], dict[str, object]]:
+    load_execution = getattr(glossary, "load_execution_department_glossary", None)
+    if load_execution is not None:
+        return load_execution(
+            department_glossary_library_id,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+    entries = glossary.load_combined_glossary()
     build_context = getattr(glossary, "current_department_glossary_context", None)
-    write_artifact = getattr(glossary, "write_department_glossary_context_artifact", None)
-    if build_context is None or write_artifact is None:
-        return
-    glossary_context = build_context(
-        glossary_entries=glossary_entries,
+    if build_context is None:
+        return entries, {}
+    return entries, build_context(
+        glossary_entries=entries,
         source_lang=source_lang,
         target_lang=target_lang,
     )
+
+
+def _write_glossary_context_if_supported(
+    debug_job_dir: Path | None,
+    glossary_context: dict[str, object],
+) -> None:
+    if debug_job_dir is None:
+        return
+    write_artifact = getattr(glossary, "write_department_glossary_context_artifact", None)
+    if write_artifact is None:
+        return
     write_artifact(debug_job_dir, glossary_context)
 
 
@@ -673,15 +693,18 @@ def _translate_html_text_nodes(
     debug_job_dir: Path | None = None,
     warning_callback: Callable[[str], None] | None = None,
     glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
+    department_glossary_library_id: object = None,
 ) -> str:
     parts = re.split(r"(<[^>]+>)", html_text)
-    client, model = _get_translation_client()
-    glossary_entries = glossary.load_combined_glossary()
-    _write_glossary_context_if_supported(
-        debug_job_dir,
-        glossary_entries,
+    glossary_entries, glossary_context = _load_execution_glossary_entries(
+        department_glossary_library_id,
         source_lang=source_lang,
         target_lang=target_lang,
+    )
+    client, model = _get_translation_client()
+    _write_glossary_context_if_supported(
+        debug_job_dir,
+        glossary_context,
     )
     final_system_prompt = _build_system_prompt(
         target_lang,
@@ -752,6 +775,7 @@ def translate_html_file(
     system_prompt: str | None = None,
     debug_job_dir: Path | None = None,
     warning_callback: Callable[[str], None] | None = None,
+    department_glossary_library_id: object = None,
 ) -> Path:
     html_text = source_path.read_text(encoding="utf-8")
     glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] = []
@@ -764,6 +788,7 @@ def translate_html_file(
         debug_job_dir=debug_job_dir,
         warning_callback=warning_callback,
         glossary_hit_collector=glossary_hit_collector,
+        department_glossary_library_id=department_glossary_library_id,
     )
     if debug_job_dir is not None:
         glossary.write_required_glossary_hits_artifact(

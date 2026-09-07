@@ -1532,6 +1532,7 @@ class EnhancedWordTranslator:
         record_tm_usage_on_save: bool = True,
         layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
         translate_tables: bool = True,
+        department_glossary_library_id: object = None,
     ):
         layout_mode = normalize_word_layout_mode(layout_mode)
         doc = docx.Document(source_path)
@@ -1541,11 +1542,10 @@ class EnhancedWordTranslator:
             layout_mode=layout_mode,
             translate_tables=translate_tables,
         )
-        glossary_entries = glossary.load_combined_glossary()
         if debug_job_dir is None:
             debug_job_dir = output_path.parent.parent if output_path.parent.name == "output" else output_path.parent
-        glossary_context = glossary.current_department_glossary_context(
-            glossary_entries=glossary_entries,
+        glossary_entries, glossary_context = glossary.load_execution_department_glossary(
+            department_glossary_library_id,
             source_lang=source_language,
             target_lang=target_language,
         )
@@ -1781,7 +1781,6 @@ def _run_word_job(
         started_at=now_ts,
         extra_meta={"translate_started_at": now_ts, "last_warning": ""},
     )
-    translator = EnhancedWordTranslator()
     with WORD_JOB_EVENTS_LOCK:
         cancel_event = WORD_JOB_EVENTS.setdefault(job_id, threading.Event())
     try:
@@ -1789,6 +1788,16 @@ def _run_word_job(
             ensure_docx_source(source_path, processing_source_path)
         else:
             processing_source_path = source_path
+        selected_library_id = glossary.selected_department_glossary_library_id_from_mappings(
+            jobs.load_job_meta(job_dir),
+            jobs.job_store.deserialize_payload(jobs.job_store.get_job(job_id)),
+        )
+        glossary.load_execution_department_glossary(
+            selected_library_id,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+        translator = EnhancedWordTranslator()
         jobs.set_job_state(job_dir, status="running", stage="translate")
 
         def record_warning(message: str) -> None:
@@ -1817,6 +1826,7 @@ def _run_word_job(
                 record_tm_usage_on_save=False,
                 layout_mode=layout_mode,
                 translate_tables=translate_tables,
+                department_glossary_library_id=selected_library_id,
             ):
                 last_progress = float(progress)
                 jobs.set_job_state(

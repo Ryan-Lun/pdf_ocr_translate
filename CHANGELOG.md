@@ -18,6 +18,23 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.6.5 - 2026-09-07
+
+### Changed
+
+- PDF 原版面翻譯、PDF 翻譯重建與 Word 原版面翻譯 worker 改為在執行時依 job metadata/payload 載入 Selected Department Glossary 的 SQL active entries。
+- Worker 遇到執行時已停用的 selected library 會讓 job 明確失敗，不再 fallback 到 `法規文管部`。
+- Glossary 查詢在 `source_lang=auto` 時統一以 `zh` 查詢，並保留 Required Glossary Term validation、longest-match behavior 與 glossary priority over TM。
+
+### Validation
+
+- 已執行 `PYTHONPATH=. .venv/bin/python -m py_compile app/services/glossary.py app/services/batch.py app/services/realtime_translate.py app/services/word_translate.py app/services/doc_workspace.py app/services/markdown_translate.py tests/test_selected_department_glossary_workers.py`，結果通過。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_selected_department_glossary_workers.py -q`，結果為 8 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_glossary_job_traceability.py tests/test_department_glossary_sql.py tests/test_sql_glossary_translation_facade.py -q`，結果為 27 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_markdown_translate_html.py tests/test_translation_memory_regression.py -q`，結果為 18 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_word_translate.py tests/test_realtime_translate.py tests/test_batch_dedup.py -q`，結果為 148 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests -q`，結果為 533 passed、8 failed；8 個失敗仍集中於既有 `tests/test_app.py` 與 `tests/test_operations_cli.py` baseline，未出現在 #74 新增 Selected Department Glossary worker tests。
+
 ## 0.6.4 - 2026-09-07
 
 ### Added

@@ -1133,6 +1133,62 @@ def current_department_glossary_context(
     return context
 
 
+def department_glossary_lookup_source_lang(source_lang: str) -> str:
+    return "zh" if normalize_lang_code(source_lang) == "auto" else source_lang
+
+
+def selected_department_glossary_library_id_from_mappings(
+    *mappings: Mapping[str, object] | None,
+) -> object | None:
+    for mapping in mappings:
+        if not mapping:
+            continue
+        value = mapping.get("department_glossary_library_id")
+        if value is not None and str(value).strip():
+            return value
+    return None
+
+
+def load_execution_department_glossary(
+    library_id: object,
+    *,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+    allow_default_fallback: bool = True,
+) -> tuple[list[tuple[str, str]], dict[str, object]]:
+    lookup_source_lang = department_glossary_lookup_source_lang(source_lang)
+    if library_id is None or not str(library_id).strip():
+        entries = load_combined_glossary()
+        context = current_department_glossary_context(
+            glossary_entries=entries,
+            source_lang=lookup_source_lang,
+            target_lang=target_lang,
+        )
+        return entries, context
+    try:
+        selected = resolve_selected_department_glossary(
+            library_id,
+            source_lang=lookup_source_lang,
+            target_lang=target_lang,
+            require_active=True,
+            allow_default_fallback=allow_default_fallback,
+        )
+    except DepartmentGlossarySelectionError as exc:
+        raise RuntimeError(exc.user_message) from exc
+    entries = load_combined_glossary(
+        selected.library_id,
+        source_lang=lookup_source_lang,
+        target_lang=target_lang,
+    )
+    context = current_department_glossary_context(
+        selected.library_id,
+        glossary_entries=entries,
+        source_lang=lookup_source_lang,
+        target_lang=target_lang,
+    )
+    return entries, context
+
+
 def department_glossary_context_artifact_enabled() -> bool:
     return bool(getattr(state, "GLOSSARY_CONTEXT_ARTIFACT_ENABLED", False))
 

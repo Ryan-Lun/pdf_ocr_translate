@@ -105,6 +105,10 @@ def run_doc_workspace_job(
         if source_images_dir.exists():
             shutil.copytree(source_images_dir, translated_images_dir, dirs_exist_ok=True)
 
+        selected_library_id = glossary.selected_department_glossary_library_id_from_mappings(
+            jobs.load_job_meta(job_dir),
+            jobs.job_store.deserialize_payload(jobs.job_store.get_job(job_id)),
+        )
         markdown_translate.translate_html_file(
             structure_html_path,
             translated_html_path,
@@ -113,8 +117,10 @@ def run_doc_workspace_job(
             system_prompt=system_prompt,
             debug_job_dir=job_dir,
             warning_callback=record_warning,
+            department_glossary_library_id=selected_library_id,
         )
-        glossary_context = glossary.current_department_glossary_context(
+        _, glossary_context = glossary.load_execution_department_glossary(
+            selected_library_id,
             source_lang=source_lang,
             target_lang=target_lang,
         )

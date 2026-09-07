@@ -1622,14 +1622,18 @@ def run_batch_translate_job(
     )
     jobs.write_batch_status(job_dir, "running", **status_meta)
     try:
-        ocr_pages = ocr.load_ocr_pages(job_dir)
-        pp_pages = ocr.load_pp_pages(job_dir)
-        glossary_entries = glossary.load_combined_glossary()
-        glossary_context = glossary.current_department_glossary_context(
-            glossary_entries=glossary_entries,
+        selected_library_id = glossary.selected_department_glossary_library_id_from_mappings(
+            config,
+            jobs.load_job_meta(job_dir),
+            jobs.job_store.deserialize_payload(jobs.job_store.get_job(job_id)),
+        )
+        glossary_entries, glossary_context = glossary.load_execution_department_glossary(
+            selected_library_id,
             source_lang=source_lang,
             target_lang=target_lang,
         )
+        ocr_pages = ocr.load_ocr_pages(job_dir)
+        pp_pages = ocr.load_pp_pages(job_dir)
         glossary.add_department_glossary_context_to_config(config, glossary_context)
         jobs.write_batch_config(job_dir, config)
         glossary.write_department_glossary_context_artifact(job_dir, glossary_context)
