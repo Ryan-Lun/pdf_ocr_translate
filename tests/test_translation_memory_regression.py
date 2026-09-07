@@ -236,6 +236,7 @@ def test_required_glossary_term_stays_stronger_than_tm_reference(monkeypatch):
 
 def test_markdown_translation_does_not_call_or_emit_translation_memory(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", False)
     module = importlib.import_module("app.services.markdown_translate")
     source = tmp_path / "doc.html"
     output = tmp_path / "doc.translated.html"

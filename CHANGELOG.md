@@ -18,6 +18,20 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.6.2 - 2026-09-07
+
+### Added
+
+- 新增 Department Glossary SQL-first 整體回歸測試與人工驗收案例，對應 SQL storage、JSON import、API compatibility、PDF/Word/Markdown 翻譯、TM priority、Stage 2 validation 與 job traceability。
+- 新增 #70 可執行整合 regression 測試，涵蓋 SQL import/API/department isolation、PDF batch glossary/TM priority/glossary hits 與 Stage 2 Required Glossary validation。
+- 新增文件回歸測試，鎖住 #70 acceptance checklist、建議 pytest 指令、人工驗收步驟與 known baseline failures 記錄要求。
+
+### Validation
+
+- 已執行 Department Glossary SQL-first targeted regression suite，結果為 65 passed。
+- 已執行 full test suite：`PYTHONPATH=. .venv/bin/pytest -q`；collection 階段出現 27 個 known baseline errors，皆來自 `PaddleX/api_examples/pipelines/test_*` 範例測試缺少 PaddleX extra dependencies 或 `paddle` module，未進入本專案 `tests/` 回歸測試執行階段。
+- 已補跑本專案測試目錄：`PYTHONPATH=. .venv/bin/pytest tests -q`；結果為 518 passed、7 failed。7 個 known baseline failures 為 `tests/test_app.py::test_upload_template_source_creates_draft`、`tests/test_app.py::test_editor_page_shows_template_entry`、`tests/test_app.py::test_ocr_retry_warning_is_visible_in_jobs_list`、`tests/test_app.py::test_doc_jobs_download_docx_returns_zip`、`tests/test_app.py::test_run_ocr_pipeline_job_skips_paragraph_align_for_general_force`、`tests/test_operations_cli.py::test_seed_bootstrap_populates_auth_defaults`、`tests/test_operations_cli.py::test_seed_bootstrap_uses_initial_admin_work_ids_config`；這些失敗不在 #70 新增 Department Glossary regression 測試範圍。
+
 ## 0.6.1 - 2026-09-07
 
 ### Added
