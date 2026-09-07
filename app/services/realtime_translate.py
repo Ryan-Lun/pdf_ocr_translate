@@ -441,6 +441,14 @@ def _prepare_realtime_plan(
     ocr_pages = batch.ocr.load_ocr_pages(job_dir)
     pp_pages = batch.ocr.load_pp_pages(job_dir)
     glossary_entries = batch.glossary.load_combined_glossary()
+    glossary_context = batch.glossary.current_department_glossary_context(
+        glossary_entries=glossary_entries,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    batch.glossary.add_department_glossary_context_to_config(config, glossary_context)
+    jobs.write_batch_config(job_dir, config)
+    batch.glossary.write_department_glossary_context_artifact(job_dir, glossary_context)
     tm_artifact_collector = batch.translation_memory.create_artifact_collector()
     batch_items, alias_map, key_map, prefilled = batch.build_batch_items(
         ocr_pages,

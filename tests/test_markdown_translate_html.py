@@ -511,6 +511,7 @@ def test_translate_html_file_stage_2_real_service_invalid_output_fallbacks_to_st
     output = tmp_path / "doc.translated.html"
     source.write_text("<p>來源文字</p>", encoding="utf-8")
     monkeypatch.setattr(real_state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    monkeypatch.setattr(real_state, "TRANSLATION_GLOSSARY_SOURCE", "json")
 
     class Stage1Completions:
         def create(self, **kwargs):

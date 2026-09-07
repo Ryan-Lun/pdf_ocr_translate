@@ -18,6 +18,18 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.6.0 - 2026-09-07
+
+### Added
+
+- 新增 `GLOSSARY_CONTEXT_ARTIFACT_ENABLED` opt-in debug 開關；開啟後才會輸出 `glossary_context.json`，記錄 Department Glossary 來源、library id/code/name、entry count 與完整 entries snapshot。
+- Job list payload 新增 `glossary_context_url`，讓已登記的 glossary context artifact 可被 job detail/API 取用。
+
+### Changed
+
+- PDF batch/realtime `batch_config.json` 與 Word/PDF rebuild job payload 會同步保存 `department_glossary_*` minimal trace 欄位；舊 job 沒有這些欄位仍可正常讀取。
+- `glossary_context.json` 不再預設為每個 job 產生，日常人工查核以 `glossary_hits.json` 為主。
+
 ## 0.5.0 - 2026-09-04
 
 ### Changed

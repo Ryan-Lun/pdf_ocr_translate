@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from collections.abc import Iterable, Mapping
@@ -17,6 +18,8 @@ from xml.etree import ElementTree as ET
 from lang_utils import normalize_lang_code
 
 from . import job_store, state
+
+logger = logging.getLogger(__name__)
 
 try:
     import xlsxwriter
@@ -981,6 +984,138 @@ def load_combined_glossary(
         source_lang=source_lang,
         target_lang=target_lang,
     )
+
+
+def current_department_glossary_context(
+    library_id: int | None = None,
+    *,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+    glossary_entries: list[tuple[str, str]] | None = None,
+) -> dict[str, object]:
+    source = _translation_glossary_source()
+    entries = list(glossary_entries) if glossary_entries is not None else load_glossary_entries(
+        library_id,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    entry_snapshot = [
+        {"source_term": source_term, "target_term": target_term}
+        for source_term, target_term in entries
+    ]
+    context: dict[str, object] = {
+        "source": source,
+        "library_id": None,
+        "library_code": None,
+        "library_name": None,
+        "department_code": None,
+        "entry_count": len(entries),
+        "entries": entry_snapshot,
+    }
+    if source == "json":
+        return context
+
+    try:
+        library = (
+            get_or_create_default_department_glossary()
+            if library_id is None
+            else _get_department_glossary_library(int(library_id))
+        )
+    except RuntimeError as exc:
+        logger.debug("Department Glossary context metadata unavailable: %s", exc)
+        return context
+    context.update(
+        {
+            "library_id": library.library_id,
+            "library_code": library.code,
+            "library_name": library.name,
+            "department_code": library.department_code,
+        }
+    )
+    return context
+
+
+def department_glossary_context_artifact_enabled() -> bool:
+    return bool(getattr(state, "GLOSSARY_CONTEXT_ARTIFACT_ENABLED", False))
+
+
+def write_department_glossary_context_artifact(
+    job_dir: Path,
+    context: dict[str, object],
+    *,
+    filename: str = "glossary_context.json",
+) -> Path | None:
+    if not department_glossary_context_artifact_enabled():
+        return None
+    path = Path(job_dir) / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(context, ensure_ascii=False, indent=2), encoding="utf-8")
+    job_id = Path(job_dir).name
+    if re.fullmatch(r"[a-fA-F0-9]{32}", job_id):
+        try:
+            job_store.register_artifact(job_id, "glossary_context", filename)
+        except RuntimeError as exc:
+            logger.debug("Unable to register glossary context artifact: %s", exc)
+    return path
+
+
+def _get_department_glossary_library(library_id: int) -> DepartmentGlossaryLibrary:
+    with job_store.session_scope() as session:
+        record = session.get(job_store.DepartmentGlossaryLibraryRecord, int(library_id))
+        if record is None:
+            raise ValueError(f"Department Glossary library not found: {library_id}")
+        return _library_from_record(record)
+
+
+DEPARTMENT_GLOSSARY_CONTEXT_CONFIG_KEYS = (
+    "department_glossary_source",
+    "department_glossary_library_id",
+    "department_glossary_library_code",
+    "department_glossary_library_name",
+    "department_glossary_entry_count",
+)
+
+
+def add_department_glossary_context_to_config(
+    config: dict[str, object],
+    context: dict[str, object],
+) -> dict[str, object]:
+    config.update(
+        {
+            "department_glossary_source": context.get("source"),
+            "department_glossary_library_id": context.get("library_id"),
+            "department_glossary_library_code": context.get("library_code"),
+            "department_glossary_library_name": context.get("library_name"),
+            "department_glossary_entry_count": context.get("entry_count"),
+        }
+    )
+    return config
+
+
+def department_glossary_context_config_from_mapping(mapping: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: mapping[key]
+        for key in DEPARTMENT_GLOSSARY_CONTEXT_CONFIG_KEYS
+        if key in mapping and mapping[key] is not None
+    }
+
+
+def department_glossary_context_config_from_artifact(
+    job_dir: Path,
+    *,
+    filename: str = "glossary_context.json",
+) -> dict[str, object]:
+    path = Path(job_dir) / filename
+    if not path.exists():
+        return {}
+    try:
+        context = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.debug("Unable to read Department Glossary context artifact: %s", exc)
+        return {}
+    if not isinstance(context, dict):
+        return {}
+    return add_department_glossary_context_to_config({}, context)
 
 
 def _uses_reverse_glossary_direction(source_lang: str, target_lang: str) -> bool:

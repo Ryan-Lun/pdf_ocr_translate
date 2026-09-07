@@ -133,6 +133,10 @@ SYSTEM_GLOSSARY_PATH = os.getenv(
     str((BASE_DIR / "glossary" / "system_glossary.json")),
 )
 TRANSLATION_GLOSSARY_SOURCE = os.getenv("TRANSLATION_GLOSSARY_SOURCE", "sql").strip().lower()
+# Debug-only: keep disabled by default because enabling it writes each job's full glossary snapshot to glossary_context.json.
+GLOSSARY_CONTEXT_ARTIFACT_ENABLED = (
+    os.getenv("GLOSSARY_CONTEXT_ARTIFACT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+)
 DOCUMENT_TEMPLATES_PATH = Path(
     os.getenv("DOCUMENT_TEMPLATES_PATH", str(TEMPLATE_ROOT / "document_templates.json"))
 )

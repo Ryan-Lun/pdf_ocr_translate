@@ -1625,6 +1625,14 @@ def run_batch_translate_job(
         ocr_pages = ocr.load_ocr_pages(job_dir)
         pp_pages = ocr.load_pp_pages(job_dir)
         glossary_entries = glossary.load_combined_glossary()
+        glossary_context = glossary.current_department_glossary_context(
+            glossary_entries=glossary_entries,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+        glossary.add_department_glossary_context_to_config(config, glossary_context)
+        jobs.write_batch_config(job_dir, config)
+        glossary.write_department_glossary_context_artifact(job_dir, glossary_context)
         tm_artifact_collector = translation_memory.create_artifact_collector()
         batch_items, alias_map, key_map, prefilled = build_batch_items(
             ocr_pages,

@@ -648,6 +648,7 @@ def _collect_legacy_relevant_paths(job_dir_path: Path, job_type: str, meta: dict
             ]
         )
     elif job_type == "word_translate":
+        paths.append(job_dir_path / "glossary_context.json")
         source_name = str(meta.get("source_filename") or "").strip()
         if source_name:
             paths.append(job_dir_path / source_name)
@@ -750,6 +751,7 @@ def _collect_legacy_artifacts(job_dir_path: Path, job_type: str, meta: dict[str,
             artifacts[artifact_type] = rel_path
 
     if job_type in {"ocr_overlay", "template_source"}:
+        add_if_exists("glossary_context", "glossary_context.json")
         source_name = str(meta.get("source_filename") or "").strip()
         if source_name:
             add_if_exists("source_pdf", source_name)
@@ -758,12 +760,14 @@ def _collect_legacy_artifacts(job_dir_path: Path, job_type: str, meta: dict[str,
         add_if_exists("debug_pdf", "overlay_debug.pdf")
         add_if_exists("edited_pdf", "edited.pdf")
     elif job_type == "doc_workspace":
+        add_if_exists("glossary_context", "glossary_context.json")
         add_if_exists("source_pdf", "source.pdf")
         add_if_exists("structure_md", "structure/doc.md")
         add_if_exists("structure_html", "structure/doc.html")
         add_if_exists("translated_html", "translated/doc.translated.html")
         add_if_exists("docx", "output/output.docx")
     elif job_type == "word_translate":
+        add_if_exists("glossary_context", "glossary_context.json")
         source_name = str(meta.get("source_filename") or "").strip()
         if source_name:
             add_if_exists("source_docx", source_name)
@@ -957,6 +961,7 @@ def _build_legacy_job_list_item(job_dir_path: Path) -> dict[str, Any] | None:
             "structure_html_url": _legacy_artifact_url(job_id, artifacts, "structure_html"),
             "translated_html_url": _legacy_artifact_url(job_id, artifacts, "translated_html"),
             "docx_url": _legacy_artifact_url(job_id, artifacts, "docx"),
+            "glossary_context_url": _legacy_artifact_url(job_id, artifacts, "glossary_context"),
         }
 
     if job_type == "word_translate":
@@ -968,6 +973,7 @@ def _build_legacy_job_list_item(job_dir_path: Path) -> dict[str, Any] | None:
             "download_name": build_docx_name(job_id, job_name),
             "source_docx_url": _legacy_artifact_url(job_id, artifacts, "source_docx"),
             "docx_url": _legacy_artifact_url(job_id, artifacts, "docx"),
+            "glossary_context_url": _legacy_artifact_url(job_id, artifacts, "glossary_context"),
         }
 
     batch_status = load_batch_status(job_dir_path) or {}
@@ -981,6 +987,7 @@ def _build_legacy_job_list_item(job_dir_path: Path) -> dict[str, Any] | None:
         "editor_url": url_for("editor.editor", job_id=job_id),
         "debug_pdf_url": _legacy_artifact_url(job_id, artifacts, "debug_pdf"),
         "edited_pdf_url": _legacy_artifact_url(job_id, artifacts, "edited_pdf"),
+        "glossary_context_url": _legacy_artifact_url(job_id, artifacts, "glossary_context"),
     }
 
 
@@ -1079,6 +1086,7 @@ def build_jobs_list(
                     "structure_html_url": _artifact_url(job_id, artifacts, "structure_html"),
                     "translated_html_url": _artifact_url(job_id, artifacts, "translated_html"),
                     "docx_url": _artifact_url(job_id, artifacts, "docx"),
+                    "glossary_context_url": _artifact_url(job_id, artifacts, "glossary_context"),
                 }
             )
             continue
@@ -1116,6 +1124,7 @@ def build_jobs_list(
                     "download_name": build_docx_name(job_id, job_name),
                     "source_docx_url": _artifact_url(job_id, artifacts, "source_docx"),
                     "docx_url": _artifact_url(job_id, artifacts, "docx"),
+                    "glossary_context_url": _artifact_url(job_id, artifacts, "glossary_context"),
                 }
             )
             continue
@@ -1174,6 +1183,7 @@ def build_jobs_list(
                 "editor_url": url_for("editor.editor", job_id=job_id),
                 "debug_pdf_url": _artifact_url(job_id, artifacts, "debug_pdf"),
                 "edited_pdf_url": _artifact_url(job_id, artifacts, "edited_pdf"),
+                "glossary_context_url": _artifact_url(job_id, artifacts, "glossary_context"),
                 }
             )
     for job_dir_path in iter_job_dirs(job_type, include_templates=job_type == "template_source"):

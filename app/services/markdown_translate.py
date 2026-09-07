@@ -507,6 +507,12 @@ def _translate_pandoc_doc(
 
     client, model = _get_translation_client()
     glossary_entries = glossary.load_combined_glossary()
+    _write_glossary_context_if_supported(
+        debug_job_dir,
+        glossary_entries,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
     final_system_prompt = _build_system_prompt(
         target_lang,
         glossary_entries,
@@ -637,6 +643,27 @@ def _split_leading_trailing_ws(text: str) -> tuple[str, str, str]:
     return leading, core, trailing
 
 
+def _write_glossary_context_if_supported(
+    debug_job_dir: Path | None,
+    glossary_entries: list[tuple[str, str]],
+    *,
+    source_lang: str,
+    target_lang: str,
+) -> None:
+    if debug_job_dir is None:
+        return
+    build_context = getattr(glossary, "current_department_glossary_context", None)
+    write_artifact = getattr(glossary, "write_department_glossary_context_artifact", None)
+    if build_context is None or write_artifact is None:
+        return
+    glossary_context = build_context(
+        glossary_entries=glossary_entries,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    write_artifact(debug_job_dir, glossary_context)
+
+
 def _translate_html_text_nodes(
     html_text: str,
     *,
@@ -650,6 +677,12 @@ def _translate_html_text_nodes(
     parts = re.split(r"(<[^>]+>)", html_text)
     client, model = _get_translation_client()
     glossary_entries = glossary.load_combined_glossary()
+    _write_glossary_context_if_supported(
+        debug_job_dir,
+        glossary_entries,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
     final_system_prompt = _build_system_prompt(
         target_lang,
         glossary_entries,

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from werkzeug.utils import secure_filename
 
-from . import audit_service, docx_export, jobs, markdown_translate, pp_structure, state
+from . import audit_service, docx_export, glossary, jobs, markdown_translate, pp_structure, state
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +113,17 @@ def run_doc_workspace_job(
             system_prompt=system_prompt,
             debug_job_dir=job_dir,
             warning_callback=record_warning,
+        )
+        glossary_context = glossary.current_department_glossary_context(
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+        glossary_context_meta = glossary.add_department_glossary_context_to_config({}, glossary_context)
+        jobs.set_job_state(
+            job_dir,
+            status="running",
+            stage="translate",
+            extra_meta=glossary_context_meta,
         )
         jobs.job_store.register_artifact(job_id, "translated_html", "translated/doc.translated.html")
 
