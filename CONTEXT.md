@@ -32,6 +32,18 @@ _Avoid_: Hint, synonym, protected content
 A glossary library scoped to a department's approved terminology, selected so terms from different departments are not mixed in the same translation job.
 _Avoid_: System glossary, global glossary, personal glossary
 
+**Selected Department Glossary**:
+The one Department Glossary explicitly chosen for a new user-facing translation job. Editor retranslation and background processing for that job must keep using this selected glossary so document terminology remains consistent.
+_Avoid_: Default glossary, merged department glossaries, current UI option
+
+**Department Glossary Library Code**:
+A stable, non-editable identifier for a Department Glossary once the library has been created. Display names may change, but historical job traceability must not depend on changing this code.
+_Avoid_: Display name, department label, mutable title
+
+**Glossary Audit Event**:
+An append-only record of a Department Glossary library or entry change, including actor, action, target, timestamp, and before/after values for traceability.
+_Avoid_: Job usage log, debug artifact, changelog
+
 **Effective Glossary**:
 The set of glossary entries actually applied to a translation job after the selected Department Glossary and any allowed override rules are resolved.
 _Avoid_: All glossary entries, Translation Memory, glossary database
