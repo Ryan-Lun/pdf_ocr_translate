@@ -920,7 +920,7 @@ def load_system_glossary() -> list[dict[str, str]]:
     return [dict(item) for item in cleaned]
 
 
-def load_glossary_entries() -> list[tuple[str, str]]:
+def _load_json_glossary_entries() -> list[tuple[str, str]]:
     global _COMBINED_GLOSSARY_CACHE
     paths = _system_glossary_paths()
     if state.GLOBAL_GLOSSARY_PATH:
@@ -948,8 +948,39 @@ def load_glossary_entries() -> list[tuple[str, str]]:
     return list(entries)
 
 
-def load_combined_glossary() -> list[tuple[str, str]]:
-    return load_glossary_entries()
+def _translation_glossary_source() -> str:
+    configured = str(getattr(state, "TRANSLATION_GLOSSARY_SOURCE", "sql") or "sql").strip().lower()
+    if configured not in {"sql", "json"}:
+        raise ValueError("TRANSLATION_GLOSSARY_SOURCE must be either 'sql' or 'json'.")
+    return configured
+
+
+def load_glossary_entries(
+    library_id: int | None = None,
+    *,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+) -> list[tuple[str, str]]:
+    if _translation_glossary_source() == "json":
+        return _load_json_glossary_entries()
+    return load_department_glossary_pairs(
+        library_id,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+
+
+def load_combined_glossary(
+    library_id: int | None = None,
+    *,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+) -> list[tuple[str, str]]:
+    return load_glossary_entries(
+        library_id,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
 
 
 def _uses_reverse_glossary_direction(source_lang: str, target_lang: str) -> bool:

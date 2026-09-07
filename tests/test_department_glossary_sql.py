@@ -177,7 +177,112 @@ def test_department_glossary_pairs_preserve_longest_match_order(app):
     ]
 
 
-def test_existing_json_backed_combined_glossary_still_works(app, tmp_path, monkeypatch):
+def test_combined_glossary_can_load_selected_department_library(app):
+    _clear_department_glossary()
+    regulatory = glossary.get_or_create_default_department_glossary()
+    quality = glossary.get_or_create_department_glossary_library(
+        code="quality-assurance",
+        name="品保部",
+        department_code="品保部",
+    )
+    glossary.upsert_department_glossary_entry(
+        library_id=regulatory.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="製程規範",
+        target_term="Process Specification",
+    )
+    glossary.upsert_department_glossary_entry(
+        library_id=quality.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="製程規範",
+        target_term="Manufacturing Process Standard",
+    )
+
+    assert glossary.load_combined_glossary() == [("製程規範", "Process Specification")]
+    assert glossary.load_combined_glossary(quality.library_id) == [
+        ("製程規範", "Manufacturing Process Standard")
+    ]
+
+
+def test_combined_glossary_rejects_invalid_translation_glossary_source(app, monkeypatch):
+    _clear_department_glossary()
+    monkeypatch.setattr(glossary.state, "TRANSLATION_GLOSSARY_SOURCE", "ssql")
+
+    try:
+        glossary.load_combined_glossary()
+    except ValueError as exc:
+        assert "TRANSLATION_GLOSSARY_SOURCE" in str(exc)
+        assert "sql" in str(exc)
+        assert "json" in str(exc)
+    else:
+        raise AssertionError("invalid translation glossary source must fail explicitly")
+
+
+def test_sql_combined_glossary_feeds_required_term_wrapper_with_longest_match(app):
+    _clear_department_glossary()
+    library = glossary.get_or_create_default_department_glossary()
+    glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="規範",
+        target_term="Specification",
+    )
+    glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="製程規範",
+        target_term="Process Specification",
+    )
+
+    application = glossary.apply_required_glossary_terms(
+        "確認製程規範與規範。",
+        glossary.load_combined_glossary(),
+        source_lang="zh",
+        target_lang="en",
+    )
+
+    assert application.text == (
+        '確認<term id="0001">Process Specification</term>與'
+        '<term id="0002">Specification</term>。'
+    )
+    assert [term.target for term in application.required_terms] == [
+        "Process Specification",
+        "Specification",
+    ]
+
+
+def test_combined_glossary_defaults_to_sql_department_glossary(app, tmp_path, monkeypatch):
+    _clear_department_glossary()
+    library = glossary.get_or_create_default_department_glossary()
+    glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="批號",
+        target_term="SQL Lot No.",
+    )
+    system_path = tmp_path / "system.json"
+    global_path = tmp_path / "global.json"
+    system_path.write_text(
+        '[{"cn":"批號","en":"JSON Lot No."}]',
+        encoding="utf-8",
+    )
+    global_path.write_text(
+        '[{"cn":"外觀","en":"JSON Appearance"}]',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(glossary.state, "SYSTEM_GLOSSARY_PATH", str(system_path))
+    monkeypatch.setattr(glossary.state, "GLOBAL_GLOSSARY_PATH", str(global_path))
+    glossary.invalidate_glossary_cache()
+
+    assert glossary.load_combined_glossary() == [("批號", "SQL Lot No.")]
+
+
+def test_json_backed_combined_glossary_requires_explicit_legacy_mode(app, tmp_path, monkeypatch):
     _clear_department_glossary()
     system_path = tmp_path / "system.json"
     global_path = tmp_path / "global.json"
@@ -191,6 +296,7 @@ def test_existing_json_backed_combined_glossary_still_works(app, tmp_path, monke
     )
     monkeypatch.setattr(glossary.state, "SYSTEM_GLOSSARY_PATH", str(system_path))
     monkeypatch.setattr(glossary.state, "GLOBAL_GLOSSARY_PATH", str(global_path))
+    monkeypatch.setattr(glossary.state, "TRANSLATION_GLOSSARY_SOURCE", "json")
     glossary.invalidate_glossary_cache()
 
     assert glossary.load_combined_glossary() == [("批號", "Batch No.")]

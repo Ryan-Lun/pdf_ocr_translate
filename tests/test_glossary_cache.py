@@ -12,6 +12,7 @@ def test_load_global_glossary_reload_on_write(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(state, "GLOBAL_GLOSSARY_PATH", str(glossary_path))
+    monkeypatch.setattr(state, "TRANSLATION_GLOSSARY_SOURCE", "json")
     glossary.invalidate_glossary_cache()
 
     first = glossary.load_global_glossary()
@@ -36,6 +37,7 @@ def test_empty_glossary_entries_disable_default_loading(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(state, "SYSTEM_GLOSSARY_PATH", str(system_path))
     monkeypatch.setattr(state, "GLOBAL_GLOSSARY_PATH", str(global_path))
+    monkeypatch.setattr(state, "TRANSLATION_GLOSSARY_SOURCE", "json")
     glossary.invalidate_glossary_cache()
 
     assert glossary.apply_glossary("中文說明", []) == "中文說明"

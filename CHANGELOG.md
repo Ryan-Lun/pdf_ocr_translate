@@ -18,6 +18,14 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.5.0 - 2026-09-04
+
+### Changed
+
+- 翻譯流程使用的 glossary facade 預設改讀 SQL-backed 預設 Department Glossary。
+- 保留 legacy JSON glossary mode，可透過 `TRANSLATION_GLOSSARY_SOURCE=json` 明確切回舊來源；來源設定只允許 `sql` 或 `json`，避免拼字錯誤被靜默吞掉。
+- Required Glossary Term wrapper、longest-match / overlap 處理、TM priority 與既有翻譯流程維持透過高階 facade 整合。
+
 ## 0.4.0 - 2026-09-04
 
 ### Changed
