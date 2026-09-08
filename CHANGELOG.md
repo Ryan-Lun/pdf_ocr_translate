@@ -23,11 +23,16 @@
 ### Fixed
 
 - 修正 Department Glossary library 停用後無法重新啟用的問題，新增 activate API 與管理頁啟用按鈕。
+- 非管理員進入詞彙庫管理頁時改為唯讀模式，隱藏並停用寫入 controls，避免 403 後被誤認為操作成功。
 - 更新系統版本號以刷新 glossary 管理頁靜態 JS cache，避免瀏覽器沿用舊狀態切換邏輯。
 
 ### Validation
 
 - 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_glossary_management.py::test_department_glossary_library_lifecycle_api_create_update_disable -q`，結果通過。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_glossary_management.py::test_glossary_page_marks_non_admin_as_read_only_when_auth_enabled tests/test_glossary_management.py::test_glossary_page_allows_admin_write_controls_when_auth_enabled tests/test_glossary_management.py::test_glossary_write_paths_require_admin_when_auth_enabled tests/test_glossary_management.py::test_glossary_write_paths_allow_admin_when_auth_enabled -q`，結果通過。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_glossary_management.py tests/test_api_route_registration.py tests/test_app_version.py -q`，結果為 37 passed。
+- 已執行 `node --check static/glossary_manager.js` 與 `PYTHONPATH=. .venv/bin/python -m py_compile app/blueprints/main/routes.py app/services/glossary.py app/blueprints/api/glossary_routes.py tests/test_glossary_management.py tests/test_api_route_registration.py`，結果通過。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests -q`，結果為 556 passed、8 failed；8 個失敗仍集中於既有 `tests/test_app.py` 與 `tests/test_operations_cli.py` baseline，未出現在 #80 新增 glossary non-admin UI tests。
 
 ## 0.6.8 - 2026-09-07
 

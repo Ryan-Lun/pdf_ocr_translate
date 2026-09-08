@@ -8,10 +8,11 @@
     <link rel="stylesheet" href="{{ static_asset_url('app.css') }}" />
   </head>
   <body class="home has-global-nav">
+    {% set glossary_can_write = glossary_can_write|default((not auth_enabled) or (current_user and current_user.is_admin)) %}
     {% set nav_section = 'glossary' %}
     {% set nav_title = '法規文件轉換平台' %}
     {% include "_global_nav.html" %}
-    <main class="shell shell--wide">
+    <main id="glossaryManagerRoot" class="shell shell--wide" data-glossary-can-write="{{ 'true' if glossary_can_write else 'false' }}">
       <header class="hero">
         <div class="hero-title-split">
           <div>
@@ -24,13 +25,16 @@
       </header>
 
       <section class="upload-card glossary-library-manager">
+        {% if not glossary_can_write %}
+          <div class="hint glossary-status glossary-status--error">僅管理員可修改詞彙庫，目前為檢視模式。</div>
+        {% endif %}
         <div class="jobs-header">
           <div>
             <h2>部門詞彙庫</h2>
             <span>管理各部門可選用的詞彙庫；停用後不會出現在新任務選單，但歷史任務仍可追溯。</span>
           </div>
           <div class="glossary-toolbar-actions">
-            <button id="libraryNewBtn" class="primary" type="button">新增詞彙庫</button>
+            <button id="libraryNewBtn" class="primary" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>新增詞彙庫</button>
           </div>
         </div>
         <div id="libraryStatus" class="hint glossary-status"></div>
@@ -50,17 +54,17 @@
               </label>
               <label>
                 <span>詞彙庫名稱</span>
-                <input id="libraryName" type="text" placeholder="例如：品保部詞彙" />
+                <input id="libraryName" type="text" placeholder="例如：品保部詞彙"{% if not glossary_can_write %} disabled aria-disabled="true"{% endif %} />
               </label>
               <label>
                 <span>部門代碼</span>
-                <input id="libraryDepartmentCode" type="text" placeholder="例如：QA" />
+                <input id="libraryDepartmentCode" type="text" placeholder="例如：QA"{% if not glossary_can_write %} disabled aria-disabled="true"{% endif %} />
               </label>
             </div>
             <div class="button-row glossary-panel-actions">
-              <button id="saveLibraryBtn" class="primary" type="button">儲存詞彙庫</button>
-              <button id="activateLibraryBtn" class="primary" type="button" hidden>啟用詞彙庫</button>
-              <button id="disableLibraryBtn" class="danger" type="button">停用詞彙庫</button>
+              <button id="saveLibraryBtn" class="primary" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>儲存詞彙庫</button>
+              <button id="activateLibraryBtn" class="primary" type="button" data-write-control hidden{% if not glossary_can_write %} disabled aria-disabled="true"{% endif %}>啟用詞彙庫</button>
+              <button id="disableLibraryBtn" class="danger" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>停用詞彙庫</button>
             </div>
           </aside>
         </div>
@@ -82,7 +86,7 @@
             <div class="glossary-toolbar-actions">
               <div id="systemImportStatus" class="hint">尚未上傳系統詞彙表</div>
               <button id="previewSystemGlossaryBtn" class="ghost" type="button">檢查匯入內容</button>
-              <button id="applySystemGlossaryBtn" class="primary" type="button" hidden disabled>套用到目前詞彙庫</button>
+              <button id="applySystemGlossaryBtn" class="primary" type="button" data-write-control hidden disabled{% if not glossary_can_write %} aria-disabled="true"{% endif %}>套用到目前詞彙庫</button>
             </div>
           </div>
           <div id="systemImportSummary" class="glossary-import-summary" hidden></div>
@@ -106,7 +110,7 @@
             <span>顯示停用詞彙</span>
           </label>
           <div class="glossary-toolbar-actions">
-            <button id="glossaryNewBtn" class="primary" type="button">新增詞彙</button>
+            <button id="glossaryNewBtn" class="primary" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>新增詞彙</button>
             <button id="exportSystemGlossaryBtn" class="ghost" type="button">匯出 Excel</button>
             <button id="exportGlossaryJsonBtn" class="ghost" type="button">匯出 JSON</button>
             <button id="glossaryRefreshBtn" class="ghost" type="button"><i class="bi bi-arrow-clockwise"></i></button>
@@ -152,16 +156,16 @@
             <div class="glossary-form-stack">
               <label>
                 <span>中文詞彙</span>
-                <input id="detailCn" type="text" placeholder="例如：批號" />
+                <input id="detailCn" type="text" placeholder="例如：批號"{% if not glossary_can_write %} disabled aria-disabled="true"{% endif %} />
               </label>
               <label>
                 <span>英文詞彙</span>
-                <input id="detailEn" type="text" placeholder="例如：Batch No." />
+                <input id="detailEn" type="text" placeholder="例如：Batch No."{% if not glossary_can_write %} disabled aria-disabled="true"{% endif %} />
               </label>
             </div>
             <div class="button-row glossary-panel-actions">
-              <button id="saveGlossaryBtn" class="primary" type="button">儲存</button>
-              <button id="deleteGlossaryBtn" class="danger" type="button">停用詞彙</button>
+              <button id="saveGlossaryBtn" class="primary" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>儲存</button>
+              <button id="deleteGlossaryBtn" class="danger" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>停用詞彙</button>
               <button id="overrideGlossaryBtn" class="ghost" type="button" hidden>建立自訂詞彙覆蓋</button>
             </div>
           </aside>

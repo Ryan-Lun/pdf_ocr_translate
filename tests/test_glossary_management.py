@@ -109,6 +109,47 @@ def test_glossary_page_ok(client):
     assert 'id="activateLibraryBtn"' in html
 
 
+def test_glossary_page_marks_non_admin_as_read_only_when_auth_enabled(client, monkeypatch):
+    client.application.config["AUTH_ENABLED"] = True
+    client.application.config["AUTH_STUB_ENABLED"] = True
+    client.post("/auth/login", data={"username": "editor1", "display_name": "Editor One"})
+    monkeypatch.setattr("app.blueprints.main.routes.authz_service.user_is_admin", lambda _user: False)
+
+    resp = client.get("/workspace/glossary")
+
+    assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+    assert 'data-glossary-can-write="false"' in html
+    assert "僅管理員可修改詞彙庫" in html
+    assert 'id="libraryNewBtn"' in html
+    assert 'id="glossaryNewBtn"' in html
+    assert 'id="applySystemGlossaryBtn"' in html
+    for element_id in ("libraryNewBtn", "glossaryNewBtn", "applySystemGlossaryBtn"):
+        assert f'id="{element_id}"' in html
+    assert html.count('data-write-control') >= 8
+    assert html.count('aria-disabled="true"') >= 8
+    assert 'id="libraryName"' in html
+    assert 'id="detailCn"' in html
+    assert 'disabled aria-disabled="true"' in html
+
+
+def test_glossary_page_allows_admin_write_controls_when_auth_enabled(client, monkeypatch):
+    client.application.config["AUTH_ENABLED"] = True
+    client.application.config["AUTH_STUB_ENABLED"] = True
+    client.post("/auth/login", data={"username": "admin1", "display_name": "Admin One"})
+    monkeypatch.setattr("app.blueprints.main.routes.authz_service.user_is_admin", lambda _user: True)
+
+    resp = client.get("/workspace/glossary")
+
+    assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+    assert 'data-glossary-can-write="true"' in html
+    assert "僅管理員可修改詞彙庫" not in html
+    assert 'id="libraryNewBtn"' in html
+    assert 'id="glossaryNewBtn"' in html
+    assert 'id="applySystemGlossaryBtn"' in html
+
+
 def test_glossary_library_payload_maps_to_default_department_glossary(client):
     _clear_department_glossary()
     _seed_department_glossary([("批號", "Lot No."), ("製造日期", "Manufacturing Date")])
@@ -336,32 +377,52 @@ def test_system_glossary_import_apply_writes_department_glossary_sql(client):
 def test_glossary_write_paths_require_admin_when_auth_enabled(client, monkeypatch):
     _clear_department_glossary()
     library = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    entry_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+    )
+    glossary.disable_department_glossary_library(library.library_id)
     client.application.config["AUTH_ENABLED"] = True
     client.application.config["AUTH_STUB_ENABLED"] = True
     client.post("/auth/login", data={"username": "editor1", "display_name": "Editor One"})
     monkeypatch.setattr("app.blueprints.api.glossary_routes.authz_service.user_is_admin", lambda _user: False)
 
-    save_resp = client.post("/api/glossary", json={"glossary": [{"cn": "外觀", "en": "Appearance"}]})
-    apply_resp = client.post(
-        "/api/glossary/system-import-apply",
-        json={"items": [{"cn": "外觀", "en": "Appearance"}], "duplicates": [], "invalid_rows": []},
-    )
-    create_library_resp = client.post(
-        "/api/glossary/libraries",
-        json={"name": "品保二部", "department_code": "QA2"},
-    )
-    update_library_resp = client.patch(
-        f"/api/glossary/libraries/{library.library_id}",
-        json={"name": "品保部更新", "department_code": "QAD"},
-    )
-    disable_library_resp = client.post(f"/api/glossary/libraries/{library.library_id}/disable")
+    responses = [
+        client.post("/api/glossary", json={"glossary": [{"cn": "外觀", "en": "Appearance"}]}),
+        client.post(
+            "/api/glossary/system-import-apply",
+            json={"items": [{"cn": "外觀", "en": "Appearance"}], "duplicates": [], "invalid_rows": []},
+        ),
+        client.post("/api/glossary/libraries", json={"name": "品保二部", "department_code": "QA2"}),
+        client.patch(
+            f"/api/glossary/libraries/{library.library_id}",
+            json={"name": "品保部更新", "department_code": "QAD"},
+        ),
+        client.post(f"/api/glossary/libraries/{library.library_id}/disable"),
+        client.post(f"/api/glossary/libraries/{library.library_id}/activate"),
+        client.post(
+            f"/api/glossary/libraries/{library.library_id}/entries",
+            json={"cn": "尺寸", "en": "Dimension"},
+        ),
+        client.patch(
+            f"/api/glossary/libraries/{library.library_id}/entries/{entry_id}",
+            json={"cn": "外觀", "en": "Appearance Updated"},
+        ),
+        client.post(f"/api/glossary/libraries/{library.library_id}/entries/{entry_id}/disable"),
+    ]
 
-    assert save_resp.status_code == 403
-    assert apply_resp.status_code == 403
-    assert create_library_resp.status_code == 403
-    assert update_library_resp.status_code == 403
-    assert disable_library_resp.status_code == 403
-    assert glossary.resolve_selected_department_glossary(library.library_id).is_active is True
+    assert [response.status_code for response in responses] == [403] * len(responses)
+    selected = glossary.resolve_selected_department_glossary(
+        library.library_id,
+        require_active=False,
+    )
+    assert selected.is_active is False
+    entries = glossary.list_department_glossary_entries(library.library_id, active_only=False)
+    assert {entry.entry_id: entry.target_term for entry in entries} == {entry_id: "Appearance"}
+    assert {entry.entry_id: entry.status for entry in entries} == {entry_id: glossary.STATUS_ACTIVE}
 
 
 def test_glossary_write_paths_allow_admin_when_auth_enabled(client, monkeypatch):
@@ -380,16 +441,48 @@ def test_glossary_write_paths_allow_admin_when_auth_enabled(client, monkeypatch)
         "/api/glossary/libraries",
         json={"name": "品保部", "department_code": "QA"},
     )
+    library_id = create_library_resp.get_json()["library"]["id"]
+    update_library_resp = client.patch(
+        f"/api/glossary/libraries/{library_id}",
+        json={"name": "品質保證部", "department_code": "QAD"},
+    )
+    entry_create_resp = client.post(
+        f"/api/glossary/libraries/{library_id}/entries",
+        json={"cn": "尺寸", "en": "Dimension"},
+    )
+    entry_id = entry_create_resp.get_json()["entry"]["id"]
+    entry_update_resp = client.patch(
+        f"/api/glossary/libraries/{library_id}/entries/{entry_id}",
+        json={"cn": "尺寸", "en": "Dimensions"},
+    )
+    entry_disable_resp = client.post(f"/api/glossary/libraries/{library_id}/entries/{entry_id}/disable")
+    disable_library_resp = client.post(f"/api/glossary/libraries/{library_id}/disable")
+    activate_library_resp = client.post(f"/api/glossary/libraries/{library_id}/activate")
 
-    assert save_resp.status_code == 200
-    assert apply_resp.status_code == 200
-    assert create_library_resp.status_code == 200
-    library = glossary.list_department_glossary_libraries()[0]
-    entries = glossary.list_department_glossary_entries(library.library_id, active_only=True)
-    assert {entry.source_term: entry.target_term for entry in entries} == {
+    assert [
+        save_resp.status_code,
+        apply_resp.status_code,
+        create_library_resp.status_code,
+        update_library_resp.status_code,
+        entry_create_resp.status_code,
+        entry_update_resp.status_code,
+        entry_disable_resp.status_code,
+        disable_library_resp.status_code,
+        activate_library_resp.status_code,
+    ] == [200] * 9
+    selected = glossary.resolve_selected_department_glossary(library_id)
+    assert selected.name == "品質保證部"
+    assert selected.department_code == "QAD"
+    assert selected.is_active is True
+    default_library = glossary.get_or_create_default_department_glossary()
+    default_entries = glossary.list_department_glossary_entries(default_library.library_id, active_only=True)
+    assert {entry.source_term: entry.target_term for entry in default_entries} == {
         "外觀": "Appearance",
         "製程規範": "Process Specification",
     }
+    qa_entries = glossary.list_department_glossary_entries(library_id, active_only=False)
+    assert {entry.entry_id: entry.status for entry in qa_entries} == {entry_id: glossary.STATUS_DISABLED}
+    assert {entry.entry_id: entry.target_term for entry in qa_entries} == {entry_id: "Dimensions"}
 
 
 def test_department_glossary_library_lifecycle_api_create_update_disable(client):

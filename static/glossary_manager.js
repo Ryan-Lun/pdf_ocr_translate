@@ -1,3 +1,5 @@
+const glossaryRootEl = document.getElementById("glossaryManagerRoot");
+const glossaryCanWrite = glossaryRootEl?.dataset.glossaryCanWrite !== "false";
 const glossarySearchEl = document.getElementById("glossarySearch");
 const glossaryFilterEl = document.getElementById("glossaryFilter");
 const glossaryRefreshBtn = document.getElementById("glossaryRefreshBtn");
@@ -90,6 +92,27 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function readonlyGlossaryMessage() {
+  return "僅管理員可修改詞彙庫";
+}
+
+function requireGlossaryWrite(statusSetter = setGlossaryStatus) {
+  if (glossaryCanWrite) return true;
+  statusSetter(readonlyGlossaryMessage(), true);
+  return false;
+}
+
+function setWriteControlState(button, { hidden = false, disabled = false } = {}) {
+  if (!button) return;
+  button.hidden = hidden || !glossaryCanWrite;
+  button.disabled = disabled || !glossaryCanWrite;
+  if (!glossaryCanWrite) {
+    button.setAttribute("aria-disabled", "true");
+  } else {
+    button.removeAttribute("aria-disabled");
+  }
+}
+
 
 function setSystemImportStatus(message, isError = false) {
   if (!systemImportStatusEl) return;
@@ -125,6 +148,10 @@ function hasPendingGlossaryChanges() {
 
 function syncGlossaryActionState() {
   if (!saveGlossaryBtn || saveGlossaryBtn.hidden) return;
+  if (!glossaryCanWrite) {
+    saveGlossaryBtn.disabled = true;
+    return;
+  }
   const hasChanges = hasPendingGlossaryChanges();
   saveGlossaryBtn.disabled = !hasChanges;
 }
@@ -166,12 +193,12 @@ function renderSystemImportPreview() {
   const payload = glossaryState.pendingSystemImport;
   const showUnchangedPreviewEl = document.getElementById("showUnchangedPreview");
   if (!payload) {
-    applySystemGlossaryBtn.hidden = true;
+    setWriteControlState(applySystemGlossaryBtn, { hidden: true, disabled: true });
     systemImportSummaryEl.hidden = true;
     systemImportPreviewEl.hidden = true;
     systemImportSummaryEl.innerHTML = "";
     systemImportPreviewEl.innerHTML = "";
-    applySystemGlossaryBtn.disabled = true;
+    setWriteControlState(applySystemGlossaryBtn, { hidden: true, disabled: true });
     return;
   }
 
@@ -184,10 +211,13 @@ function renderSystemImportPreview() {
   const duplicateLimit = glossaryState.importPreviewLimits.duplicates;
   const invalidLimit = glossaryState.importPreviewLimits.invalid;
   const previewLimit = glossaryState.importPreviewLimits.preview;
-  applySystemGlossaryBtn.hidden = false;
+  setWriteControlState(applySystemGlossaryBtn, { hidden: false });
   systemImportSummaryEl.hidden = false;
   systemImportPreviewEl.hidden = false;
-  applySystemGlossaryBtn.disabled = !Array.isArray(payload.items) || payload.items.length === 0 || hasBlockingIssues;
+  setWriteControlState(applySystemGlossaryBtn, {
+    hidden: false,
+    disabled: !Array.isArray(payload.items) || payload.items.length === 0 || hasBlockingIssues,
+  });
   systemImportSummaryEl.innerHTML = `
     <span class="job-badge">匯入筆數 ${summary.incoming || 0}</span>
     <span class="job-badge job-badge--form">新增 ${summary.additions || 0}</span>
@@ -417,10 +447,12 @@ function renderLibraryPanel() {
     libraryCodeEl.value = "";
     libraryNameEl.value = "";
     libraryDepartmentCodeEl.value = "";
+    libraryNameEl.disabled = !glossaryCanWrite;
+    libraryDepartmentCodeEl.disabled = !glossaryCanWrite;
     saveLibraryBtn.textContent = "新增詞彙庫";
-    saveLibraryBtn.disabled = false;
-    activateLibraryBtn.hidden = true;
-    disableLibraryBtn.hidden = true;
+    setWriteControlState(saveLibraryBtn, { disabled: false });
+    setWriteControlState(activateLibraryBtn, { hidden: true, disabled: true });
+    setWriteControlState(disableLibraryBtn, { hidden: true, disabled: true });
     return;
   }
 
@@ -430,13 +462,16 @@ function renderLibraryPanel() {
   libraryCodeEl.value = library.code || "";
   libraryNameEl.value = library.name || "";
   libraryDepartmentCodeEl.value = library.department_code || "";
+  libraryNameEl.disabled = !glossaryCanWrite || !library.is_active;
+  libraryDepartmentCodeEl.disabled = !glossaryCanWrite || !library.is_active;
   saveLibraryBtn.textContent = "儲存修改";
-  saveLibraryBtn.disabled = !library.is_active;
-  activateLibraryBtn.hidden = library.is_active;
-  disableLibraryBtn.hidden = !library.is_active;
+  setWriteControlState(saveLibraryBtn, { disabled: !library.is_active });
+  setWriteControlState(activateLibraryBtn, { hidden: library.is_active, disabled: library.is_active });
+  setWriteControlState(disableLibraryBtn, { hidden: !library.is_active, disabled: !library.is_active });
 }
 
 function startNewLibrary() {
+  if (!requireGlossaryWrite(setLibraryStatus)) return;
   glossaryState.selectedLibraryId = null;
   glossaryState.libraryMode = "new";
   renderLibraryList();
@@ -451,6 +486,7 @@ function applyLibraryPayload(payload) {
 }
 
 async function saveCurrentLibrary() {
+  if (!requireGlossaryWrite(setLibraryStatus)) return;
   const name = normalizeText(libraryNameEl?.value);
   const departmentCode = normalizeText(libraryDepartmentCodeEl?.value);
   if (!name || !departmentCode) {
@@ -496,6 +532,7 @@ async function saveCurrentLibrary() {
 }
 
 async function changeCurrentLibraryActiveState({ active }) {
+  if (!requireGlossaryWrite(setLibraryStatus)) return;
   const library = getSelectedLibrary();
   if (!library || library.is_active === active) return;
   const actionLabel = active ? "啟用" : "停用";
@@ -641,10 +678,10 @@ function renderDetailPanel() {
     detailMetaEl.textContent = "新增詞彙會寫入目前選取的部門詞彙庫";
     detailCnEl.value = "";
     detailEnEl.value = "";
-    detailCnEl.disabled = false;
-    detailEnEl.disabled = false;
-    saveGlossaryBtn.hidden = false;
-    deleteGlossaryBtn.hidden = true;
+    detailCnEl.disabled = !glossaryCanWrite;
+    detailEnEl.disabled = !glossaryCanWrite;
+    setWriteControlState(saveGlossaryBtn, { hidden: false });
+    setWriteControlState(deleteGlossaryBtn, { hidden: true, disabled: true });
     overrideGlossaryBtn.hidden = true;
     saveGlossaryBtn.textContent = "新增詞彙";
     syncGlossaryActionState();
@@ -658,10 +695,10 @@ function renderDetailPanel() {
     detailMetaEl.textContent = "從左側選擇詞彙，或新增詞彙";
     detailCnEl.value = "";
     detailEnEl.value = "";
-    detailCnEl.disabled = false;
-    detailEnEl.disabled = false;
-    saveGlossaryBtn.hidden = false;
-    deleteGlossaryBtn.hidden = true;
+    detailCnEl.disabled = !glossaryCanWrite;
+    detailEnEl.disabled = !glossaryCanWrite;
+    setWriteControlState(saveGlossaryBtn, { hidden: false });
+    setWriteControlState(deleteGlossaryBtn, { hidden: true, disabled: true });
     overrideGlossaryBtn.hidden = true;
     saveGlossaryBtn.textContent = "儲存";
     syncGlossaryActionState();
@@ -671,15 +708,15 @@ function renderDetailPanel() {
   detailTitleEl.textContent = entry.cn;
   detailCnEl.value = entry.cn;
   detailEnEl.value = entry.en;
-  detailCnEl.disabled = isInactive;
-  detailEnEl.disabled = isInactive;
+  detailCnEl.disabled = isInactive || !glossaryCanWrite;
+  detailEnEl.disabled = isInactive || !glossaryCanWrite;
   detailBadgeEl.textContent = isInactive ? "inactive" : "active";
   detailBadgeEl.className = `job-badge ${isInactive ? "" : "job-badge--form"}`;
   detailMetaEl.textContent = isInactive
     ? "這筆詞彙已停用，只保留作為歷史紀錄"
     : "這筆詞彙屬於目前選取的部門詞彙庫";
-  saveGlossaryBtn.hidden = isInactive;
-  deleteGlossaryBtn.hidden = isInactive;
+  setWriteControlState(saveGlossaryBtn, { hidden: isInactive, disabled: isInactive });
+  setWriteControlState(deleteGlossaryBtn, { hidden: isInactive, disabled: isInactive });
   overrideGlossaryBtn.hidden = true;
   saveGlossaryBtn.textContent = "儲存修改";
   syncGlossaryActionState();
@@ -761,6 +798,7 @@ async function loadGlossaryLibrary(libraryId = glossaryState.selectedLibraryId) 
 
 
 function startNewGlossaryEntry() {
+  if (!requireGlossaryWrite()) return;
   glossaryState.selectedCn = null;
   glossaryState.selectedEntryId = null;
   glossaryState.mode = "new";
@@ -775,6 +813,7 @@ function startOverrideEntry() {
 
 
 async function saveCurrentGlossary() {
+  if (!requireGlossaryWrite()) return;
   const cn = normalizeText(detailCnEl?.value);
   const en = normalizeText(detailEnEl?.value);
   if (!cn || !en) {
@@ -819,6 +858,7 @@ async function saveCurrentGlossary() {
 
 
 async function deleteCurrentGlossary() {
+  if (!requireGlossaryWrite()) return;
   const entry = getSelectedEntry();
   const baseUrl = selectedLibraryEntryBaseUrl();
   const entryId = entry?.entry_id || entry?.id;
@@ -883,6 +923,7 @@ async function previewSystemGlossaryImport() {
 }
 
 async function applySystemGlossaryImport() {
+  if (!requireGlossaryWrite(setSystemImportStatus)) return;
   const payload = glossaryState.pendingSystemImport;
   if (!payload || !Array.isArray(payload.items) || !payload.items.length) {
     setSystemImportStatus("沒有可匯入的詞彙", true);

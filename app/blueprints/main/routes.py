@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
-from flask import Blueprint, abort, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, redirect, render_template, request, url_for
 from flask_login import current_user
 
 from ...services import audit_service, authz_service, doc_workspace, document_templates, glossary, jobs, pipeline, state, submit_quota, word_translate
@@ -155,7 +155,14 @@ def overlay_templates_page() -> str:
 
 @main_bp.route("/workspace/glossary", methods=["GET"], endpoint="glossary_page")
 def glossary_page() -> str:
-    return render_template("main/glossary_manager.html")
+    glossary_can_write = (
+        not current_app.config.get("AUTH_ENABLED", False)
+        or authz_service.user_is_admin(current_user)
+    )
+    return render_template(
+        "main/glossary_manager.html",
+        glossary_can_write=glossary_can_write,
+    )
 
 
 @main_bp.route(
