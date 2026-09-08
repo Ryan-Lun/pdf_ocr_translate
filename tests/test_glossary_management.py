@@ -106,6 +106,7 @@ def test_glossary_page_ok(client):
     assert 'id="libraryNewBtn"' in html
     assert 'id="libraryList"' in html
     assert 'id="disableLibraryBtn"' in html
+    assert 'id="activateLibraryBtn"' in html
 
 
 def test_glossary_library_payload_maps_to_default_department_glossary(client):
@@ -435,6 +436,25 @@ def test_department_glossary_library_lifecycle_api_create_update_disable(client)
     ]
     assert created["id"] not in active_library_ids
 
+    activate_resp = client.post(f"/api/glossary/libraries/{created['id']}/activate")
+
+    assert activate_resp.status_code == 200
+    activate_payload = activate_resp.get_json()
+    activated = activate_payload["library"]
+    assert activated["is_active"] is True
+    assert activated["code"] == created["code"]
+    assert activate_payload["selected_library"]["id"] == created["id"]
+    assert activate_payload["selected_library"]["is_active"] is True
+    listed_library = next(
+        item for item in activate_payload["libraries"] if item["id"] == created["id"]
+    )
+    assert listed_library["is_active"] is True
+    active_library_ids = [
+        item.library_id
+        for item in glossary.list_department_glossary_libraries(active_only=True)
+    ]
+    assert created["id"] in active_library_ids
+
 
 def test_department_glossary_library_create_requires_name_and_department_code(client):
     _clear_department_glossary()
@@ -570,3 +590,250 @@ def test_default_department_glossary_library_disable_survives_management_payload
         default.library_id,
         require_active=False,
     ).is_active is False
+
+
+def test_glossary_management_payload_can_switch_selected_department_library(client):
+    _clear_department_glossary()
+    default = _seed_department_glossary([("外觀", "Appearance")])
+    qa = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    glossary.upsert_department_glossary_entry(
+        library_id=qa.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="批號",
+        target_term="Lot No.",
+    )
+
+    resp = client.get(f"/api/glossary/library?library_id={qa.library_id}")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["selected_library"]["id"] == qa.library_id
+    assert payload["system_glossary"] == [{"cn": "批號", "en": "Lot No."}]
+    assert payload["effective_glossary"] == [
+        {
+            "cn": "批號",
+            "en": "Lot No.",
+            "source": "system",
+            "overridden": False,
+            "system_en": "Lot No.",
+            "user_en": None,
+        }
+    ]
+    assert payload["entries"][0]["status"] == "active"
+    assert payload["selected_library"]["id"] != default.library_id
+
+
+def test_glossary_management_payload_defaults_to_active_entries_and_can_include_inactive(client):
+    _clear_department_glossary()
+    library = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    active_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+    )
+    disabled_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="批號",
+        target_term="Lot No.",
+    )
+    glossary.disable_department_glossary_entry(disabled_id)
+
+    active_payload = client.get(f"/api/glossary/library?library_id={library.library_id}").get_json()
+    all_payload = client.get(
+        f"/api/glossary/library?library_id={library.library_id}&include_inactive=1"
+    ).get_json()
+
+    assert [entry["id"] for entry in active_payload["entries"]] == [active_id]
+    assert {entry["id"]: entry["status"] for entry in all_payload["entries"]} == {
+        active_id: "active",
+        disabled_id: "disabled",
+    }
+
+
+def test_selected_department_library_entry_upsert_and_disable_are_scoped(client):
+    _clear_department_glossary()
+    default = _seed_department_glossary([("外觀", "Default Appearance")])
+    qa = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+
+    create_resp = client.post(
+        f"/api/glossary/libraries/{qa.library_id}/entries",
+        json={"cn": "外觀", "en": "QA Appearance"},
+    )
+    update_resp = client.post(
+        f"/api/glossary/libraries/{qa.library_id}/entries",
+        json={"cn": "外觀", "en": "QA Visual Appearance"},
+    )
+    entry_id = update_resp.get_json()["entry"]["id"]
+    disable_resp = client.post(
+        f"/api/glossary/libraries/{qa.library_id}/entries/{entry_id}/disable"
+    )
+
+    assert create_resp.status_code == 200
+    assert update_resp.status_code == 200
+    assert disable_resp.status_code == 200
+    assert glossary.load_department_glossary_pairs(default.library_id) == [("外觀", "Default Appearance")]
+    assert glossary.load_department_glossary_pairs(qa.library_id) == []
+    inactive_entries = glossary.list_department_glossary_entries(qa.library_id, active_only=False)
+    assert [(entry.source_term, entry.target_term, entry.status) for entry in inactive_entries] == [
+        ("外觀", "QA Visual Appearance", "disabled")
+    ]
+
+
+def test_selected_department_library_entry_update_can_rename_source_term_without_leaving_old_active_entry(client):
+    _clear_department_glossary()
+    library = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    entry_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+    )
+
+    resp = client.patch(
+        f"/api/glossary/libraries/{library.library_id}/entries/{entry_id}",
+        json={"cn": "產品外觀", "en": "Product Appearance"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["entry"] == {
+        "id": entry_id,
+        "library_id": library.library_id,
+        "cn": "產品外觀",
+        "en": "Product Appearance",
+        "source_lang": "zh",
+        "target_lang": "en",
+        "status": "active",
+        "priority": 0,
+        "notes": None,
+    }
+    assert glossary.load_department_glossary_pairs(library.library_id) == [("產品外觀", "Product Appearance")]
+
+
+def test_selected_department_library_entry_hard_delete_route_is_not_exposed(client):
+    _clear_department_glossary()
+    library = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    entry_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="批號",
+        target_term="Lot No.",
+    )
+
+    resp = client.delete(f"/api/glossary/libraries/{library.library_id}/entries/{entry_id}")
+
+    assert resp.status_code in {404, 405}
+    assert glossary.list_department_glossary_entries(library.library_id, active_only=True)[0].entry_id == entry_id
+
+
+def test_selected_department_library_import_preview_and_apply_are_scoped(client):
+    _clear_department_glossary()
+    default = _seed_department_glossary([("批號", "Default Lot No.")])
+    qa = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    glossary.upsert_department_glossary_entry(
+        library_id=qa.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="批號",
+        target_term="QA Lot No.",
+    )
+
+    workbook = _build_xlsx([
+        ["cn", "en"],
+        ["批號", "QA Batch No."],
+        ["外觀", "Appearance"],
+    ])
+    preview_resp = client.post(
+        f"/api/glossary/system-import-preview?library_id={qa.library_id}",
+        data={"file": (BytesIO(workbook), "qa.xlsx")},
+        content_type="multipart/form-data",
+    )
+    preview = preview_resp.get_json()
+    apply_resp = client.post(
+        "/api/glossary/system-import-apply",
+        json={
+            "library_id": qa.library_id,
+            "items": preview["items"],
+            "duplicates": [],
+            "invalid_rows": [],
+        },
+    )
+
+    assert preview_resp.status_code == 200
+    assert preview["summary"] == {"incoming": 2, "additions": 1, "updates": 1, "unchanged": 0}
+    assert apply_resp.status_code == 200
+    assert glossary.load_department_glossary_pairs(default.library_id) == [("批號", "Default Lot No.")]
+    assert set(glossary.load_department_glossary_pairs(qa.library_id)) == {
+        ("批號", "QA Batch No."),
+        ("外觀", "Appearance"),
+    }
+
+
+def test_selected_department_library_excel_and_json_exports_are_scoped(client):
+    _clear_department_glossary()
+    default = _seed_department_glossary([("批號", "Default Lot No.")])
+    qa = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    glossary.upsert_department_glossary_entry(
+        library_id=qa.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+    )
+
+    xlsx_resp = client.get(f"/api/glossary/system-export?library_id={qa.library_id}")
+    json_resp = client.get(f"/api/glossary/export-json?library_id={qa.library_id}")
+
+    assert xlsx_resp.status_code == 200
+    assert glossary.parse_system_glossary_excel(xlsx_resp.data)["items"] == [
+        {"cn": "外觀", "en": "Appearance"}
+    ]
+    assert json_resp.status_code == 200
+    assert json_resp.get_json()["glossary"] == [{"cn": "外觀", "en": "Appearance"}]
+    assert glossary.load_department_glossary_pairs(default.library_id) == [("批號", "Default Lot No.")]
+
+
+def test_selected_department_library_json_file_import_preview_is_scoped(client):
+    _clear_department_glossary()
+    default = _seed_department_glossary([("批號", "Default Lot No.")])
+    qa = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+    glossary.upsert_department_glossary_entry(
+        library_id=qa.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="批號",
+        target_term="QA Lot No.",
+    )
+
+    resp = client.post(
+        f"/api/glossary/system-import-preview?library_id={qa.library_id}",
+        data={"file": (BytesIO('[{"cn":"批號","en":"QA Batch No."}]'.encode("utf-8")), "qa.json")},
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["summary"] == {"incoming": 1, "additions": 0, "updates": 1, "unchanged": 0}
+    assert glossary.load_department_glossary_pairs(default.library_id) == [("批號", "Default Lot No.")]
+
+
+def test_selected_department_library_json_import_is_scoped(client):
+    _clear_department_glossary()
+    default = _seed_department_glossary([("批號", "Default Lot No.")])
+    qa = glossary.create_department_glossary_library(name="品保部", department_code="QA")
+
+    resp = client.post(
+        f"/api/glossary/import-json?library_id={qa.library_id}",
+        json={"glossary": [{"cn": "批號", "en": "QA Lot No."}]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["system_glossary"] == [{"cn": "批號", "en": "QA Lot No."}]
+    assert glossary.load_department_glossary_pairs(default.library_id) == [("批號", "Default Lot No.")]
+    assert glossary.load_department_glossary_pairs(qa.library_id) == [("批號", "QA Lot No.")]

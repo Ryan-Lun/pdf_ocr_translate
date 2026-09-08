@@ -30,6 +30,44 @@ def _require_glossary_admin_for_write() -> object | None:
     return None
 
 
+def _parse_bool_param(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _request_library_id() -> int | None:
+    raw_value = request.args.get("library_id") or request.form.get("library_id")
+    if raw_value is None:
+        payload = request.get_json(silent=True) or {}
+        raw_value = payload.get("library_id") if isinstance(payload, dict) else None
+    if raw_value is None or str(raw_value).strip() == "":
+        return None
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        raise glossary.DepartmentGlossarySelectionError(
+            "invalid_department_glossary",
+            "選擇的部門詞彙庫格式不正確",
+        ) from None
+
+
+def _selected_glossary_payload(*, fallback_to_default: bool = True) -> dict[str, object]:
+    library_id = _request_library_id()
+    if library_id is None and not fallback_to_default:
+        raise glossary.DepartmentGlossarySelectionError(
+            "missing_department_glossary",
+            "請選擇部門詞彙庫",
+        )
+    return glossary.build_glossary_management_payload(
+        library_id=library_id,
+        include_inactive_entries=_parse_bool_param(request.args.get("include_inactive")),
+    )
+
+
+def _glossary_selection_error_response(exc: glossary.DepartmentGlossarySelectionError):
+    status_code = 404 if exc.code == "department_glossary_not_found" else 400
+    return jsonify({"ok": False, "error": exc.user_message, "code": exc.code}), status_code
+
+
 @api_bp.route("/glossary", methods=["GET", "POST"], endpoint="global_glossary")
 def global_glossary():
     if request.method == "GET":
@@ -48,7 +86,10 @@ def global_glossary():
 
 @api_bp.route("/glossary/library", methods=["GET"], endpoint="glossary_library")
 def glossary_library():
-    return jsonify({"ok": True, **glossary.build_glossary_management_payload()})
+    try:
+        return jsonify({"ok": True, **_selected_glossary_payload()})
+    except glossary.DepartmentGlossarySelectionError as exc:
+        return _glossary_selection_error_response(exc)
 
 
 def _glossary_library_error_response(exc: glossary.DepartmentGlossaryLibraryError):
@@ -76,7 +117,7 @@ def glossary_libraries_create():
         {
             "ok": True,
             "library": glossary.department_glossary_library_to_payload(library),
-            **glossary.build_glossary_management_payload(),
+            **glossary.build_glossary_management_payload(library_id=library.library_id),
         }
     )
 
@@ -104,7 +145,7 @@ def glossary_libraries_update(library_id: int):
         {
             "ok": True,
             "library": glossary.department_glossary_library_to_payload(library),
-            **glossary.build_glossary_management_payload(),
+            **glossary.build_glossary_management_payload(library_id=library.library_id),
         }
     )
 
@@ -127,20 +168,194 @@ def glossary_libraries_disable(library_id: int):
         {
             "ok": True,
             "library": glossary.department_glossary_library_to_payload(library),
-            **glossary.build_glossary_management_payload(),
+            **glossary.build_glossary_management_payload(library_id=library.library_id),
         }
     )
 
 
+@api_bp.route(
+    "/glossary/libraries/<int:library_id>/activate",
+    methods=["POST"],
+    endpoint="glossary_libraries_activate",
+)
+def glossary_libraries_activate(library_id: int):
+    forbidden = _require_glossary_admin_for_write()
+    if forbidden is not None:
+        return forbidden
+    try:
+        library = glossary.activate_department_glossary_library(library_id)
+    except glossary.DepartmentGlossaryLibraryError as exc:
+        return _glossary_library_error_response(exc)
+    jobs.notify_jobs_update()
+    return jsonify(
+        {
+            "ok": True,
+            "library": glossary.department_glossary_library_to_payload(library),
+            **glossary.build_glossary_management_payload(library_id=library.library_id),
+        }
+    )
+
+
+@api_bp.route(
+    "/glossary/libraries/<int:library_id>/entries",
+    methods=["POST"],
+    endpoint="glossary_library_entries_upsert",
+)
+def glossary_library_entries_upsert(library_id: int):
+    forbidden = _require_glossary_admin_for_write()
+    if forbidden is not None:
+        return forbidden
+    payload = request.get_json(force=True) or {}
+    cn = str(payload.get("cn") or payload.get("source_term") or "").strip()
+    en = str(payload.get("en") or payload.get("target_term") or "").strip()
+    if not cn or not en:
+        return jsonify({"ok": False, "error": "請輸入完整的中文與英文詞彙"}), 400
+    try:
+        selected = glossary.resolve_selected_department_glossary(
+            library_id,
+            require_active=False,
+        )
+        entry_id = glossary.upsert_department_glossary_entry(
+            library_id=selected.library_id,
+            source_lang="zh",
+            target_lang="en",
+            source_term=cn,
+            target_term=en,
+        )
+        entries = glossary.list_department_glossary_entries(
+            selected.library_id,
+            active_only=False,
+        )
+        entry = next((item for item in entries if item.entry_id == entry_id), None)
+        response_payload = glossary.build_glossary_management_payload(library_id=selected.library_id)
+    except glossary.DepartmentGlossarySelectionError as exc:
+        return _glossary_selection_error_response(exc)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    jobs.notify_jobs_update()
+    return jsonify(
+        {
+            "ok": True,
+            "entry": glossary.department_glossary_entry_to_payload(entry) if entry is not None else None,
+            **response_payload,
+        }
+    )
+
+
+@api_bp.route(
+    "/glossary/libraries/<int:library_id>/entries/<int:entry_id>",
+    methods=["PATCH"],
+    endpoint="glossary_library_entries_update",
+)
+def glossary_library_entries_update(library_id: int, entry_id: int):
+    forbidden = _require_glossary_admin_for_write()
+    if forbidden is not None:
+        return forbidden
+    payload = request.get_json(force=True) or {}
+    cn = str(payload.get("cn") or payload.get("source_term") or "").strip()
+    en = str(payload.get("en") or payload.get("target_term") or "").strip()
+    if not cn or not en:
+        return jsonify({"ok": False, "error": "請輸入完整的中文與英文詞彙"}), 400
+    try:
+        selected = glossary.resolve_selected_department_glossary(
+            library_id,
+            require_active=False,
+        )
+        entry = glossary.update_department_glossary_entry(
+            entry_id,
+            library_id=selected.library_id,
+            source_term=cn,
+            target_term=en,
+        )
+        response_payload = glossary.build_glossary_management_payload(library_id=selected.library_id)
+    except glossary.DepartmentGlossarySelectionError as exc:
+        return _glossary_selection_error_response(exc)
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "not found" in message.lower() else 400
+        return jsonify({"ok": False, "error": message}), status_code
+    jobs.notify_jobs_update()
+    return jsonify(
+        {
+            "ok": True,
+            "entry": glossary.department_glossary_entry_to_payload(entry),
+            **response_payload,
+        }
+    )
+
+
+@api_bp.route(
+    "/glossary/libraries/<int:library_id>/entries/<int:entry_id>/disable",
+    methods=["POST"],
+    endpoint="glossary_library_entries_disable",
+)
+def glossary_library_entries_disable(library_id: int, entry_id: int):
+    forbidden = _require_glossary_admin_for_write()
+    if forbidden is not None:
+        return forbidden
+    try:
+        selected = glossary.resolve_selected_department_glossary(
+            library_id,
+            require_active=False,
+        )
+        entries = glossary.list_department_glossary_entries(
+            selected.library_id,
+            active_only=False,
+        )
+        if not any(entry.entry_id == entry_id for entry in entries):
+            return jsonify({"ok": False, "error": "詞彙不存在"}), 404
+        glossary.disable_department_glossary_entry(entry_id)
+        response_payload = glossary.build_glossary_management_payload(library_id=selected.library_id)
+    except glossary.DepartmentGlossarySelectionError as exc:
+        return _glossary_selection_error_response(exc)
+    jobs.notify_jobs_update()
+    return jsonify({"ok": True, **response_payload})
+
+
 @api_bp.route("/glossary/system-export", methods=["GET"], endpoint="glossary_system_export")
 def glossary_system_export():
-    workbook = glossary.export_system_glossary_excel()
+    try:
+        library_id = _request_library_id()
+        workbook = glossary.export_system_glossary_excel(library_id=library_id)
+    except glossary.DepartmentGlossarySelectionError as exc:
+        return _glossary_selection_error_response(exc)
     return send_file(
         io.BytesIO(workbook),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
-        download_name="system_glossary.xlsx",
+        download_name="department_glossary.xlsx" if library_id is not None else "system_glossary.xlsx",
     )
+
+
+@api_bp.route("/glossary/export-json", methods=["GET"], endpoint="glossary_export_json")
+def glossary_export_json():
+    try:
+        library_id = _request_library_id()
+        items = glossary.load_department_glossary_items(library_id)
+    except glossary.DepartmentGlossarySelectionError as exc:
+        return _glossary_selection_error_response(exc)
+    return jsonify({"ok": True, "glossary": items})
+
+
+@api_bp.route("/glossary/import-json", methods=["POST"], endpoint="glossary_import_json")
+def glossary_import_json():
+    forbidden = _require_glossary_admin_for_write()
+    if forbidden is not None:
+        return forbidden
+    payload = request.get_json(force=True) or {}
+    items = payload.get("glossary", payload.get("items", []))
+    if not isinstance(items, list):
+        return jsonify({"ok": False, "error": "Invalid glossary payload."}), 400
+    try:
+        library_id = _request_library_id()
+        if library_id is None:
+            library_id = glossary.get_or_create_default_department_glossary().library_id
+        merged_items = glossary.apply_system_glossary_import(items, library_id=library_id)
+        response_payload = glossary.build_glossary_management_payload(library_id=library_id)
+    except glossary.DepartmentGlossarySelectionError as exc:
+        return _glossary_selection_error_response(exc)
+    jobs.notify_jobs_update()
+    return jsonify({"ok": True, "system_glossary": merged_items, **response_payload})
 
 
 @api_bp.route("/glossary/system-import-preview", methods=["POST"], endpoint="glossary_system_import_preview")
@@ -149,11 +364,19 @@ def glossary_system_import_preview():
     if upload is None or not str(upload.filename or "").strip():
         return jsonify({"ok": False, "error": "Missing Excel file."}), 400
     filename = str(upload.filename or "").strip().lower()
-    if not filename.endswith(".xlsx"):
-        return jsonify({"ok": False, "error": "Only .xlsx files are supported."}), 400
+    if not (filename.endswith(".xlsx") or filename.endswith(".json")):
+        return jsonify({"ok": False, "error": "Only .xlsx and .json files are supported."}), 400
     try:
-        parsed = glossary.parse_system_glossary_excel(upload.read())
-        preview = glossary.build_system_glossary_import_preview(parsed["items"])
+        library_id = _request_library_id()
+        file_bytes = upload.read()
+        parsed = (
+            glossary.parse_system_glossary_json(file_bytes)
+            if filename.endswith(".json")
+            else glossary.parse_system_glossary_excel(file_bytes)
+        )
+        preview = glossary.build_system_glossary_import_preview(parsed["items"], library_id=library_id)
+    except glossary.DepartmentGlossarySelectionError as exc:
+        return _glossary_selection_error_response(exc)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     return jsonify({"ok": True, **parsed, **preview})
@@ -174,13 +397,20 @@ def glossary_system_import_apply():
         return jsonify({"ok": False, "error": "請先排除重複詞彙列，再確認合併。"}), 400
     if isinstance(invalid_rows, list) and invalid_rows:
         return jsonify({"ok": False, "error": "請先排除無效列，再確認合併。"}), 400
-    merged_items = glossary.apply_system_glossary_import(items)
+    try:
+        library_id = _request_library_id()
+        if library_id is None:
+            library_id = glossary.get_or_create_default_department_glossary().library_id
+        merged_items = glossary.apply_system_glossary_import(items, library_id=library_id)
+        response_payload = glossary.build_glossary_management_payload(library_id=library_id)
+    except glossary.DepartmentGlossarySelectionError as exc:
+        return _glossary_selection_error_response(exc)
     jobs.notify_jobs_update()
     return jsonify(
         {
             "ok": True,
             "system_glossary": merged_items,
-            **glossary.build_glossary_management_payload(),
+            **response_payload,
         }
     )
 

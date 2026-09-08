@@ -18,6 +18,45 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.6.9 - 2026-09-08
+
+### Fixed
+
+- 修正 Department Glossary library 停用後無法重新啟用的問題，新增 activate API 與管理頁啟用按鈕。
+- 更新系統版本號以刷新 glossary 管理頁靜態 JS cache，避免瀏覽器沿用舊狀態切換邏輯。
+
+### Validation
+
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_glossary_management.py::test_department_glossary_library_lifecycle_api_create_update_disable -q`，結果通過。
+
+## 0.6.8 - 2026-09-07
+
+### Added
+
+- 詞彙庫管理頁支援切換目前選取的 Department Glossary library，entry 搜尋與清單只顯示該 library 的詞彙。
+- 新增 selected-library scoped entry upsert/update/disable API，管理員可在目前詞彙庫新增、更新與停用詞彙，且不暴露 hard delete。
+- 詞彙庫管理頁新增顯示停用詞彙切換，預設只列出 active entries。
+- 新增 selected-library JSON import/export API；Excel/JSON 匯入預覽、套用與匯出也可依 `library_id` 限定目前詞彙庫。
+
+### Changed
+
+- 詞彙庫管理 UI 的新增、儲存、停用、匯入與匯出流程改為使用目前選取的 Department Glossary library，不再固定寫入 default library。
+- 保留 legacy `/api/glossary` 與未指定 `library_id` 的 Excel export default-library behavior，避免破壞既有呼叫。
+
+### Fixed
+
+- 修正 entry 編輯 source term 時不應新增另一筆 active entry 的問題，改為用 entry id 更新原 row。
+- 修正停用 Department Glossary library 後無法從管理頁重新啟用的問題。
+- 匯入預覽表格會 escape 上傳檔/資料庫內容，避免詞彙內容被當成 HTML 插入。
+
+### Validation
+
+- 已執行 `PYTHONPATH=. .venv/bin/python -m py_compile app/services/glossary.py app/blueprints/api/glossary_routes.py tests/test_glossary_management.py tests/test_api_route_registration.py`，結果通過。
+- 已執行 `node --check static/glossary_manager.js`，結果通過。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_glossary_management.py tests/test_api_route_registration.py -q`，結果為 31 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_department_glossary_sql.py -q`，結果為 16 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests -q`，結果為 554 passed、8 failed；8 個失敗仍集中於既有 `tests/test_app.py` 與 `tests/test_operations_cli.py` baseline，未出現在 #77 新增 Department Glossary entries 多 library 管理 tests。
+
 ## 0.6.7 - 2026-09-07
 
 ### Added

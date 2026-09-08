@@ -425,6 +425,18 @@ def disable_department_glossary_library(
         session.flush()
         return _library_from_record(record)
 
+
+def activate_department_glossary_library(
+    library_id: int,
+) -> DepartmentGlossaryLibrary:
+    with job_store.session_scope() as session:
+        record = _get_department_glossary_library_record(session, int(library_id))
+        record.is_active = True
+        record.updated_at = job_store.utcnow()
+        session.flush()
+        return _library_from_record(record)
+
+
 def get_or_create_department_glossary_library(
     *,
     code: str,
@@ -637,6 +649,41 @@ def upsert_department_glossary_entry(
         return int(record.id)
 
 
+def update_department_glossary_entry(
+    entry_id: int,
+    *,
+    library_id: int,
+    source_term: str,
+    target_term: str,
+    updated_by_work_id: str | None = None,
+) -> DepartmentGlossaryEntry:
+    cleaned_source_term = str(source_term or "").strip()
+    cleaned_target_term = str(target_term or "").strip()
+    if not cleaned_source_term or not cleaned_target_term:
+        raise ValueError("Department Glossary source and target terms are required.")
+    with job_store.session_scope() as session:
+        record = session.get(job_store.DepartmentGlossaryEntryRecord, int(entry_id))
+        if record is None or int(record.library_id) != int(library_id):
+            raise ValueError("Department Glossary entry not found.")
+        duplicate = session.scalar(
+            select(job_store.DepartmentGlossaryEntryRecord)
+            .where(job_store.DepartmentGlossaryEntryRecord.library_id == int(library_id))
+            .where(job_store.DepartmentGlossaryEntryRecord.source_lang == record.source_lang)
+            .where(job_store.DepartmentGlossaryEntryRecord.target_lang == record.target_lang)
+            .where(job_store.DepartmentGlossaryEntryRecord.source_term == cleaned_source_term)
+            .where(job_store.DepartmentGlossaryEntryRecord.status == record.status)
+            .where(job_store.DepartmentGlossaryEntryRecord.id != int(entry_id))
+        )
+        if duplicate is not None:
+            raise ValueError("Department Glossary source term already exists in this library.")
+        record.source_term = cleaned_source_term
+        record.target_term = cleaned_target_term
+        record.updated_by_work_id = str(updated_by_work_id or "").strip() or record.updated_by_work_id
+        record.updated_at = job_store.utcnow()
+        session.flush()
+        return _entry_from_record(record)
+
+
 def disable_department_glossary_entry(
     entry_id: int,
     *,
@@ -835,21 +882,43 @@ def department_glossary_library_to_payload(library: DepartmentGlossaryLibrary) -
     return _department_library_to_payload(library)
 
 
-def load_default_department_glossary_items() -> list[dict[str, str]]:
-    library = get_or_create_default_department_glossary()
-    entries = list_department_glossary_entries(library.library_id, active_only=True)
+def department_glossary_entry_to_payload(entry: DepartmentGlossaryEntry) -> dict[str, str | int | None]:
+    return _department_entry_to_payload(entry)
+
+
+def load_department_glossary_items(
+    library_id: int | None = None,
+    *,
+    active_only: bool = True,
+) -> list[dict[str, str]]:
+    if library_id is None:
+        library_id = get_or_create_default_department_glossary().library_id
+    else:
+        library_id = resolve_selected_department_glossary(
+            library_id,
+            require_active=False,
+        ).library_id
+    entries = list_department_glossary_entries(int(library_id), active_only=active_only)
     items = [_department_entry_to_compat_item(entry) for entry in entries]
     items.sort(key=lambda item: item["cn"])
     return items
 
 
-def sync_default_department_glossary_items(
+def load_default_department_glossary_items() -> list[dict[str, str]]:
+    return load_department_glossary_items()
+
+
+def sync_department_glossary_items(
+    library_id: int,
     items: list[dict[str, str]],
     *,
     replace: bool = True,
     updated_by_work_id: str | None = None,
 ) -> list[dict[str, str]]:
-    library = get_or_create_default_department_glossary()
+    selected_library = resolve_selected_department_glossary(
+        library_id,
+        require_active=False,
+    )
     cleaned_by_cn: dict[str, str] = {}
     for item in items:
         if not isinstance(item, dict):
@@ -860,7 +929,7 @@ def sync_default_department_glossary_items(
             cleaned_by_cn[cn] = en
     for cn, en in cleaned_by_cn.items():
         upsert_department_glossary_entry(
-            library_id=library.library_id,
+            library_id=selected_library.library_id,
             source_lang="zh",
             target_lang="en",
             source_term=cn,
@@ -868,17 +937,40 @@ def sync_default_department_glossary_items(
             updated_by_work_id=updated_by_work_id,
         )
     if replace:
-        for entry in list_department_glossary_entries(library.library_id, active_only=True):
+        for entry in list_department_glossary_entries(selected_library.library_id, active_only=True):
             if entry.source_term not in cleaned_by_cn:
                 disable_department_glossary_entry(
                     entry.entry_id,
                     updated_by_work_id=updated_by_work_id,
                 )
-    return load_default_department_glossary_items()
+    return load_department_glossary_items(selected_library.library_id)
+
+
+def sync_default_department_glossary_items(
+    items: list[dict[str, str]],
+    *,
+    replace: bool = True,
+    updated_by_work_id: str | None = None,
+) -> list[dict[str, str]]:
+    library = get_or_create_default_department_glossary()
+    return sync_department_glossary_items(
+        library.library_id,
+        items,
+        replace=replace,
+        updated_by_work_id=updated_by_work_id,
+    )
+
+
+def apply_department_glossary_import(
+    library_id: int,
+    items: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    return sync_department_glossary_items(library_id, items, replace=False)
 
 
 def apply_default_department_glossary_import(items: list[dict[str, str]]) -> list[dict[str, str]]:
-    return sync_default_department_glossary_items(items, replace=False)
+    library = get_or_create_default_department_glossary()
+    return apply_department_glossary_import(library.library_id, items)
 
 
 def import_department_glossary_json(
@@ -1467,23 +1559,52 @@ def glossary_pairs_for_translation(
     return pairs
 
 
-def build_glossary_management_payload() -> dict[str, object]:
-    selected_library = get_or_create_default_department_glossary()
+def build_glossary_management_payload(
+    *,
+    library_id: object | None = None,
+    include_inactive_entries: bool = False,
+) -> dict[str, object]:
+    if library_id is None:
+        selected_library = get_or_create_default_department_glossary()
+    else:
+        selected = resolve_selected_department_glossary(
+            library_id,
+            require_active=False,
+        )
+        selected_library = DepartmentGlossaryLibrary(
+            library_id=selected.library_id,
+            code=selected.code,
+            name=selected.name,
+            department_code=selected.department_code,
+            is_default=False,
+            is_active=selected.is_active,
+        )
+        matching_libraries = [
+            library
+            for library in list_department_glossary_libraries(active_only=False)
+            if library.library_id == selected.library_id
+        ]
+        if matching_libraries:
+            selected_library = matching_libraries[0]
     libraries = list_department_glossary_libraries(active_only=False)
-    entries = list_department_glossary_entries(selected_library.library_id, active_only=True)
+    entries = list_department_glossary_entries(
+        selected_library.library_id,
+        active_only=not include_inactive_entries,
+    )
     entries.sort(key=lambda entry: entry.source_term)
-    system_items = [_department_entry_to_compat_item(entry) for entry in entries]
+    active_entries = [entry for entry in entries if entry.status == STATUS_ACTIVE]
+    system_items = [_department_entry_to_compat_item(entry) for entry in active_entries]
     entry_payload = [_department_entry_to_payload(entry) for entry in entries]
     effective_items: list[dict[str, str | bool | None]] = [
         {
-            "cn": item["cn"],
-            "en": item["en"],
+            "cn": entry.source_term,
+            "en": entry.target_term,
             "source": "system",
             "overridden": False,
-            "system_en": item["en"],
+            "system_en": entry.target_term,
             "user_en": None,
         }
-        for item in system_items
+        for entry in entries
     ]
 
     return {
@@ -1492,6 +1613,7 @@ def build_glossary_management_payload() -> dict[str, object]:
         "effective_glossary": effective_items,
         "libraries": [_department_library_to_payload(library) for library in libraries],
         "selected_library": _department_library_to_payload(selected_library),
+        "include_inactive_entries": include_inactive_entries,
         "entries": entry_payload,
     }
 
@@ -1615,8 +1737,67 @@ def parse_system_glossary_excel(file_bytes: bytes) -> dict[str, object]:
     }
 
 
-def build_system_glossary_import_preview(items: list[dict[str, str]]) -> dict[str, object]:
-    current_items = load_default_department_glossary_items()
+def parse_system_glossary_json(file_bytes: bytes) -> dict[str, object]:
+    try:
+        payload = json.loads(file_bytes.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("無法解析 JSON 檔案，請上傳有效的 JSON 詞彙陣列。") from exc
+    if not isinstance(payload, list):
+        raise ValueError("JSON 詞彙表必須是陣列。")
+
+    entries: list[dict[str, str]] = []
+    duplicates: list[dict[str, str | int]] = []
+    invalid_rows: list[dict[str, str | int]] = []
+    seen: dict[str, str] = {}
+    accepted_sources: set[str] = set()
+    for row_number, item in enumerate(payload, start=1):
+        detail = _department_glossary_import_item_detail(
+            item,
+            row_number=row_number,
+            accepted_sources=accepted_sources,
+        )
+        if detail is not None:
+            if detail.action == IMPORT_ACTION_DUPLICATE:
+                duplicates.append(
+                    {
+                        "row": row_number,
+                        "cn": detail.source_term or "",
+                        "previous_en": seen.get(detail.source_term or "", ""),
+                        "en": detail.target_term or "",
+                    }
+                )
+            else:
+                invalid_rows.append(
+                    {
+                        "row": row_number,
+                        "cn": detail.source_term or "",
+                        "en": detail.target_term or "",
+                        "reason": detail.reason,
+                    }
+                )
+            continue
+        assert isinstance(item, dict)
+        cn = str(item.get("cn") or item.get("source_term") or "").strip()
+        en = str(item.get("en") or item.get("target_term") or "").strip()
+        seen[cn] = en
+
+    for cn, en in seen.items():
+        entries.append({"cn": cn, "en": en})
+    entries.sort(key=lambda item: item["cn"])
+    return {
+        "items": entries,
+        "duplicates": duplicates,
+        "invalid_rows": invalid_rows,
+        "total_rows": len(payload),
+    }
+
+
+def build_system_glossary_import_preview(
+    items: list[dict[str, str]],
+    *,
+    library_id: int | None = None,
+) -> dict[str, object]:
+    current_items = load_department_glossary_items(library_id)
     current_by_cn = {item["cn"]: item["en"] for item in current_items}
     additions = 0
     updates = 0
@@ -1660,8 +1841,14 @@ def build_system_glossary_import_preview(items: list[dict[str, str]]) -> dict[st
     }
 
 
-def apply_system_glossary_import(items: list[dict[str, str]]) -> list[dict[str, str]]:
-    return apply_default_department_glossary_import(items)
+def apply_system_glossary_import(
+    items: list[dict[str, str]],
+    *,
+    library_id: int | None = None,
+) -> list[dict[str, str]]:
+    if library_id is None:
+        return apply_default_department_glossary_import(items)
+    return apply_department_glossary_import(library_id, items)
 
 
 def _escape_xml_text(value: str) -> str:
@@ -1752,8 +1939,8 @@ def _build_xlsx_bytes(rows: list[list[str]], sheet_name: str = "Sheet1") -> byte
     return output.getvalue()
 
 
-def export_system_glossary_excel() -> bytes:
-    items = load_default_department_glossary_items()
+def export_system_glossary_excel(*, library_id: int | None = None) -> bytes:
+    items = load_department_glossary_items(library_id)
     if xlsxwriter is None:
         rows = [["cn", "en"]]
         rows.extend([[item["cn"], item["en"]] for item in items])
