@@ -11,14 +11,17 @@ from app.services import glossary, job_store, state
 
 def _clear_department_glossary() -> None:
     with job_store.session_scope() as session:
+        session.query(job_store.GlossaryAuditEventRecord).delete()
         session.query(job_store.DepartmentGlossaryEntryRecord).delete()
         session.query(job_store.DepartmentGlossaryLibraryRecord).delete()
 
 
-def _run_import_cli(path, *, apply: bool = False, env: dict[str, str]):
+def _run_import_cli(path, *, apply: bool = False, work_id: str | None = None, env: dict[str, str]):
     command = [sys.executable, "scripts/import_department_glossary.py", str(path)]
     if apply:
         command.append("--apply")
+    if work_id:
+        command.extend(["--work-id", work_id])
     return subprocess.run(
         command,
         cwd=Path(__file__).resolve().parents[1],
@@ -189,3 +192,21 @@ def test_department_glossary_import_reports_invalid_and_duplicate_items(app, tmp
         (6, "invalid", "item_must_be_object"),
     }
     assert glossary.list_department_glossary_libraries() == []
+
+
+def test_department_glossary_import_apply_records_cli_work_id_in_audit(app, tmp_path):
+    _clear_department_glossary()
+    source_path = tmp_path / "glossary.json"
+    source_path.write_text(
+        json.dumps([{"cn": "外觀", "en": "Appearance"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = _run_import_cli(source_path, apply=True, work_id="CLI99", env=_cli_env())
+
+    assert result.returncode == 0, result.stderr
+    events = glossary.list_glossary_audit_events(actor_work_id="CLI99")
+    created_targets = {(event["action"], event["target_type"]) for event in events}
+
+    assert ("create", "library") in created_targets
+    assert ("create", "entry") in created_targets

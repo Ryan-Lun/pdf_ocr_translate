@@ -171,6 +171,24 @@ class DocumentTemplateRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class GlossaryAuditEventRecord(Base):
+    __tablename__ = "glossary_audit_events"
+    __table_args__ = (
+        Index("IX_glossary_audit_events_target", "target_type", "target_id", "created_at"),
+        Index("IX_glossary_audit_events_actor", "actor_work_id", "created_at"),
+        Index("IX_glossary_audit_events_action", "action", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    actor_work_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    before_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class DepartmentGlossaryLibraryRecord(Base):
     __tablename__ = "department_glossary_libraries"
     __table_args__ = (
@@ -288,6 +306,7 @@ REQUIRED_TABLES = (
     "translation_memory_entries",
     "department_glossary_libraries",
     "department_glossary_entries",
+    "glossary_audit_events",
 )
 
 
@@ -379,7 +398,8 @@ def _assert_required_tables() -> None:
             'document_templates',
             'translation_memory_entries',
             'department_glossary_libraries',
-            'department_glossary_entries'
+            'department_glossary_entries',
+            'glossary_audit_events'
           );
         """
     )

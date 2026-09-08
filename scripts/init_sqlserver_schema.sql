@@ -204,6 +204,22 @@ BEGIN
 END;
 GO
 
+IF OBJECT_ID(N'translation.glossary_audit_events', N'U') IS NULL
+BEGIN
+    CREATE TABLE translation.glossary_audit_events (
+        id int IDENTITY(1,1) NOT NULL,
+        created_at datetime2(6) NOT NULL,
+        actor_work_id nvarchar(100) NOT NULL,
+        action varchar(50) NOT NULL,
+        target_type varchar(50) NOT NULL,
+        target_id int NOT NULL,
+        before_json nvarchar(max) NULL,
+        after_json nvarchar(max) NULL,
+        CONSTRAINT PK_glossary_audit_events PRIMARY KEY CLUSTERED (id)
+    );
+END;
+GO
+
 IF OBJECT_ID(N'translation.translation_memory_entries', N'U') IS NULL
 BEGIN
     CREATE TABLE translation.translation_memory_entries (
@@ -257,6 +273,18 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_editor_presence_last_seen_at' AND object_id = OBJECT_ID(N'translation.editor_presence'))
     CREATE INDEX IX_translation_editor_presence_last_seen_at ON translation.editor_presence (last_seen_at DESC);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_glossary_audit_events_target' AND object_id = OBJECT_ID(N'translation.glossary_audit_events'))
+    CREATE INDEX IX_glossary_audit_events_target ON translation.glossary_audit_events (target_type, target_id, created_at);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_glossary_audit_events_actor' AND object_id = OBJECT_ID(N'translation.glossary_audit_events'))
+    CREATE INDEX IX_glossary_audit_events_actor ON translation.glossary_audit_events (actor_work_id, created_at);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_glossary_audit_events_action' AND object_id = OBJECT_ID(N'translation.glossary_audit_events'))
+    CREATE INDEX IX_glossary_audit_events_action ON translation.glossary_audit_events (action, created_at);
 GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_translation_audit_logs_created_at' AND object_id = OBJECT_ID(N'translation.audit_logs'))

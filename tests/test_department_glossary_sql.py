@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _clear_department_glossary() -> None:
     with job_store.session_scope() as session:
+        session.query(job_store.GlossaryAuditEventRecord).delete()
         session.query(job_store.DepartmentGlossaryEntryRecord).delete()
         session.query(job_store.DepartmentGlossaryLibraryRecord).delete()
 
@@ -407,25 +408,34 @@ def test_department_glossary_schema_migration_and_sql_init_stay_aligned(monkeypa
 
     assert schema_control.REQUIRED_COLUMNS["department_glossary_libraries"] == tuple(library_table.columns.keys())
     assert schema_control.REQUIRED_COLUMNS["department_glossary_entries"] == tuple(entry_table.columns.keys())
+    audit_table = job_store.GlossaryAuditEventRecord.__table__
+
+    assert schema_control.REQUIRED_COLUMNS["glossary_audit_events"] == tuple(audit_table.columns.keys())
     assert schema_control.SCHEMA_GROUPS["department_glossary"] == (
         "department_glossary_libraries",
         "department_glossary_entries",
+        "glossary_audit_events",
     )
 
     init_sql = (ROOT / "scripts" / "init_sqlserver_schema.sql").read_text(encoding="utf-8")
     assert "CREATE TABLE translation.department_glossary_libraries" in init_sql
     assert "CREATE TABLE translation.department_glossary_entries" in init_sql
+    assert "CREATE TABLE translation.glossary_audit_events" in init_sql
     assert "IX_department_glossary_libraries_code" in init_sql
     assert "IX_department_glossary_entries_lookup" in init_sql
     assert "IX_department_glossary_entries_term" in init_sql
+    assert "IX_glossary_audit_events_target" in init_sql
     assert "UQ_department_glossary_entries_term_status" in init_sql
     assert "FK_department_glossary_entries_libraries" in init_sql
 
     migration = (ROOT / "migrations" / "versions" / "0005_add_department_glossary.py").read_text(encoding="utf-8")
+    audit_migration = (ROOT / "migrations" / "versions" / "0006_add_glossary_audit_events.py").read_text(encoding="utf-8")
     assert "DepartmentGlossaryLibraryRecord.__table__" in migration
     assert "DepartmentGlossaryEntryRecord.__table__" in migration
+    assert "GlossaryAuditEventRecord.__table__" in audit_migration
     assert "table.create" in migration
     assert "index.create" in migration
+    assert "index.create" in audit_migration
 
     db_path = tmp_path / "department_glossary_schema.sqlite"
     monkeypatch.setenv("ALEMBIC_DATABASE_URL", f"sqlite:///{db_path}")

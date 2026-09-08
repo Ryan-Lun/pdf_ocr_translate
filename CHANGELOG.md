@@ -18,6 +18,25 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.7.0 - 2026-09-08
+
+### Added
+
+- 新增 append-only `glossary_audit_events` SQL table/model/migration，用於記錄 Department Glossary library 與 entry lifecycle。
+- 新增 glossary audit event service/query seam，可依 target、actor、action 查詢未來 UI 需要的審計事件。
+- Department Glossary library create/update/disable/activate 與 entry create/update/disable 會寫入 before/after domain JSON snapshot。
+- 詞彙庫管理 API 與匯入套用流程產生的 glossary 變更會記錄登入者 work_id；CLI/service 變更會使用傳入 work-id，否則記為 `system`。
+
+### Changed
+
+- Department Glossary schema control 與 SQL Server init script 納入 `glossary_audit_events`。
+
+### Validation
+
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_glossary_audit_events.py tests/test_department_glossary_import_cli.py tests/test_department_glossary_sql.py tests/test_glossary_management.py -q`，結果為 60 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_api_route_registration.py tests/test_app_version.py -q`，結果為 5 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests -q`，結果為 564 passed / 8 failed；失敗項目為既有 baseline，未指向 glossary audit 變更。
+
 ## 0.6.9 - 2026-09-08
 
 ### Fixed

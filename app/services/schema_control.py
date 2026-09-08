@@ -10,7 +10,7 @@ SCHEMA_GROUPS: dict[str, tuple[str, ...]] = {
     "jobs": ("jobs", "job_artifacts", "job_events", "editor_presence", "document_templates"),
     "logs": ("audit_logs", "system_error_logs"),
     "translation_memory": ("translation_memory_entries",),
-    "department_glossary": ("department_glossary_libraries", "department_glossary_entries"),
+    "department_glossary": ("department_glossary_libraries", "department_glossary_entries", "glossary_audit_events"),
     "auth": ("users", "roles", "user_roles"),
 }
 
@@ -104,6 +104,16 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "updated_by_work_id",
         "created_at",
         "updated_at",
+    ),
+    "glossary_audit_events": (
+        "id",
+        "created_at",
+        "actor_work_id",
+        "action",
+        "target_type",
+        "target_id",
+        "before_json",
+        "after_json",
     ),
     "users": ("id", "work_id", "display_name", "email", "is_active", "created_at", "last_login_at"),
     "roles": ("id", "name"),

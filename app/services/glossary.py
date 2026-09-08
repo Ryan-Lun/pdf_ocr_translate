@@ -14,6 +14,8 @@ from typing import TypeAlias
 import zipfile
 
 from sqlalchemy import func, select, true
+from flask import has_request_context
+from flask_login import current_user
 from xml.etree import ElementTree as ET
 
 from lang_utils import normalize_lang_code
@@ -284,6 +286,144 @@ def _entry_from_record(record: job_store.DepartmentGlossaryEntryRecord) -> Depar
     )
 
 
+def _current_request_work_id() -> str:
+    if not has_request_context() or not getattr(current_user, "is_authenticated", False):
+        return ""
+    return " ".join(str(getattr(current_user, "work_id", "") or "").split()).strip()
+
+
+def _resolve_glossary_audit_actor(explicit_work_id: object = None) -> str:
+    request_work_id = _current_request_work_id()
+    if request_work_id:
+        return request_work_id
+    explicit = " ".join(str(explicit_work_id or "").split()).strip()
+    return explicit or "system"
+
+
+def _library_audit_payload(record: job_store.DepartmentGlossaryLibraryRecord | DepartmentGlossaryLibrary | None) -> dict[str, object] | None:
+    if record is None:
+        return None
+    if isinstance(record, DepartmentGlossaryLibrary):
+        return {
+            "id": record.library_id,
+            "code": record.code,
+            "name": record.name,
+            "department_code": record.department_code,
+            "is_default": record.is_default,
+            "is_active": record.is_active,
+        }
+    return {
+        "id": int(record.id),
+        "code": record.code,
+        "name": record.name,
+        "department_code": record.department_code,
+        "is_default": bool(record.is_default),
+        "is_active": bool(record.is_active),
+    }
+
+
+def _entry_audit_payload(record: job_store.DepartmentGlossaryEntryRecord | DepartmentGlossaryEntry | None) -> dict[str, object] | None:
+    if record is None:
+        return None
+    if isinstance(record, DepartmentGlossaryEntry):
+        return {
+            "id": record.entry_id,
+            "library_id": record.library_id,
+            "source_lang": record.source_lang,
+            "target_lang": record.target_lang,
+            "source_term": record.source_term,
+            "target_term": record.target_term,
+            "status": record.status,
+            "priority": record.priority,
+            "notes": record.notes,
+            "created_by_work_id": record.created_by_work_id,
+            "updated_by_work_id": record.updated_by_work_id,
+        }
+    return {
+        "id": int(record.id),
+        "library_id": int(record.library_id),
+        "source_lang": record.source_lang,
+        "target_lang": record.target_lang,
+        "source_term": record.source_term,
+        "target_term": record.target_term,
+        "status": record.status,
+        "priority": int(record.priority or 0),
+        "notes": record.notes,
+        "created_by_work_id": record.created_by_work_id,
+        "updated_by_work_id": record.updated_by_work_id,
+    }
+
+
+def _json_or_none(payload: dict[str, object] | None) -> str | None:
+    if payload is None:
+        return None
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _record_glossary_audit_event(
+    session,
+    *,
+    action: str,
+    target_type: str,
+    target_id: int,
+    before: dict[str, object] | None,
+    after: dict[str, object] | None,
+    actor_work_id: object = None,
+    created_at=None,
+) -> None:
+    session.add(
+        job_store.GlossaryAuditEventRecord(
+            created_at=created_at or job_store.utcnow(),
+            actor_work_id=_resolve_glossary_audit_actor(actor_work_id),
+            action=str(action),
+            target_type=str(target_type),
+            target_id=int(target_id),
+            before_json=_json_or_none(before),
+            after_json=_json_or_none(after),
+        )
+    )
+
+
+def _glossary_audit_event_to_payload(row: job_store.GlossaryAuditEventRecord) -> dict[str, object]:
+    return {
+        "id": int(row.id),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "actor_work_id": row.actor_work_id,
+        "action": row.action,
+        "target_type": row.target_type,
+        "target_id": int(row.target_id),
+        "before": json.loads(row.before_json) if row.before_json else None,
+        "after": json.loads(row.after_json) if row.after_json else None,
+    }
+
+
+def list_glossary_audit_events(
+    *,
+    target_type: str | None = None,
+    target_id: int | None = None,
+    actor_work_id: str | None = None,
+    action: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    with job_store.session_scope() as session:
+        stmt = select(job_store.GlossaryAuditEventRecord)
+        if target_type:
+            stmt = stmt.where(job_store.GlossaryAuditEventRecord.target_type == str(target_type))
+        if target_id is not None:
+            stmt = stmt.where(job_store.GlossaryAuditEventRecord.target_id == int(target_id))
+        if actor_work_id:
+            stmt = stmt.where(job_store.GlossaryAuditEventRecord.actor_work_id == str(actor_work_id))
+        if action:
+            stmt = stmt.where(job_store.GlossaryAuditEventRecord.action == str(action))
+        rows = session.scalars(
+            stmt.order_by(
+                job_store.GlossaryAuditEventRecord.created_at.desc(),
+                job_store.GlossaryAuditEventRecord.id.desc(),
+            ).limit(max(1, min(int(limit or 100), 500)))
+        ).all()
+        return [_glossary_audit_event_to_payload(row) for row in rows]
+
+
 def _clean_department_glossary_library_name(name: object) -> str:
     cleaned = " ".join(str(name or "").split()).strip()
     if not cleaned:
@@ -369,6 +509,7 @@ def create_department_glossary_library(
     *,
     name: object,
     department_code: object,
+    actor_work_id: str | None = None,
 ) -> DepartmentGlossaryLibrary:
     cleaned_name = _clean_department_glossary_library_name(name)
     cleaned_department_code = _clean_department_glossary_department_code(department_code)
@@ -389,6 +530,17 @@ def create_department_glossary_library(
         )
         session.add(record)
         session.flush()
+        after = _library_audit_payload(record)
+        _record_glossary_audit_event(
+            session,
+            action="create",
+            target_type="library",
+            target_id=int(record.id),
+            before=None,
+            after=after,
+            actor_work_id=actor_work_id,
+            created_at=now,
+        )
         return _library_from_record(record)
 
 
@@ -397,20 +549,37 @@ def update_department_glossary_library(
     *,
     name: object,
     department_code: object,
+    actor_work_id: str | None = None,
 ) -> DepartmentGlossaryLibrary:
     cleaned_name = _clean_department_glossary_library_name(name)
     cleaned_department_code = _clean_department_glossary_department_code(department_code)
     with job_store.session_scope() as session:
         record = _get_department_glossary_library_record(session, int(library_id))
+        before = _library_audit_payload(record)
+        now = job_store.utcnow()
         record.name = cleaned_name
         record.department_code = cleaned_department_code
-        record.updated_at = job_store.utcnow()
+        record.updated_at = now
         session.flush()
+        after = _library_audit_payload(record)
+        if before != after:
+            _record_glossary_audit_event(
+                session,
+                action="update",
+                target_type="library",
+                target_id=int(record.id),
+                before=before,
+                after=after,
+                actor_work_id=actor_work_id,
+                created_at=now,
+            )
         return _library_from_record(record)
 
 
 def disable_department_glossary_library(
     library_id: int,
+    *,
+    actor_work_id: str | None = None,
 ) -> DepartmentGlossaryLibrary:
     blocking_jobs = active_job_references_department_glossary_library(int(library_id))
     if blocking_jobs:
@@ -420,20 +589,50 @@ def disable_department_glossary_library(
         )
     with job_store.session_scope() as session:
         record = _get_department_glossary_library_record(session, int(library_id))
+        before = _library_audit_payload(record)
+        now = job_store.utcnow()
         record.is_active = False
-        record.updated_at = job_store.utcnow()
+        record.updated_at = now
         session.flush()
+        after = _library_audit_payload(record)
+        if before != after:
+            _record_glossary_audit_event(
+                session,
+                action="disable",
+                target_type="library",
+                target_id=int(record.id),
+                before=before,
+                after=after,
+                actor_work_id=actor_work_id,
+                created_at=now,
+            )
         return _library_from_record(record)
 
 
 def activate_department_glossary_library(
     library_id: int,
+    *,
+    actor_work_id: str | None = None,
 ) -> DepartmentGlossaryLibrary:
     with job_store.session_scope() as session:
         record = _get_department_glossary_library_record(session, int(library_id))
+        before = _library_audit_payload(record)
+        now = job_store.utcnow()
         record.is_active = True
-        record.updated_at = job_store.utcnow()
+        record.updated_at = now
         session.flush()
+        after = _library_audit_payload(record)
+        if before != after:
+            _record_glossary_audit_event(
+                session,
+                action="activate",
+                target_type="library",
+                target_id=int(record.id),
+                before=before,
+                after=after,
+                actor_work_id=actor_work_id,
+                created_at=now,
+            )
         return _library_from_record(record)
 
 
@@ -444,6 +643,7 @@ def get_or_create_department_glossary_library(
     department_code: str,
     is_default: bool = False,
     is_active: bool = True,
+    actor_work_id: str | None = None,
 ) -> DepartmentGlossaryLibrary:
     cleaned_code = str(code or "").strip()
     cleaned_name = str(name or "").strip()
@@ -469,26 +669,66 @@ def get_or_create_department_glossary_library(
             )
             session.add(record)
             session.flush()
+            _record_glossary_audit_event(
+                session,
+                action="create",
+                target_type="library",
+                target_id=int(record.id),
+                before=None,
+                after=_library_audit_payload(record),
+                actor_work_id=actor_work_id,
+                created_at=now,
+            )
         else:
+            before = _library_audit_payload(record)
             record.name = cleaned_name
             record.department_code = cleaned_department_code
             record.is_default = bool(is_default)
             record.is_active = bool(is_active)
             record.updated_at = now
             session.flush()
+            after = _library_audit_payload(record)
+            if before != after:
+                _record_glossary_audit_event(
+                    session,
+                    action="update",
+                    target_type="library",
+                    target_id=int(record.id),
+                    before=before,
+                    after=after,
+                    actor_work_id=actor_work_id,
+                    created_at=now,
+                )
         return _library_from_record(record)
 
 
-def get_or_create_default_department_glossary() -> DepartmentGlossaryLibrary:
+def get_or_create_default_department_glossary(
+    *,
+    actor_work_id: str | None = None,
+) -> DepartmentGlossaryLibrary:
     existing = _find_department_glossary_library_by_code(DEFAULT_DEPARTMENT_GLOSSARY_CODE)
     if existing is not None:
         if existing.is_default:
             return existing
         with job_store.session_scope() as session:
             record = _get_department_glossary_library_record(session, existing.library_id)
+            before = _library_audit_payload(record)
+            now = job_store.utcnow()
             record.is_default = True
-            record.updated_at = job_store.utcnow()
+            record.updated_at = now
             session.flush()
+            after = _library_audit_payload(record)
+            if before != after:
+                _record_glossary_audit_event(
+                    session,
+                    action="update",
+                    target_type="library",
+                    target_id=int(record.id),
+                    before=before,
+                    after=after,
+                    actor_work_id=actor_work_id,
+                    created_at=now,
+                )
             return _library_from_record(record)
 
     return get_or_create_department_glossary_library(
@@ -497,6 +737,7 @@ def get_or_create_default_department_glossary() -> DepartmentGlossaryLibrary:
         department_code=DEFAULT_DEPARTMENT_GLOSSARY_NAME,
         is_default=True,
         is_active=True,
+        actor_work_id=actor_work_id,
     )
 
 
@@ -637,7 +878,18 @@ def upsert_department_glossary_entry(
             )
             session.add(record)
             session.flush()
+            _record_glossary_audit_event(
+                session,
+                action="create",
+                target_type="entry",
+                target_id=int(record.id),
+                before=None,
+                after=_entry_audit_payload(record),
+                actor_work_id=created_by_work_id or updated_by_work_id,
+                created_at=now,
+            )
             return int(record.id)
+        before = _entry_audit_payload(record)
         record.target_term = cleaned_target_term
         record.priority = int(priority or 0)
         record.notes = str(notes).strip() if notes is not None and str(notes).strip() else None
@@ -646,6 +898,18 @@ def upsert_department_glossary_entry(
         )
         record.updated_at = now
         session.flush()
+        after = _entry_audit_payload(record)
+        if before != after:
+            _record_glossary_audit_event(
+                session,
+                action="update",
+                target_type="entry",
+                target_id=int(record.id),
+                before=before,
+                after=after,
+                actor_work_id=updated_by_work_id or created_by_work_id,
+                created_at=now,
+            )
         return int(record.id)
 
 
@@ -676,11 +940,25 @@ def update_department_glossary_entry(
         )
         if duplicate is not None:
             raise ValueError("Department Glossary source term already exists in this library.")
+        before = _entry_audit_payload(record)
+        now = job_store.utcnow()
         record.source_term = cleaned_source_term
         record.target_term = cleaned_target_term
         record.updated_by_work_id = str(updated_by_work_id or "").strip() or record.updated_by_work_id
-        record.updated_at = job_store.utcnow()
+        record.updated_at = now
         session.flush()
+        after = _entry_audit_payload(record)
+        if before != after:
+            _record_glossary_audit_event(
+                session,
+                action="update",
+                target_type="entry",
+                target_id=int(record.id),
+                before=before,
+                after=after,
+                actor_work_id=updated_by_work_id,
+                created_at=now,
+            )
         return _entry_from_record(record)
 
 
@@ -693,9 +971,24 @@ def disable_department_glossary_entry(
         record = session.get(job_store.DepartmentGlossaryEntryRecord, int(entry_id))
         if record is None:
             return False
+        before = _entry_audit_payload(record)
+        now = job_store.utcnow()
         record.status = STATUS_DISABLED
         record.updated_by_work_id = str(updated_by_work_id or "").strip() or record.updated_by_work_id
-        record.updated_at = job_store.utcnow()
+        record.updated_at = now
+        session.flush()
+        after = _entry_audit_payload(record)
+        if before != after:
+            _record_glossary_audit_event(
+                session,
+                action="disable",
+                target_type="entry",
+                target_id=int(record.id),
+                before=before,
+                after=after,
+                actor_work_id=updated_by_work_id,
+                created_at=now,
+            )
         return True
 
 
@@ -952,7 +1245,7 @@ def sync_default_department_glossary_items(
     replace: bool = True,
     updated_by_work_id: str | None = None,
 ) -> list[dict[str, str]]:
-    library = get_or_create_default_department_glossary()
+    library = get_or_create_default_department_glossary(actor_work_id=updated_by_work_id)
     return sync_department_glossary_items(
         library.library_id,
         items,
@@ -1002,7 +1295,9 @@ def import_department_glossary_json(
     normalized_source_lang = _normalize_glossary_lang(source_lang)
     normalized_target_lang = _normalize_glossary_lang(target_lang)
     library = (
-        get_or_create_default_department_glossary()
+        get_or_create_default_department_glossary(
+            actor_work_id=updated_by_work_id or created_by_work_id,
+        )
         if apply
         else _find_department_glossary_library_by_code(DEFAULT_DEPARTMENT_GLOSSARY_CODE)
     )

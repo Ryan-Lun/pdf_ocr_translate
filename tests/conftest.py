@@ -47,6 +47,7 @@ def clean_document_templates(request, monkeypatch, tmp_path):
         session.execute(delete(job_store.EditorPresenceRecord))
         session.execute(delete(job_store.DocumentTemplateRecord))
         session.execute(delete(job_store.TranslationMemoryEntryRecord))
+        session.execute(delete(job_store.GlossaryAuditEventRecord))
         session.execute(delete(job_store.DepartmentGlossaryEntryRecord))
         session.execute(delete(job_store.DepartmentGlossaryLibraryRecord))
     yield
@@ -54,5 +55,6 @@ def clean_document_templates(request, monkeypatch, tmp_path):
         session.execute(delete(job_store.EditorPresenceRecord))
         session.execute(delete(job_store.DocumentTemplateRecord))
         session.execute(delete(job_store.TranslationMemoryEntryRecord))
+        session.execute(delete(job_store.GlossaryAuditEventRecord))
         session.execute(delete(job_store.DepartmentGlossaryEntryRecord))
         session.execute(delete(job_store.DepartmentGlossaryLibraryRecord))
