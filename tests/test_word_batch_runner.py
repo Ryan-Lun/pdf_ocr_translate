@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services import glossary, word_batch_runner, word_layout
+from app.services import glossary, state, word_batch_runner, word_layout
 
 
 def _touch(path: Path) -> None:
@@ -41,6 +41,23 @@ def _fake_smoke_tester(
         stage_1_checked=True,
         stage_2_checked=stage_2_enabled,
     )
+
+
+def _load_word_batch_cli_module():
+    script_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "word_local_batch_translate.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "word_local_batch_translate",
+        script_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_discover_doc_files_recursively_ignores_docx(tmp_path):
@@ -210,6 +227,7 @@ def test_report_content_includes_execution_context(tmp_path):
         glossary_library_id="7",
         translate_tables=False,
         stage_2_enabled=True,
+        executor=word_batch_runner.PlanningWordBatchExecutor(),
         glossary_resolver=_fake_glossary_resolver,
         smoke_tester=_fake_smoke_tester,
     )
@@ -252,19 +270,7 @@ def test_cli_entry_point_writes_reports(app, tmp_path):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     _touch(input_dir / "procedure.doc")
-    script_path = (
-        Path(__file__).resolve().parents[1]
-        / "scripts"
-        / "word_local_batch_translate.py"
-    )
-    spec = importlib.util.spec_from_file_location(
-        "word_local_batch_translate",
-        script_path,
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = _load_word_batch_cli_module()
 
     exit_code = module.main(
         [
@@ -283,6 +289,7 @@ def test_cli_entry_point_writes_reports(app, tmp_path):
         ],
         init_database=False,
         smoke_tester=_fake_smoke_tester,
+        executor=word_batch_runner.PlanningWordBatchExecutor(),
     )
 
     assert exit_code == 0
@@ -443,6 +450,32 @@ def test_word_batch_valid_department_glossary_allows_execution_and_reports_metad
     assert report["rows"][0]["glossary_is_active"] is True
     assert report["rows"][0]["glossary_entry_count"] == 1
 
+
+
+def test_local_model_smoke_uses_larger_token_budget_for_reasoning_models():
+    requests: list[dict[str, object]] = []
+
+    class _Completions:
+        def create(self, **kwargs):
+            requests.append(kwargs)
+            message = type("Message", (), {"content": "OK"})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+    word_batch_runner._smoke_chat_completion(
+        _Client(),
+        model="local-model",
+        messages=[{"role": "user", "content": "Return exactly: OK"}],
+    )
+
+    assert requests[0]["max_tokens"] == 512
+    assert requests[0]["extra_body"] == word_batch_runner.LOCAL_MODEL_DISABLE_THINKING_EXTRA_BODY
 
 def test_word_batch_smoke_test_runs_before_execution(app, tmp_path):
     library = glossary.get_or_create_department_glossary_library(
@@ -619,6 +652,7 @@ def test_word_batch_stage_2_can_be_disabled_for_smoke_test(app, tmp_path):
         local_model_api_key="local-key",
         glossary_library_id=library.library_id,
         stage_2_enabled=False,
+        executor=word_batch_runner.PlanningWordBatchExecutor(),
         smoke_tester=smoke_tester,
     )
 
@@ -646,6 +680,7 @@ def test_word_batch_local_model_config_does_not_mutate_environment(app, tmp_path
         local_model_base_url="http://localhost:8000/v1",
         local_model_api_key="local-key",
         glossary_library_id=library.library_id,
+        executor=word_batch_runner.PlanningWordBatchExecutor(),
         smoke_tester=_fake_smoke_tester,
     )
 
@@ -682,3 +717,151 @@ def test_word_batch_missing_input_dir_stops_before_smoke(app, tmp_path):
         )
 
     assert calls == []
+
+def test_synchronous_word_pipeline_executor_passes_expected_job_configuration(
+    app, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(state, "WORD_TRANSLATE_JOB_ROOT", tmp_path / "word_jobs")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://production.example/openai/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "production-key")
+    library = glossary.get_or_create_department_glossary_library(
+        code="sync-pipeline",
+        name="品保部",
+        department_code="QA",
+    )
+    glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+    )
+    input_dir = tmp_path / "input"
+    _touch(input_dir / "nested" / "procedure.doc")
+    captured: dict[str, object] = {}
+
+    def fake_run_word_translate_job(**kwargs):
+        captured.update(kwargs)
+        job_dir = kwargs["job_dir"]
+        meta = word_batch_runner.jobs.load_job_meta(job_dir) or {}
+        captured["department_glossary_library_id"] = meta.get(
+            "department_glossary_library_id"
+        )
+        processing_source_path = kwargs["processing_source_path"]
+        processing_source_path.write_bytes(b"converted docx")
+        job_dir = kwargs["job_dir"]
+        output_path = kwargs["output_path"]
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"translated docx")
+        word_batch_runner.jobs.set_job_state(
+            job_dir,
+            status="completed",
+            stage="completed",
+            progress=100.0,
+        )
+        word_batch_runner.jobs.set_job_state(
+            job_dir,
+            status="completed",
+            stage="completed",
+            progress=100.0,
+        )
+
+    monkeypatch.setattr(
+        word_batch_runner.word_translate,
+        "run_word_translate_job",
+        fake_run_word_translate_job,
+    )
+
+    summary = word_batch_runner.run_word_batch(
+        input_dir=input_dir,
+        output_dir=tmp_path / "output",
+        model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
+        glossary_library_id=library.library_id,
+        translate_tables=False,
+        stage_2_enabled=True,
+        smoke_tester=_fake_smoke_tester,
+    )
+
+    row = summary.rows[0]
+    assert row.status == "completed"
+    assert row.job_id
+    assert row.output_path == str(
+        (tmp_path / "output" / "nested" / "procedure_bilingual_en.docx").resolve()
+    )
+    assert Path(row.output_path).read_bytes() == b"translated docx"
+    assert captured["source_lang"] == "auto"
+    assert captured["target_lang"] == "en"
+    assert captured["layout_mode"] == word_layout.BILINGUAL_BELOW
+    assert captured["translate_tables"] is False
+    assert captured["stage_2_enabled"] is True
+    assert captured["translation_model"] == "local-model"
+    assert captured["local_model_base_url"] == "http://localhost:8000/v1"
+    assert captured["local_model_api_key"] == "local-key"
+    assert captured["request_extra_body"] == word_batch_runner.LOCAL_MODEL_DISABLE_THINKING_EXTRA_BODY
+    assert captured["department_glossary_library_id"] == library.library_id
+    assert captured["source_path"].suffix == ".doc"
+    assert captured["processing_source_path"].name == "procedure.converted.docx"
+    assert captured["processing_source_path"].exists()
+    assert captured["output_path"].name == "output.docx"
+    assert os.environ["OPENAI_BASE_URL"] == "https://production.example/openai/v1"
+    assert os.environ["OPENAI_API_KEY"] == "production-key"
+
+
+def test_cli_entry_point_uses_synchronous_executor_by_default(app, tmp_path, monkeypatch):
+    library = glossary.get_or_create_department_glossary_library(
+        code="cli-sync-pipeline",
+        name="品保部",
+        department_code="QA",
+    )
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _touch(input_dir / "procedure.doc")
+    captured: dict[str, object] = {}
+
+    def fake_run_word_translate_job(**kwargs):
+        captured.update(kwargs)
+        job_dir = kwargs["job_dir"]
+        output_path = kwargs["output_path"]
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"translated docx")
+        word_batch_runner.jobs.set_job_state(
+            job_dir,
+            status="completed",
+            stage="completed",
+            progress=100.0,
+        )
+
+    monkeypatch.setattr(
+        word_batch_runner.word_translate,
+        "run_word_translate_job",
+        fake_run_word_translate_job,
+    )
+    module = _load_word_batch_cli_module()
+
+    exit_code = module.main(
+        [
+            str(input_dir),
+            str(output_dir),
+            "--base-url",
+            "http://localhost:8000/v1",
+            "--api-key",
+            "local-key",
+            "--model",
+            "local-model",
+            "--glossary-library-id",
+            str(library.library_id),
+            "--disable-stage-2",
+        ],
+        init_database=False,
+        smoke_tester=_fake_smoke_tester,
+    )
+
+    assert exit_code == 0
+    assert captured["source_lang"] == "auto"
+    assert captured["target_lang"] == "en"
+    assert captured["layout_mode"] == word_layout.BILINGUAL_BELOW
+    assert captured["translate_tables"] is True
+    assert captured["stage_2_enabled"] is False
+    assert (output_dir / "procedure_bilingual_en.docx").exists()

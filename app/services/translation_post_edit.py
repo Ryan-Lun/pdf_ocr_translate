@@ -132,6 +132,10 @@ def collect_exact_protected_texts(*texts: str) -> tuple[str, ...]:
     return tuple(protected)
 
 
+def _extra_body_kwargs(extra_body: dict[str, object] | None) -> dict[str, object]:
+    return {"extra_body": extra_body} if extra_body else {}
+
+
 def post_edit_texts_batch_sync(
     items: Iterable[PostEditItem],
     *,
@@ -139,6 +143,7 @@ def post_edit_texts_batch_sync(
     model: str | None = None,
     client_factory: ClientFactory | None = None,
     enabled: bool | None = None,
+    request_extra_body: dict[str, object] | None = None,
 ) -> PostEditBatchResult:
     return asyncio.run(
         post_edit_texts_batch(
@@ -147,6 +152,7 @@ def post_edit_texts_batch_sync(
             model=model,
             client_factory=client_factory,
             enabled=enabled,
+            request_extra_body=request_extra_body,
         )
     )
 
@@ -184,6 +190,7 @@ async def post_edit_texts_batch(
     model: str | None = None,
     client_factory: ClientFactory | None = None,
     enabled: bool | None = None,
+    request_extra_body: dict[str, object] | None = None,
 ) -> PostEditBatchResult:
     item_tuple = tuple(items)
     if not item_tuple:
@@ -205,6 +212,7 @@ async def post_edit_texts_batch(
             ],
             temperature=getattr(state, "TRANSLATION_POST_EDIT_TEMPERATURE", 0.0),
             max_tokens=getattr(state, "TRANSLATION_POST_EDIT_MAX_TOKENS", 6000),
+            **_extra_body_kwargs(request_extra_body),
         )
         raw_response = str(response.choices[0].message.content or "").strip()
         revised_by_id = _parse_json_object(raw_response)

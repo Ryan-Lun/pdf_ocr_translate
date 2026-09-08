@@ -14,6 +14,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from openai import AsyncOpenAI
+
 import docx
 from docx.document import Document
 from docx.oxml import OxmlElement
@@ -53,6 +55,36 @@ def normalize_translate_tables(value: object) -> bool:
     if normalized in {"true", "1", "yes", "on"}:
         return True
     return True
+
+
+def _normalize_openai_compatible_base_url(base_url: object) -> str:
+    return str(base_url or "").strip().rstrip("/")
+
+
+def _local_model_async_client_factory(
+    *,
+    base_url: object,
+    api_key: object,
+) -> Callable[[], AsyncOpenAI] | None:
+    cleaned_base_url = _normalize_openai_compatible_base_url(base_url)
+    cleaned_api_key = str(api_key or "").strip()
+    if not cleaned_base_url and not cleaned_api_key:
+        return None
+    if not cleaned_base_url or not cleaned_api_key:
+        raise RuntimeError("local model base_url and api_key must be provided together.")
+
+    def _factory() -> AsyncOpenAI:
+        return AsyncOpenAI(
+            api_key=cleaned_api_key,
+            base_url=cleaned_base_url,
+            timeout=openai_config.get_openai_timeout_seconds(),
+        )
+
+    return _factory
+
+
+def _request_extra_body_kwargs(extra_body: dict[str, object] | None) -> dict[str, object]:
+    return {"extra_body": extra_body} if extra_body else {}
 
 
 def _word_translation_memory_enabled() -> bool:
@@ -607,9 +639,22 @@ def ensure_docx_source(source_path: Path, converted_path: Path | None = None) ->
 
 
 class EnhancedWordTranslator:
-    def __init__(self) -> None:
-        self.translation_model = state.WORD_TRANSLATE_MODEL
-        self.client = openai_config.create_async_client()
+    def __init__(
+        self,
+        *,
+        translation_model: str | None = None,
+        client: Any | None = None,
+        post_edit_enabled: bool | None = None,
+        post_edit_model: str | None = None,
+        post_edit_client_factory: Callable[[], Any] | None = None,
+        request_extra_body: dict[str, object] | None = None,
+    ) -> None:
+        self.translation_model = (translation_model or state.WORD_TRANSLATE_MODEL).strip()
+        self.client = client if client is not None else openai_config.create_async_client()
+        self.post_edit_enabled = post_edit_enabled
+        self.post_edit_model = post_edit_model
+        self.post_edit_client_factory = post_edit_client_factory
+        self.request_extra_body = request_extra_body
         self.max_retries = 3
         self.concurrency_limit = 10
         self.rpm_limit = 950
@@ -1124,6 +1169,7 @@ class EnhancedWordTranslator:
                     frequency_penalty=0,
                     presence_penalty=0,
                     max_tokens=4000,
+                    **_request_extra_body_kwargs(self.request_extra_body),
                 )
                 raw_content = str(response.choices[0].message.content or "").strip()
                 if debug_job_dir is not None and debug_custom_id:
@@ -1207,7 +1253,11 @@ class EnhancedWordTranslator:
         warning_callback: Callable[[str], None] | None = None,
         debug_job_dir: Path | None = None,
     ) -> dict[str, str]:
-        if not translations or not translation_post_edit.is_enabled():
+        if not translations:
+            return translations
+        if self.post_edit_enabled is None and not translation_post_edit.is_enabled():
+            return translations
+        if self.post_edit_enabled is False:
             return translations
         if cancel_event is not None and cancel_event.is_set():
             raise WordTranslationCancelled("Word translation cancelled.")
@@ -1240,6 +1290,10 @@ class EnhancedWordTranslator:
             post_edit_result = await translation_post_edit.post_edit_texts_batch(
                 post_edit_items,
                 target_lang=target_lang,
+                model=self.post_edit_model,
+                client_factory=self.post_edit_client_factory,
+                enabled=self.post_edit_enabled,
+                request_extra_body=self.request_extra_body,
             )
         except Exception as exc:
             logger.warning("Word Stage 2 post-edit failed, using Stage 1 drafts error=%s", exc)
@@ -1407,6 +1461,7 @@ class EnhancedWordTranslator:
                 frequency_penalty=0,
                 presence_penalty=0,
                 max_tokens=6000,
+                **_request_extra_body_kwargs(self.request_extra_body),
             )
             raw_content = str(response.choices[0].message.content or "").strip()
             if debug_job_dir is not None and debug_custom_id:
@@ -1742,6 +1797,11 @@ def run_word_translate_job(
     system_prompt: str = "",
     layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
     translate_tables: object = True,
+    translation_model: str | None = None,
+    local_model_base_url: str = "",
+    local_model_api_key: str = "",
+    stage_2_enabled: bool | None = None,
+    request_extra_body: dict[str, object] | None = None,
 ) -> None:
     _run_word_job(
         job_id=job_id,
@@ -1755,6 +1815,11 @@ def run_word_translate_job(
         system_prompt=system_prompt,
         layout_mode=layout_mode,
         translate_tables=translate_tables,
+        translation_model=translation_model,
+        local_model_base_url=local_model_base_url,
+        local_model_api_key=local_model_api_key,
+        stage_2_enabled=stage_2_enabled,
+        request_extra_body=request_extra_body,
     )
 
 
@@ -1770,6 +1835,11 @@ def _run_word_job(
     system_prompt: str = "",
     layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
     translate_tables: object = True,
+    translation_model: str | None = None,
+    local_model_base_url: str = "",
+    local_model_api_key: str = "",
+    stage_2_enabled: bool | None = None,
+    request_extra_body: dict[str, object] | None = None,
 ) -> None:
     layout_mode = normalize_word_layout_mode(layout_mode)
     translate_tables = normalize_translate_tables(translate_tables)
@@ -1797,7 +1867,22 @@ def _run_word_job(
             source_lang=source_lang,
             target_lang=target_lang,
         )
-        translator = EnhancedWordTranslator()
+        local_client_factory = _local_model_async_client_factory(
+            base_url=local_model_base_url,
+            api_key=local_model_api_key,
+        )
+        translator_kwargs: dict[str, object] = {}
+        if translation_model is not None:
+            translator_kwargs["translation_model"] = translation_model
+            translator_kwargs["post_edit_model"] = translation_model
+        if local_client_factory is not None:
+            translator_kwargs["client"] = local_client_factory()
+            translator_kwargs["post_edit_client_factory"] = local_client_factory
+        if stage_2_enabled is not None:
+            translator_kwargs["post_edit_enabled"] = stage_2_enabled
+        if request_extra_body is not None:
+            translator_kwargs["request_extra_body"] = request_extra_body
+        translator = EnhancedWordTranslator(**translator_kwargs)
         jobs.set_job_state(job_dir, status="running", stage="translate")
 
         def record_warning(message: str) -> None:

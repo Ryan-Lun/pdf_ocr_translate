@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,11 +11,15 @@ from uuid import uuid4
 
 from openai import OpenAI
 
-from . import glossary, word_layout
+from . import glossary, jobs, word_layout, word_translate
 
 
 DEFAULT_WORD_BATCH_REPORT_JSON = "word_batch_report.json"
 DEFAULT_WORD_BATCH_REPORT_CSV = "word_batch_report.csv"
+WORD_BATCH_SOURCE_LANG = "auto"
+WORD_BATCH_TARGET_LANG = "en"
+WORD_BATCH_LAYOUT_MODE = word_layout.BILINGUAL_BELOW
+LOCAL_MODEL_DISABLE_THINKING_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 def _utc_now_iso() -> str:
@@ -184,6 +189,68 @@ class PlanningWordBatchExecutor:
         )
 
 
+class SynchronousWordPipelineExecutor:
+    def __call__(self, item: WordBatchItem) -> WordBatchExecutionResult:
+        started_at = _utc_now_iso()
+        job_id = word_translate.enqueue_word_job_from_upload(
+            item.input_path,
+            item.input_path.stem,
+            "auto",
+            "en",
+            retain_terms_raw="",
+            system_prompt="",
+            layout_mode=word_layout.BILINGUAL_BELOW,
+            translate_tables=item.translate_tables,
+            department_glossary_context=_department_glossary_context_from_item(item),
+        )
+        job_dir = jobs.job_dir(job_id, job_root=jobs.job_root_for_type("word_translate"))
+        source_name = str((jobs.load_job_meta(job_dir) or {}).get("source_filename") or item.input_path.name)
+        source_path = job_dir / source_name
+        processing_source_path = (
+            source_path
+            if source_path.suffix.lower() == ".docx"
+            else job_dir / f"{source_path.stem}.converted.docx"
+        )
+        pipeline_output_path = job_dir / "output" / "output.docx"
+        word_translate.run_word_translate_job(
+            job_id=job_id,
+            job_dir=job_dir,
+            source_path=source_path,
+            processing_source_path=processing_source_path,
+            output_path=pipeline_output_path,
+            source_lang="auto",
+            target_lang="en",
+            retain_terms=[],
+            system_prompt="",
+            layout_mode=word_layout.BILINGUAL_BELOW,
+            translate_tables=item.translate_tables,
+            translation_model=item.model,
+            local_model_base_url=item.local_model_base_url,
+            local_model_api_key=item.local_model_api_key,
+            stage_2_enabled=item.stage_2_enabled,
+            request_extra_body=LOCAL_MODEL_DISABLE_THINKING_EXTRA_BODY,
+        )
+        record = jobs.job_store.get_job(job_id)
+        status = str(getattr(record, "status", "") or "failed")
+        if status != "completed" or not pipeline_output_path.exists():
+            error = str(getattr(record, "error_message", "") or "Word pipeline did not produce output.docx")
+            return WordBatchExecutionResult(
+                status=status if status in {"failed", "cancelled"} else "failed",
+                job_id=job_id,
+                error=error,
+                started_at=started_at,
+                finished_at=_utc_now_iso(),
+            )
+        item.output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(pipeline_output_path, item.output_path)
+        return WordBatchExecutionResult(
+            status="completed",
+            job_id=job_id,
+            started_at=started_at,
+            finished_at=_utc_now_iso(),
+        )
+
+
 @dataclass(frozen=True)
 class WordBatchReportRow:
     input_path: str
@@ -223,23 +290,27 @@ def run_word_batch(
     input_dir: Path,
     output_dir: Path,
     report_dir: Path | None = None,
-    source_lang: str = "zh",
-    target_lang: str = "en",
+    source_lang: str = WORD_BATCH_SOURCE_LANG,
+    target_lang: str = WORD_BATCH_TARGET_LANG,
     model: str = "",
     local_model_base_url: str = "",
     local_model_api_key: str = "",
     glossary_library_id: str | int | None = "",
-    layout_mode: str = word_layout.BILINGUAL_BELOW,
+    layout_mode: str = WORD_BATCH_LAYOUT_MODE,
     translate_tables: bool = True,
     stage_2_enabled: bool = True,
     executor: WordBatchExecutor | None = None,
     glossary_resolver: GlossaryResolver | None = None,
     smoke_tester: WordBatchSmokeTester | None = None,
 ) -> WordBatchRunSummary:
+    del source_lang, target_lang, layout_mode
+    execution_source_lang = WORD_BATCH_SOURCE_LANG
+    execution_target_lang = WORD_BATCH_TARGET_LANG
+    execution_layout_mode = WORD_BATCH_LAYOUT_MODE
     glossary_metadata = resolve_word_batch_glossary(
         glossary_library_id,
-        source_lang=source_lang,
-        target_lang=target_lang,
+        source_lang=execution_source_lang,
+        target_lang=execution_target_lang,
         resolver=glossary_resolver,
     )
     input_dir = input_dir.resolve()
@@ -257,7 +328,7 @@ def run_word_batch(
         stage_2_enabled=stage_2_enabled,
         smoke_tester=smoke_tester,
     )
-    executor = executor or PlanningWordBatchExecutor()
+    executor = executor or SynchronousWordPipelineExecutor()
     rows: list[WordBatchReportRow] = []
 
     for source_path in discover_doc_files(input_dir):
@@ -265,13 +336,13 @@ def run_word_batch(
             source_path,
             input_dir=input_dir,
             output_dir=output_dir,
-            target_lang=target_lang,
+            target_lang=execution_target_lang,
         )
         item = WordBatchItem(
             input_path=source_path,
             output_path=output_path,
-            source_lang=source_lang,
-            target_lang=target_lang,
+            source_lang=execution_source_lang,
+            target_lang=execution_target_lang,
             model=local_model_config.model,
             local_model_base_url=local_model_config.base_url,
             local_model_api_key=local_model_config.api_key,
@@ -281,7 +352,7 @@ def run_word_batch(
             glossary_department_code=glossary_metadata.department_code,
             glossary_is_active=glossary_metadata.is_active,
             glossary_entry_count=glossary_metadata.entry_count,
-            layout_mode=word_layout.normalize(layout_mode),
+            layout_mode=execution_layout_mode,
             translate_tables=bool(translate_tables),
             stage_2_enabled=bool(stage_2_enabled),
         )
@@ -338,7 +409,8 @@ def _smoke_chat_completion(client: OpenAI, *, model: str, messages: list[dict[st
         model=model,
         messages=messages,
         temperature=0,
-        max_tokens=32,
+        max_tokens=512,
+        extra_body=LOCAL_MODEL_DISABLE_THINKING_EXTRA_BODY,
     )
     content = str(response.choices[0].message.content or "").strip()
     if not content:
@@ -388,7 +460,7 @@ def resolve_word_batch_glossary(
     resolver = resolver or glossary.resolve_selected_department_glossary
     selected = resolver(
         library_id,
-        source_lang=source_lang,
+        source_lang=glossary.department_glossary_lookup_source_lang(source_lang),
         target_lang=target_lang,
         require_active=True,
         allow_default_fallback=False,
@@ -401,6 +473,17 @@ def resolve_word_batch_glossary(
         is_active=selected.is_active,
         entry_count=selected.entry_count,
     )
+
+
+def _department_glossary_context_from_item(item: WordBatchItem) -> dict[str, object]:
+    return {
+        "source": "sql",
+        "library_id": int(item.glossary_library_id),
+        "library_code": item.glossary_code,
+        "library_name": item.glossary_name,
+        "department_code": item.glossary_department_code,
+        "entry_count": item.glossary_entry_count,
+    }
 
 
 def _report_row(item: WordBatchItem, result: WordBatchExecutionResult) -> WordBatchReportRow:

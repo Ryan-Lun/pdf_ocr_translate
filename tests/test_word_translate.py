@@ -127,6 +127,96 @@ async def _consume_translation(
         pass
 
 
+def test_word_translator_uses_injected_local_model_client(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _FailingClient(),
+    )
+    client, requests = _client_returning_translations_with_requests(["Test."])
+    extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+    translator = EnhancedWordTranslator(
+        translation_model="local-model",
+        client=client,
+        post_edit_enabled=False,
+        request_extra_body=extra_body,
+    )
+
+    translated = asyncio.run(
+        translator.translate_text(
+            "測試",
+            "auto",
+            "en",
+            [],
+        )
+    )
+
+    assert translated == "Test."
+    assert requests[0]["model"] == "local-model"
+    assert requests[0]["extra_body"] == extra_body
+
+
+def test_word_translator_passes_stage_2_local_model_configuration(monkeypatch):
+    local_post_edit_client = object()
+    captured: dict[str, object] = {}
+    extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+
+    async def fake_post_edit_texts_batch(
+        items,
+        *,
+        target_lang,
+        model=None,
+        client_factory=None,
+        enabled=None,
+        request_extra_body=None,
+    ):
+        captured["items"] = tuple(items)
+        captured["target_lang"] = target_lang
+        captured["model"] = model
+        captured["client"] = client_factory() if client_factory is not None else None
+        captured["enabled"] = enabled
+        captured["request_extra_body"] = request_extra_body
+        return translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(
+                translation_post_edit.PostEditResultItem(
+                    "item_0001",
+                    "Revised translation.",
+                    stage_2_text="Revised translation.",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        translation_post_edit,
+        "post_edit_texts_batch",
+        fake_post_edit_texts_batch,
+    )
+    translator = EnhancedWordTranslator(
+        client=_FailingClient(),
+        post_edit_enabled=True,
+        post_edit_model="local-model",
+        post_edit_client_factory=lambda: local_post_edit_client,
+        request_extra_body=extra_body,
+    )
+
+    revised = asyncio.run(
+        translator.post_edit_word_translations(
+            {"測試": "Draft translation."},
+            item_ids={"測試": "item_0001"},
+            glossary_applications={},
+            target_lang="en",
+            user_terms=[],
+        )
+    )
+
+    assert revised == {"測試": "Revised translation."}
+    assert captured["target_lang"] == "en"
+    assert captured["model"] == "local-model"
+    assert captured["client"] is local_post_edit_client
+    assert captured["enabled"] is True
+    assert captured["request_extra_body"] == extra_body
+
+
 def test_word_translation_bilingual_below_keeps_source_and_inserts_translation(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
     monkeypatch.setattr(

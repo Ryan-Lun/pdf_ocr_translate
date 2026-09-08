@@ -40,20 +40,18 @@ def main(
     *,
     init_database: bool = True,
     smoke_tester: word_batch_runner.WordBatchSmokeTester | None = None,
+    executor: word_batch_runner.WordBatchExecutor | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(
-        description="Plan a one-time local-model Word batch translation run."
+        description="Execute a one-time local-model Word batch translation run."
     )
     parser.add_argument("input_dir", type=Path)
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("--report-dir", type=Path, default=None)
-    parser.add_argument("--source-lang", default="zh")
-    parser.add_argument("--target-lang", default="en")
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--api-key", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--glossary-library-id", required=True)
-    parser.add_argument("--layout-mode", default=word_layout.BILINGUAL_BELOW)
     parser.add_argument("--translate-tables", type=_parse_bool, default=True)
     parser.add_argument("--stage-2-enabled", type=_parse_bool, default=True)
     parser.add_argument(
@@ -70,16 +68,17 @@ def main(
             input_dir=args.input_dir,
             output_dir=args.output_dir,
             report_dir=args.report_dir,
-            source_lang=args.source_lang,
-            target_lang=args.target_lang,
+            source_lang=word_batch_runner.WORD_BATCH_SOURCE_LANG,
+            target_lang=word_batch_runner.WORD_BATCH_TARGET_LANG,
             model=args.model,
             local_model_base_url=args.base_url,
             local_model_api_key=args.api_key,
             glossary_library_id=args.glossary_library_id,
-            layout_mode=args.layout_mode,
+            layout_mode=word_batch_runner.WORD_BATCH_LAYOUT_MODE,
             translate_tables=args.translate_tables,
             stage_2_enabled=False if args.disable_stage_2 else args.stage_2_enabled,
             smoke_tester=smoke_tester,
+            executor=executor,
         )
     except Exception as exc:
         print(f"word_batch_error error={exc}", file=sys.stderr)
