@@ -5,12 +5,24 @@ import importlib.util
 import json
 from pathlib import Path
 
-from app.services import word_batch_runner, word_layout
+from app.services import glossary, word_batch_runner, word_layout
 
 
 def _touch(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("placeholder", encoding="utf-8")
+
+
+def _fake_glossary_resolver(*args, **kwargs):
+    del args, kwargs
+    return glossary.SelectedDepartmentGlossary(
+        library_id=7,
+        code="quality-assurance",
+        name="品保部",
+        department_code="QA",
+        is_active=True,
+        entry_count=3,
+    )
 
 
 def test_discover_doc_files_recursively_ignores_docx(tmp_path):
@@ -66,6 +78,7 @@ def test_run_word_batch_skips_existing_outputs_and_uses_fake_executor(tmp_path):
         translate_tables=True,
         stage_2_enabled=True,
         executor=fake_executor,
+        glossary_resolver=_fake_glossary_resolver,
     )
 
     assert summary.scanned == 2
@@ -87,12 +100,14 @@ def test_run_word_batch_writes_json_and_csv_reports_when_no_files_processed(tmp_
         model="local-model",
         glossary_library_id="12",
         stage_2_enabled=True,
+        glossary_resolver=_fake_glossary_resolver,
     )
 
     assert summary.scanned == 0
     assert summary.report_json_path.exists()
     assert summary.report_csv_path.exists()
-    assert json.loads(summary.report_json_path.read_text(encoding="utf-8")) == []
+    report = json.loads(summary.report_json_path.read_text(encoding="utf-8"))
+    assert report["rows"] == []
     with summary.report_csv_path.open(encoding="utf-8-sig", newline="") as csv_file:
         reader = csv.DictReader(csv_file)
         assert reader.fieldnames == [
@@ -103,6 +118,11 @@ def test_run_word_batch_writes_json_and_csv_reports_when_no_files_processed(tmp_
             "error",
             "model",
             "glossary_library_id",
+            "glossary_code",
+            "glossary_name",
+            "glossary_department_code",
+            "glossary_is_active",
+            "glossary_entry_count",
             "layout_mode",
             "translate_tables",
             "stage_2_enabled",
@@ -127,13 +147,14 @@ def test_run_word_batch_records_fake_executor_failure(tmp_path):
         input_dir=input_dir,
         output_dir=output_dir,
         executor=fake_executor,
+        glossary_resolver=_fake_glossary_resolver,
     )
 
     assert summary.failed == 1
     assert summary.rows[0].status == "failed"
     assert summary.rows[0].error == "local model unavailable"
-    rows = json.loads(summary.report_json_path.read_text(encoding="utf-8"))
-    assert rows[0]["status"] == "failed"
+    report = json.loads(summary.report_json_path.read_text(encoding="utf-8"))
+    assert report["rows"][0]["status"] == "failed"
 
 
 def test_report_content_includes_execution_context(tmp_path):
@@ -150,9 +171,11 @@ def test_report_content_includes_execution_context(tmp_path):
         glossary_library_id="7",
         translate_tables=False,
         stage_2_enabled=True,
+        glossary_resolver=_fake_glossary_resolver,
     )
 
-    rows = json.loads(summary.report_json_path.read_text(encoding="utf-8"))
+    report = json.loads(summary.report_json_path.read_text(encoding="utf-8"))
+    rows = report["rows"]
     assert rows == [
         {
             "input_path": str((input_dir / "procedure.doc").resolve()),
@@ -162,6 +185,11 @@ def test_report_content_includes_execution_context(tmp_path):
             "error": "",
             "model": "local-model",
             "glossary_library_id": "7",
+            "glossary_code": "quality-assurance",
+            "glossary_name": "品保部",
+            "glossary_department_code": "QA",
+            "glossary_is_active": True,
+            "glossary_entry_count": 3,
             "layout_mode": word_layout.BILINGUAL_BELOW,
             "translate_tables": False,
             "stage_2_enabled": True,
@@ -172,7 +200,12 @@ def test_report_content_includes_execution_context(tmp_path):
     assert summary.rows[0].job_id
 
 
-def test_cli_entry_point_writes_reports(tmp_path):
+def test_cli_entry_point_writes_reports(app, tmp_path):
+    library = glossary.get_or_create_department_glossary_library(
+        code="cli-quality-assurance",
+        name="品保部",
+        department_code="QA",
+    )
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     _touch(input_dir / "procedure.doc")
@@ -197,15 +230,163 @@ def test_cli_entry_point_writes_reports(tmp_path):
             "--model",
             "local-model",
             "--glossary-library-id",
-            "7",
+            str(library.library_id),
             "--stage-2-enabled",
             "true",
-        ]
+        ],
+        init_database=False,
     )
 
     assert exit_code == 0
     report_path = output_dir / word_batch_runner.DEFAULT_WORD_BATCH_REPORT_JSON
-    rows = json.loads(report_path.read_text(encoding="utf-8"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    rows = report["rows"]
     assert rows[0]["model"] == "local-model"
-    assert rows[0]["glossary_library_id"] == "7"
+    assert rows[0]["glossary_library_id"] == str(library.library_id)
+    assert rows[0]["glossary_code"] == "cli-quality-assurance"
+    assert rows[0]["glossary_name"] == "品保部"
+    assert rows[0]["glossary_department_code"] == "QA"
+    assert rows[0]["glossary_is_active"] is True
+    assert rows[0]["glossary_entry_count"] == 0
     assert rows[0]["stage_2_enabled"] is True
+
+
+def test_word_batch_requires_selected_department_glossary_id(app, tmp_path):
+    input_dir = tmp_path / "input"
+    _touch(input_dir / "procedure.doc")
+    executed = False
+
+    def fake_executor(
+        item: word_batch_runner.WordBatchItem,
+    ) -> word_batch_runner.WordBatchExecutionResult:
+        nonlocal executed
+        executed = True
+        return word_batch_runner.WordBatchExecutionResult(status="planned")
+
+    try:
+        word_batch_runner.run_word_batch(
+            input_dir=input_dir,
+            output_dir=tmp_path / "output",
+            glossary_library_id="",
+            executor=fake_executor,
+        )
+    except glossary.DepartmentGlossarySelectionError as exc:
+        assert exc.code == "missing_department_glossary"
+    else:
+        raise AssertionError("missing glossary library id must fail preflight")
+    assert executed is False
+
+
+def test_word_batch_rejects_unknown_department_glossary_before_execution(app, tmp_path):
+    input_dir = tmp_path / "input"
+    _touch(input_dir / "procedure.doc")
+    executed = False
+
+    def fake_executor(
+        item: word_batch_runner.WordBatchItem,
+    ) -> word_batch_runner.WordBatchExecutionResult:
+        nonlocal executed
+        executed = True
+        return word_batch_runner.WordBatchExecutionResult(status="planned")
+
+    try:
+        word_batch_runner.run_word_batch(
+            input_dir=input_dir,
+            output_dir=tmp_path / "output",
+            glossary_library_id="999999",
+            executor=fake_executor,
+        )
+    except glossary.DepartmentGlossarySelectionError as exc:
+        assert exc.code == "department_glossary_not_found"
+    else:
+        raise AssertionError("unknown glossary library id must fail preflight")
+    assert executed is False
+
+
+def test_word_batch_rejects_inactive_department_glossary_before_execution(app, tmp_path):
+    library = glossary.get_or_create_department_glossary_library(
+        code="inactive-batch",
+        name="停用部門",
+        department_code="OFF",
+        is_active=False,
+    )
+    input_dir = tmp_path / "input"
+    _touch(input_dir / "procedure.doc")
+    executed = False
+
+    def fake_executor(
+        item: word_batch_runner.WordBatchItem,
+    ) -> word_batch_runner.WordBatchExecutionResult:
+        nonlocal executed
+        executed = True
+        return word_batch_runner.WordBatchExecutionResult(status="planned")
+
+    try:
+        word_batch_runner.run_word_batch(
+            input_dir=input_dir,
+            output_dir=tmp_path / "output",
+            glossary_library_id=library.library_id,
+            executor=fake_executor,
+        )
+    except glossary.DepartmentGlossarySelectionError as exc:
+        assert exc.code == "department_glossary_inactive"
+    else:
+        raise AssertionError("inactive glossary library id must fail preflight")
+    assert executed is False
+
+
+def test_word_batch_valid_department_glossary_allows_execution_and_reports_metadata(app, tmp_path):
+    library = glossary.get_or_create_department_glossary_library(
+        code="quality-assurance",
+        name="品保部",
+        department_code="QA",
+    )
+    glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+    )
+    input_dir = tmp_path / "input"
+    _touch(input_dir / "procedure.doc")
+    executed: list[word_batch_runner.WordBatchItem] = []
+
+    def fake_executor(
+        item: word_batch_runner.WordBatchItem,
+    ) -> word_batch_runner.WordBatchExecutionResult:
+        executed.append(item)
+        return word_batch_runner.WordBatchExecutionResult(status="planned", job_id="job-1")
+
+    summary = word_batch_runner.run_word_batch(
+        input_dir=input_dir,
+        output_dir=tmp_path / "output",
+        glossary_library_id=str(library.library_id),
+        executor=fake_executor,
+    )
+
+    assert len(executed) == 1
+    assert executed[0].glossary_library_id == str(library.library_id)
+    assert summary.glossary == word_batch_runner.WordBatchGlossaryMetadata(
+        library_id=library.library_id,
+        code="quality-assurance",
+        name="品保部",
+        department_code="QA",
+        is_active=True,
+        entry_count=1,
+    )
+    report = json.loads(summary.report_json_path.read_text(encoding="utf-8"))
+    assert report["preflight"]["glossary"] == {
+        "library_id": library.library_id,
+        "code": "quality-assurance",
+        "name": "品保部",
+        "department_code": "QA",
+        "is_active": True,
+        "entry_count": 1,
+    }
+    assert report["rows"][0]["glossary_library_id"] == str(library.library_id)
+    assert report["rows"][0]["glossary_code"] == "quality-assurance"
+    assert report["rows"][0]["glossary_name"] == "品保部"
+    assert report["rows"][0]["glossary_department_code"] == "QA"
+    assert report["rows"][0]["glossary_is_active"] is True
+    assert report["rows"][0]["glossary_entry_count"] == 1

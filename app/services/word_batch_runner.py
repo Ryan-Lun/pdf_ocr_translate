@@ -5,10 +5,10 @@ import json
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 from uuid import uuid4
 
-from . import word_layout
+from . import glossary, word_layout
 
 
 DEFAULT_WORD_BATCH_REPORT_JSON = "word_batch_report.json"
@@ -46,6 +46,19 @@ def output_path_for_doc(
 
 
 @dataclass(frozen=True)
+class WordBatchGlossaryMetadata:
+    library_id: int
+    code: str
+    name: str
+    department_code: str
+    is_active: bool
+    entry_count: int
+
+
+GlossaryResolver = Callable[..., glossary.SelectedDepartmentGlossary]
+
+
+@dataclass(frozen=True)
 class WordBatchItem:
     input_path: Path
     output_path: Path
@@ -53,6 +66,11 @@ class WordBatchItem:
     target_lang: str
     model: str
     glossary_library_id: str
+    glossary_code: str
+    glossary_name: str
+    glossary_department_code: str
+    glossary_is_active: bool
+    glossary_entry_count: int
     layout_mode: str
     translate_tables: bool
     stage_2_enabled: bool
@@ -93,6 +111,11 @@ class WordBatchReportRow:
     error: str
     model: str
     glossary_library_id: str
+    glossary_code: str
+    glossary_name: str
+    glossary_department_code: str
+    glossary_is_active: bool
+    glossary_entry_count: int
     layout_mode: str
     translate_tables: bool
     stage_2_enabled: bool
@@ -109,6 +132,7 @@ class WordBatchRunSummary:
     report_json_path: Path
     report_csv_path: Path
     rows: list[WordBatchReportRow]
+    glossary: WordBatchGlossaryMetadata
 
 
 def run_word_batch(
@@ -124,7 +148,14 @@ def run_word_batch(
     translate_tables: bool = True,
     stage_2_enabled: bool = False,
     executor: WordBatchExecutor | None = None,
+    glossary_resolver: GlossaryResolver | None = None,
 ) -> WordBatchRunSummary:
+    glossary_metadata = resolve_word_batch_glossary(
+        glossary_library_id,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        resolver=glossary_resolver,
+    )
     input_dir = input_dir.resolve()
     if not input_dir.is_dir():
         raise NotADirectoryError(f"input directory does not exist: {input_dir}")
@@ -146,7 +177,12 @@ def run_word_batch(
             source_lang=source_lang,
             target_lang=target_lang,
             model=model,
-            glossary_library_id=str(glossary_library_id or ""),
+            glossary_library_id=str(glossary_metadata.library_id),
+            glossary_code=glossary_metadata.code,
+            glossary_name=glossary_metadata.name,
+            glossary_department_code=glossary_metadata.department_code,
+            glossary_is_active=glossary_metadata.is_active,
+            glossary_entry_count=glossary_metadata.entry_count,
             layout_mode=word_layout.normalize(layout_mode),
             translate_tables=bool(translate_tables),
             stage_2_enabled=bool(stage_2_enabled),
@@ -175,7 +211,12 @@ def run_word_batch(
 
     report_json_path = report_dir / DEFAULT_WORD_BATCH_REPORT_JSON
     report_csv_path = report_dir / DEFAULT_WORD_BATCH_REPORT_CSV
-    write_word_batch_reports(rows, json_path=report_json_path, csv_path=report_csv_path)
+    write_word_batch_reports(
+        rows,
+        glossary_metadata=glossary_metadata,
+        json_path=report_json_path,
+        csv_path=report_csv_path,
+    )
     return WordBatchRunSummary(
         scanned=len(rows),
         planned=sum(1 for row in rows if row.status == "planned"),
@@ -184,6 +225,32 @@ def run_word_batch(
         report_json_path=report_json_path,
         report_csv_path=report_csv_path,
         rows=rows,
+        glossary=glossary_metadata,
+    )
+
+
+def resolve_word_batch_glossary(
+    library_id: str | int | None,
+    *,
+    source_lang: str,
+    target_lang: str,
+    resolver: GlossaryResolver | None = None,
+) -> WordBatchGlossaryMetadata:
+    resolver = resolver or glossary.resolve_selected_department_glossary
+    selected = resolver(
+        library_id,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        require_active=True,
+        allow_default_fallback=False,
+    )
+    return WordBatchGlossaryMetadata(
+        library_id=selected.library_id,
+        code=selected.code,
+        name=selected.name,
+        department_code=selected.department_code,
+        is_active=selected.is_active,
+        entry_count=selected.entry_count,
     )
 
 
@@ -196,6 +263,11 @@ def _report_row(item: WordBatchItem, result: WordBatchExecutionResult) -> WordBa
         error=result.error,
         model=item.model,
         glossary_library_id=item.glossary_library_id,
+        glossary_code=item.glossary_code,
+        glossary_name=item.glossary_name,
+        glossary_department_code=item.glossary_department_code,
+        glossary_is_active=item.glossary_is_active,
+        glossary_entry_count=item.glossary_entry_count,
         layout_mode=item.layout_mode,
         translate_tables=item.translate_tables,
         stage_2_enabled=item.stage_2_enabled,
@@ -207,14 +279,19 @@ def _report_row(item: WordBatchItem, result: WordBatchExecutionResult) -> WordBa
 def write_word_batch_reports(
     rows: list[WordBatchReportRow],
     *,
+    glossary_metadata: WordBatchGlossaryMetadata,
     json_path: Path,
     csv_path: Path,
 ) -> None:
     json_path.parent.mkdir(parents=True, exist_ok=True)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = [asdict(row) for row in rows]
+    row_payload = [asdict(row) for row in rows]
+    json_payload = {
+        "preflight": {"glossary": asdict(glossary_metadata)},
+        "rows": row_payload,
+    }
     json_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
+        json.dumps(json_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     with csv_path.open("w", encoding="utf-8-sig", newline="") as csv_file:
@@ -223,4 +300,4 @@ def write_word_batch_reports(
             fieldnames=[field.name for field in fields(WordBatchReportRow)],
         )
         writer.writeheader()
-        writer.writerows(payload)
+        writer.writerows(row_payload)
