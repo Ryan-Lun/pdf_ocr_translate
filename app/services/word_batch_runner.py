@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Callable, Protocol
 from uuid import uuid4
 
+from openai import OpenAI
+
 from . import glossary, word_layout
 
 
@@ -59,12 +61,39 @@ GlossaryResolver = Callable[..., glossary.SelectedDepartmentGlossary]
 
 
 @dataclass(frozen=True)
+class LocalModelConfig:
+    base_url: str
+    api_key: str
+    model: str
+
+
+@dataclass(frozen=True)
+class WordBatchSmokeResult:
+    ok: bool
+    stage_1_checked: bool = False
+    stage_2_checked: bool = False
+    error: str = ""
+
+
+class WordBatchSmokeTester(Protocol):
+    def __call__(
+        self,
+        config: LocalModelConfig,
+        *,
+        stage_2_enabled: bool,
+    ) -> WordBatchSmokeResult:
+        ...
+
+
+@dataclass(frozen=True)
 class WordBatchItem:
     input_path: Path
     output_path: Path
     source_lang: str
     target_lang: str
     model: str
+    local_model_base_url: str
+    local_model_api_key: str
     glossary_library_id: str
     glossary_code: str
     glossary_name: str
@@ -88,6 +117,59 @@ class WordBatchExecutionResult:
 class WordBatchExecutor(Protocol):
     def __call__(self, item: WordBatchItem) -> WordBatchExecutionResult:
         ...
+
+
+class OpenAICompatibleSmokeTester:
+    def __call__(
+        self,
+        config: LocalModelConfig,
+        *,
+        stage_2_enabled: bool,
+    ) -> WordBatchSmokeResult:
+        try:
+            client = OpenAI(
+                api_key=config.api_key,
+                base_url=_normalize_local_model_base_url(config.base_url),
+            )
+            _smoke_chat_completion(
+                client,
+                model=config.model,
+                messages=[
+                    {"role": "system", "content": "You are a translator."},
+                    {"role": "user", "content": "Translate this to English: 測試"},
+                ],
+            )
+        except Exception as exc:
+            return WordBatchSmokeResult(
+                ok=False,
+                stage_1_checked=True,
+                stage_2_checked=False,
+                error=str(exc),
+            )
+
+        if not stage_2_enabled:
+            return WordBatchSmokeResult(ok=True, stage_1_checked=True, stage_2_checked=False)
+
+        try:
+            _smoke_chat_completion(
+                client,
+                model=config.model,
+                messages=[
+                    {"role": "system", "content": "You are a translation editor."},
+                    {
+                        "role": "user",
+                        "content": "Revise this English translation only if needed: Test.",
+                    },
+                ],
+            )
+        except Exception as exc:
+            return WordBatchSmokeResult(
+                ok=False,
+                stage_1_checked=True,
+                stage_2_checked=True,
+                error=str(exc),
+            )
+        return WordBatchSmokeResult(ok=True, stage_1_checked=True, stage_2_checked=True)
 
 
 class PlanningWordBatchExecutor:
@@ -133,6 +215,7 @@ class WordBatchRunSummary:
     report_csv_path: Path
     rows: list[WordBatchReportRow]
     glossary: WordBatchGlossaryMetadata
+    smoke_test: WordBatchSmokeResult
 
 
 def run_word_batch(
@@ -143,12 +226,15 @@ def run_word_batch(
     source_lang: str = "zh",
     target_lang: str = "en",
     model: str = "",
+    local_model_base_url: str = "",
+    local_model_api_key: str = "",
     glossary_library_id: str | int | None = "",
     layout_mode: str = word_layout.BILINGUAL_BELOW,
     translate_tables: bool = True,
-    stage_2_enabled: bool = False,
+    stage_2_enabled: bool = True,
     executor: WordBatchExecutor | None = None,
     glossary_resolver: GlossaryResolver | None = None,
+    smoke_tester: WordBatchSmokeTester | None = None,
 ) -> WordBatchRunSummary:
     glossary_metadata = resolve_word_batch_glossary(
         glossary_library_id,
@@ -161,6 +247,16 @@ def run_word_batch(
         raise NotADirectoryError(f"input directory does not exist: {input_dir}")
     output_dir = output_dir.resolve()
     report_dir = (report_dir or output_dir).resolve()
+    local_model_config = resolve_local_model_config(
+        base_url=local_model_base_url,
+        api_key=local_model_api_key,
+        model=model,
+    )
+    smoke_result = run_local_model_smoke_test(
+        local_model_config,
+        stage_2_enabled=stage_2_enabled,
+        smoke_tester=smoke_tester,
+    )
     executor = executor or PlanningWordBatchExecutor()
     rows: list[WordBatchReportRow] = []
 
@@ -176,7 +272,9 @@ def run_word_batch(
             output_path=output_path,
             source_lang=source_lang,
             target_lang=target_lang,
-            model=model,
+            model=local_model_config.model,
+            local_model_base_url=local_model_config.base_url,
+            local_model_api_key=local_model_config.api_key,
             glossary_library_id=str(glossary_metadata.library_id),
             glossary_code=glossary_metadata.code,
             glossary_name=glossary_metadata.name,
@@ -214,6 +312,7 @@ def run_word_batch(
     write_word_batch_reports(
         rows,
         glossary_metadata=glossary_metadata,
+        smoke_result=smoke_result,
         json_path=report_json_path,
         csv_path=report_csv_path,
     )
@@ -226,7 +325,57 @@ def run_word_batch(
         report_csv_path=report_csv_path,
         rows=rows,
         glossary=glossary_metadata,
+        smoke_test=smoke_result,
     )
+
+
+def _normalize_local_model_base_url(base_url: str) -> str:
+    return str(base_url or "").strip().rstrip("/")
+
+
+def _smoke_chat_completion(client: OpenAI, *, model: str, messages: list[dict[str, str]]) -> None:
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=0,
+        max_tokens=32,
+    )
+    content = str(response.choices[0].message.content or "").strip()
+    if not content:
+        raise RuntimeError("local model smoke test returned an empty response")
+
+
+def resolve_local_model_config(*, base_url: str, api_key: str, model: str) -> LocalModelConfig:
+    cleaned_base_url = _normalize_local_model_base_url(base_url)
+    cleaned_api_key = str(api_key or "").strip()
+    cleaned_model = str(model or "").strip()
+    missing = []
+    if not cleaned_base_url:
+        missing.append("base_url")
+    if not cleaned_api_key:
+        missing.append("api_key")
+    if not cleaned_model:
+        missing.append("model")
+    if missing:
+        raise RuntimeError(f"local model configuration is incomplete: {', '.join(missing)}")
+    return LocalModelConfig(
+        base_url=cleaned_base_url,
+        api_key=cleaned_api_key,
+        model=cleaned_model,
+    )
+
+
+def run_local_model_smoke_test(
+    config: LocalModelConfig,
+    *,
+    stage_2_enabled: bool,
+    smoke_tester: WordBatchSmokeTester | None = None,
+) -> WordBatchSmokeResult:
+    smoke_tester = smoke_tester or OpenAICompatibleSmokeTester()
+    result = smoke_tester(config, stage_2_enabled=bool(stage_2_enabled))
+    if not result.ok:
+        raise RuntimeError(f"local model smoke test failed: {result.error}")
+    return result
 
 
 def resolve_word_batch_glossary(
@@ -280,6 +429,7 @@ def write_word_batch_reports(
     rows: list[WordBatchReportRow],
     *,
     glossary_metadata: WordBatchGlossaryMetadata,
+    smoke_result: WordBatchSmokeResult,
     json_path: Path,
     csv_path: Path,
 ) -> None:
@@ -287,7 +437,10 @@ def write_word_batch_reports(
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     row_payload = [asdict(row) for row in rows]
     json_payload = {
-        "preflight": {"glossary": asdict(glossary_metadata)},
+        "preflight": {
+            "glossary": asdict(glossary_metadata),
+            "smoke_test": asdict(smoke_result),
+        },
         "rows": row_payload,
     }
     json_path.write_text(

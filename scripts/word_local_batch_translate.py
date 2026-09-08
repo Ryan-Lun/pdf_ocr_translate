@@ -35,7 +35,12 @@ def _parse_bool(value: str) -> bool:
     raise argparse.ArgumentTypeError(f"invalid boolean value: {value}")
 
 
-def main(argv: list[str] | None = None, *, init_database: bool = True) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    init_database: bool = True,
+    smoke_tester: word_batch_runner.WordBatchSmokeTester | None = None,
+) -> int:
     parser = argparse.ArgumentParser(
         description="Plan a one-time local-model Word batch translation run."
     )
@@ -44,11 +49,18 @@ def main(argv: list[str] | None = None, *, init_database: bool = True) -> int:
     parser.add_argument("--report-dir", type=Path, default=None)
     parser.add_argument("--source-lang", default="zh")
     parser.add_argument("--target-lang", default="en")
-    parser.add_argument("--model", default=state.WORD_TRANSLATE_MODEL)
+    parser.add_argument("--base-url", required=True)
+    parser.add_argument("--api-key", required=True)
+    parser.add_argument("--model", required=True)
     parser.add_argument("--glossary-library-id", required=True)
     parser.add_argument("--layout-mode", default=word_layout.BILINGUAL_BELOW)
     parser.add_argument("--translate-tables", type=_parse_bool, default=True)
-    parser.add_argument("--stage-2-enabled", type=_parse_bool, default=False)
+    parser.add_argument("--stage-2-enabled", type=_parse_bool, default=True)
+    parser.add_argument(
+        "--disable-stage-2",
+        action="store_true",
+        help="Disable Stage 2 post-edit smoke testing and later post-edit work.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -61,10 +73,13 @@ def main(argv: list[str] | None = None, *, init_database: bool = True) -> int:
             source_lang=args.source_lang,
             target_lang=args.target_lang,
             model=args.model,
+            local_model_base_url=args.base_url,
+            local_model_api_key=args.api_key,
             glossary_library_id=args.glossary_library_id,
             layout_mode=args.layout_mode,
             translate_tables=args.translate_tables,
-            stage_2_enabled=args.stage_2_enabled,
+            stage_2_enabled=False if args.disable_stage_2 else args.stage_2_enabled,
+            smoke_tester=smoke_tester,
         )
     except Exception as exc:
         print(f"word_batch_error error={exc}", file=sys.stderr)
@@ -82,6 +97,8 @@ def main(argv: list[str] | None = None, *, init_database: bool = True) -> int:
         f"glossary_department_code={summary.glossary.department_code} "
         f"glossary_is_active={'1' if summary.glossary.is_active else '0'} "
         f"glossary_entry_count={summary.glossary.entry_count} "
+        f"smoke_stage_1={'1' if summary.smoke_test.stage_1_checked else '0'} "
+        f"smoke_stage_2={'1' if summary.smoke_test.stage_2_checked else '0'} "
         f"report_json={summary.report_json_path} "
         f"report_csv={summary.report_csv_path}"
     )

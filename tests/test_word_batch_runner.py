@@ -3,7 +3,10 @@ from __future__ import annotations
 import csv
 import importlib.util
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from app.services import glossary, word_batch_runner, word_layout
 
@@ -22,6 +25,21 @@ def _fake_glossary_resolver(*args, **kwargs):
         department_code="QA",
         is_active=True,
         entry_count=3,
+    )
+
+
+def _fake_smoke_tester(
+    config: word_batch_runner.LocalModelConfig,
+    *,
+    stage_2_enabled: bool,
+) -> word_batch_runner.WordBatchSmokeResult:
+    assert config.base_url == "http://localhost:8000/v1"
+    assert config.api_key == "local-key"
+    assert config.model == "local-model"
+    return word_batch_runner.WordBatchSmokeResult(
+        ok=True,
+        stage_1_checked=True,
+        stage_2_checked=stage_2_enabled,
     )
 
 
@@ -73,12 +91,15 @@ def test_run_word_batch_skips_existing_outputs_and_uses_fake_executor(tmp_path):
         input_dir=input_dir,
         output_dir=output_dir,
         model="local-model",
+        local_model_base_url="http://localhost:8000/v1/",
+        local_model_api_key="local-key",
         glossary_library_id=7,
         layout_mode=word_layout.BILINGUAL_BELOW,
         translate_tables=True,
         stage_2_enabled=True,
         executor=fake_executor,
         glossary_resolver=_fake_glossary_resolver,
+        smoke_tester=_fake_smoke_tester,
     )
 
     assert summary.scanned == 2
@@ -86,6 +107,9 @@ def test_run_word_batch_skips_existing_outputs_and_uses_fake_executor(tmp_path):
     assert summary.skipped == 1
     assert len(executed) == 1
     assert executed[0].input_path == input_dir.resolve() / "a.doc"
+    assert executed[0].model == "local-model"
+    assert executed[0].local_model_base_url == "http://localhost:8000/v1"
+    assert executed[0].local_model_api_key == "local-key"
     assert [row.status for row in summary.rows] == ["planned", "skipped_existing"]
 
 
@@ -98,15 +122,24 @@ def test_run_word_batch_writes_json_and_csv_reports_when_no_files_processed(tmp_
         output_dir=tmp_path / "output",
         report_dir=tmp_path / "reports",
         model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
         glossary_library_id="12",
         stage_2_enabled=True,
         glossary_resolver=_fake_glossary_resolver,
+        smoke_tester=_fake_smoke_tester,
     )
 
     assert summary.scanned == 0
     assert summary.report_json_path.exists()
     assert summary.report_csv_path.exists()
     report = json.loads(summary.report_json_path.read_text(encoding="utf-8"))
+    assert report["preflight"]["smoke_test"] == {
+        "ok": True,
+        "stage_1_checked": True,
+        "stage_2_checked": True,
+        "error": "",
+    }
     assert report["rows"] == []
     with summary.report_csv_path.open(encoding="utf-8-sig", newline="") as csv_file:
         reader = csv.DictReader(csv_file)
@@ -146,8 +179,12 @@ def test_run_word_batch_records_fake_executor_failure(tmp_path):
     summary = word_batch_runner.run_word_batch(
         input_dir=input_dir,
         output_dir=output_dir,
+        model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
         executor=fake_executor,
         glossary_resolver=_fake_glossary_resolver,
+        smoke_tester=_fake_smoke_tester,
     )
 
     assert summary.failed == 1
@@ -168,13 +205,19 @@ def test_report_content_includes_execution_context(tmp_path):
         source_lang="zh",
         target_lang="en",
         model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
         glossary_library_id="7",
         translate_tables=False,
         stage_2_enabled=True,
         glossary_resolver=_fake_glossary_resolver,
+        smoke_tester=_fake_smoke_tester,
     )
 
-    report = json.loads(summary.report_json_path.read_text(encoding="utf-8"))
+    report_text = summary.report_json_path.read_text(encoding="utf-8")
+    assert "local-key" not in report_text
+    assert "local_model_api_key" not in report_text
+    report = json.loads(report_text)
     rows = report["rows"]
     assert rows == [
         {
@@ -227,6 +270,10 @@ def test_cli_entry_point_writes_reports(app, tmp_path):
         [
             str(input_dir),
             str(output_dir),
+            "--base-url",
+            "http://localhost:8000/v1",
+            "--api-key",
+            "local-key",
             "--model",
             "local-model",
             "--glossary-library-id",
@@ -235,6 +282,7 @@ def test_cli_entry_point_writes_reports(app, tmp_path):
             "true",
         ],
         init_database=False,
+        smoke_tester=_fake_smoke_tester,
     )
 
     assert exit_code == 0
@@ -361,8 +409,12 @@ def test_word_batch_valid_department_glossary_allows_execution_and_reports_metad
     summary = word_batch_runner.run_word_batch(
         input_dir=input_dir,
         output_dir=tmp_path / "output",
+        model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
         glossary_library_id=str(library.library_id),
         executor=fake_executor,
+        smoke_tester=_fake_smoke_tester,
     )
 
     assert len(executed) == 1
@@ -390,3 +442,243 @@ def test_word_batch_valid_department_glossary_allows_execution_and_reports_metad
     assert report["rows"][0]["glossary_department_code"] == "QA"
     assert report["rows"][0]["glossary_is_active"] is True
     assert report["rows"][0]["glossary_entry_count"] == 1
+
+
+def test_word_batch_smoke_test_runs_before_execution(app, tmp_path):
+    library = glossary.get_or_create_department_glossary_library(
+        code="smoke-success",
+        name="品保部",
+        department_code="QA",
+    )
+    input_dir = tmp_path / "input"
+    _touch(input_dir / "procedure.doc")
+    calls: list[str] = []
+
+    def smoke_tester(
+        config: word_batch_runner.LocalModelConfig,
+        *,
+        stage_2_enabled: bool,
+    ) -> word_batch_runner.WordBatchSmokeResult:
+        calls.append(f"smoke:{config.model}:{stage_2_enabled}")
+        return word_batch_runner.WordBatchSmokeResult(
+            ok=True,
+            stage_1_checked=True,
+            stage_2_checked=True,
+        )
+
+    def fake_executor(
+        item: word_batch_runner.WordBatchItem,
+    ) -> word_batch_runner.WordBatchExecutionResult:
+        del item
+        calls.append("execute")
+        return word_batch_runner.WordBatchExecutionResult(status="planned")
+
+    summary = word_batch_runner.run_word_batch(
+        input_dir=input_dir,
+        output_dir=tmp_path / "output",
+        model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
+        glossary_library_id=library.library_id,
+        executor=fake_executor,
+        smoke_tester=smoke_tester,
+    )
+
+    assert calls == ["smoke:local-model:True", "execute"]
+    assert summary.smoke_test.stage_1_checked is True
+    assert summary.smoke_test.stage_2_checked is True
+
+
+def test_word_batch_stage_1_smoke_failure_stops_before_execution(app, tmp_path):
+    library = glossary.get_or_create_department_glossary_library(
+        code="smoke-stage-1-failure",
+        name="品保部",
+        department_code="QA",
+    )
+    input_dir = tmp_path / "input"
+    _touch(input_dir / "procedure.doc")
+    executed = False
+
+    def smoke_tester(
+        config: word_batch_runner.LocalModelConfig,
+        *,
+        stage_2_enabled: bool,
+    ) -> word_batch_runner.WordBatchSmokeResult:
+        del config, stage_2_enabled
+        return word_batch_runner.WordBatchSmokeResult(
+            ok=False,
+            stage_1_checked=True,
+            stage_2_checked=False,
+            error="stage 1 unavailable",
+        )
+
+    def fake_executor(
+        item: word_batch_runner.WordBatchItem,
+    ) -> word_batch_runner.WordBatchExecutionResult:
+        nonlocal executed
+        del item
+        executed = True
+        return word_batch_runner.WordBatchExecutionResult(status="planned")
+
+    try:
+        word_batch_runner.run_word_batch(
+            input_dir=input_dir,
+            output_dir=tmp_path / "output",
+            model="local-model",
+            local_model_base_url="http://localhost:8000/v1",
+            local_model_api_key="local-key",
+            glossary_library_id=library.library_id,
+            executor=fake_executor,
+            smoke_tester=smoke_tester,
+        )
+    except RuntimeError as exc:
+        assert "stage 1 unavailable" in str(exc)
+    else:
+        raise AssertionError("stage 1 smoke failure must stop the batch")
+    assert executed is False
+
+
+def test_word_batch_stage_2_smoke_failure_stops_before_execution(app, tmp_path):
+    library = glossary.get_or_create_department_glossary_library(
+        code="smoke-stage-2-failure",
+        name="品保部",
+        department_code="QA",
+    )
+    input_dir = tmp_path / "input"
+    _touch(input_dir / "procedure.doc")
+    executed = False
+
+    def smoke_tester(
+        config: word_batch_runner.LocalModelConfig,
+        *,
+        stage_2_enabled: bool,
+    ) -> word_batch_runner.WordBatchSmokeResult:
+        del config
+        assert stage_2_enabled is True
+        return word_batch_runner.WordBatchSmokeResult(
+            ok=False,
+            stage_1_checked=True,
+            stage_2_checked=True,
+            error="stage 2 unavailable",
+        )
+
+    def fake_executor(
+        item: word_batch_runner.WordBatchItem,
+    ) -> word_batch_runner.WordBatchExecutionResult:
+        nonlocal executed
+        del item
+        executed = True
+        return word_batch_runner.WordBatchExecutionResult(status="planned")
+
+    try:
+        word_batch_runner.run_word_batch(
+            input_dir=input_dir,
+            output_dir=tmp_path / "output",
+            model="local-model",
+            local_model_base_url="http://localhost:8000/v1",
+            local_model_api_key="local-key",
+            glossary_library_id=library.library_id,
+            executor=fake_executor,
+            smoke_tester=smoke_tester,
+        )
+    except RuntimeError as exc:
+        assert "stage 2 unavailable" in str(exc)
+    else:
+        raise AssertionError("stage 2 smoke failure must stop the batch")
+    assert executed is False
+
+
+def test_word_batch_stage_2_can_be_disabled_for_smoke_test(app, tmp_path):
+    library = glossary.get_or_create_department_glossary_library(
+        code="smoke-stage-2-disabled",
+        name="品保部",
+        department_code="QA",
+    )
+    input_dir = tmp_path / "input"
+    _touch(input_dir / "procedure.doc")
+    captured_stage_2: list[bool] = []
+
+    def smoke_tester(
+        config: word_batch_runner.LocalModelConfig,
+        *,
+        stage_2_enabled: bool,
+    ) -> word_batch_runner.WordBatchSmokeResult:
+        del config
+        captured_stage_2.append(stage_2_enabled)
+        return word_batch_runner.WordBatchSmokeResult(
+            ok=True,
+            stage_1_checked=True,
+            stage_2_checked=stage_2_enabled,
+        )
+
+    summary = word_batch_runner.run_word_batch(
+        input_dir=input_dir,
+        output_dir=tmp_path / "output",
+        model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
+        glossary_library_id=library.library_id,
+        stage_2_enabled=False,
+        smoke_tester=smoke_tester,
+    )
+
+    assert captured_stage_2 == [False]
+    assert summary.rows[0].stage_2_enabled is False
+    assert summary.smoke_test.stage_1_checked is True
+    assert summary.smoke_test.stage_2_checked is False
+
+
+def test_word_batch_local_model_config_does_not_mutate_environment(app, tmp_path, monkeypatch):
+    library = glossary.get_or_create_department_glossary_library(
+        code="smoke-env",
+        name="品保部",
+        department_code="QA",
+    )
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://production.example/openai/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "production-key")
+    input_dir = tmp_path / "input"
+    _touch(input_dir / "procedure.doc")
+
+    word_batch_runner.run_word_batch(
+        input_dir=input_dir,
+        output_dir=tmp_path / "output",
+        model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
+        glossary_library_id=library.library_id,
+        smoke_tester=_fake_smoke_tester,
+    )
+
+    assert os.environ["OPENAI_BASE_URL"] == "https://production.example/openai/v1"
+    assert os.environ["OPENAI_API_KEY"] == "production-key"
+
+
+def test_word_batch_missing_input_dir_stops_before_smoke(app, tmp_path):
+    library = glossary.get_or_create_department_glossary_library(
+        code="smoke-input-dir",
+        name="品保部",
+        department_code="QA",
+    )
+    calls = []
+
+    def smoke_tester(
+        config: word_batch_runner.LocalModelConfig,
+        *,
+        stage_2_enabled: bool,
+    ) -> word_batch_runner.WordBatchSmokeResult:
+        del config, stage_2_enabled
+        calls.append("smoke")
+        return word_batch_runner.WordBatchSmokeResult(ok=True, stage_1_checked=True)
+
+    with pytest.raises(NotADirectoryError):
+        word_batch_runner.run_word_batch(
+            input_dir=tmp_path / "missing",
+            output_dir=tmp_path / "output",
+            model="local-model",
+            local_model_base_url="http://localhost:8000/v1",
+            local_model_api_key="local-key",
+            glossary_library_id=library.library_id,
+            smoke_tester=smoke_tester,
+        )
+
+    assert calls == []
