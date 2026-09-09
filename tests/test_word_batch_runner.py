@@ -176,6 +176,8 @@ def test_run_word_batch_writes_json_and_csv_reports_when_no_files_processed(tmp_
             "layout_mode",
             "translate_tables",
             "stage_2_enabled",
+            "word_request_concurrency",
+            "word_requests_per_minute",
             "started_at",
             "finished_at",
         ]
@@ -209,6 +211,143 @@ def test_run_word_batch_records_fake_executor_failure(tmp_path):
     assert summary.rows[0].error == "local model unavailable"
     report = json.loads(summary.report_json_path.read_text(encoding="utf-8"))
     assert report["rows"][0]["status"] == "failed"
+
+
+def test_run_word_batch_continues_after_one_file_failure_and_writes_report(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _touch(input_dir / "a.doc")
+    _touch(input_dir / "b.doc")
+    calls: list[str] = []
+
+    def fake_executor(
+        item: word_batch_runner.WordBatchItem,
+    ) -> word_batch_runner.WordBatchExecutionResult:
+        calls.append(item.input_path.name)
+        if item.input_path.name == "a.doc":
+            raise RuntimeError("conversion failed")
+        item.output_path.parent.mkdir(parents=True, exist_ok=True)
+        item.output_path.write_text("translated", encoding="utf-8")
+        return word_batch_runner.WordBatchExecutionResult(status="completed", job_id="job-b")
+
+    summary = word_batch_runner.run_word_batch(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
+        executor=fake_executor,
+        glossary_resolver=_fake_glossary_resolver,
+        smoke_tester=_fake_smoke_tester,
+    )
+
+    assert calls == ["a.doc", "b.doc"]
+    assert summary.failed == 1
+    assert [row.status for row in summary.rows] == ["failed", "completed"]
+    assert summary.rows[0].error == "conversion failed"
+    assert summary.rows[1].job_id == "job-b"
+    report = json.loads(summary.report_json_path.read_text(encoding="utf-8"))
+    assert [row["status"] for row in report["rows"]] == ["failed", "completed"]
+    assert report["rows"][0]["error"] == "conversion failed"
+
+
+def test_run_word_batch_overwrites_existing_outputs_when_requested(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _touch(input_dir / "procedure.doc")
+    existing_output = output_dir / "procedure_bilingual_en.docx"
+    existing_output.parent.mkdir(parents=True, exist_ok=True)
+    existing_output.write_text("old", encoding="utf-8")
+    executed: list[str] = []
+
+    def fake_executor(
+        item: word_batch_runner.WordBatchItem,
+    ) -> word_batch_runner.WordBatchExecutionResult:
+        executed.append(item.input_path.name)
+        item.output_path.write_text("new", encoding="utf-8")
+        return word_batch_runner.WordBatchExecutionResult(status="completed", job_id="job-new")
+
+    summary = word_batch_runner.run_word_batch(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
+        executor=fake_executor,
+        glossary_resolver=_fake_glossary_resolver,
+        smoke_tester=_fake_smoke_tester,
+        overwrite_existing=True,
+    )
+
+    assert executed == ["procedure.doc"]
+    assert summary.skipped == 0
+    assert summary.rows[0].status == "completed"
+    assert existing_output.read_text(encoding="utf-8") == "new"
+
+
+def test_run_word_batch_passes_request_control_options_to_items(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _touch(input_dir / "procedure.doc")
+    captured: dict[str, int] = {}
+
+    def fake_executor(
+        item: word_batch_runner.WordBatchItem,
+    ) -> word_batch_runner.WordBatchExecutionResult:
+        captured["word_request_concurrency"] = item.word_request_concurrency
+        captured["word_requests_per_minute"] = item.word_requests_per_minute
+        return word_batch_runner.WordBatchExecutionResult(status="planned", job_id="job-controls")
+
+    summary = word_batch_runner.run_word_batch(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
+        executor=fake_executor,
+        glossary_resolver=_fake_glossary_resolver,
+        smoke_tester=_fake_smoke_tester,
+        file_concurrency=1,
+        word_request_concurrency=3,
+        word_requests_per_minute=45,
+    )
+
+    assert summary.rows[0].word_request_concurrency == 3
+    assert summary.rows[0].word_requests_per_minute == 45
+    assert captured == {"word_request_concurrency": 3, "word_requests_per_minute": 45}
+
+
+def test_run_word_batch_can_process_files_concurrently(tmp_path):
+    import threading
+
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _touch(input_dir / "a.doc")
+    _touch(input_dir / "b.doc")
+    barrier = threading.Barrier(2)
+
+    def fake_executor(
+        item: word_batch_runner.WordBatchItem,
+    ) -> word_batch_runner.WordBatchExecutionResult:
+        barrier.wait(timeout=1)
+        return word_batch_runner.WordBatchExecutionResult(
+            status="completed",
+            job_id=f"job-{item.input_path.stem}",
+        )
+
+    summary = word_batch_runner.run_word_batch(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        model="local-model",
+        local_model_base_url="http://localhost:8000/v1",
+        local_model_api_key="local-key",
+        executor=fake_executor,
+        glossary_resolver=_fake_glossary_resolver,
+        smoke_tester=_fake_smoke_tester,
+        file_concurrency=2,
+    )
+
+    assert [row.status for row in summary.rows] == ["completed", "completed"]
 
 
 def test_report_content_includes_execution_context(tmp_path):
@@ -254,6 +393,8 @@ def test_report_content_includes_execution_context(tmp_path):
             "layout_mode": word_layout.BILINGUAL_BELOW,
             "translate_tables": False,
             "stage_2_enabled": True,
+            "word_request_concurrency": word_batch_runner.DEFAULT_WORD_REQUEST_CONCURRENCY,
+            "word_requests_per_minute": word_batch_runner.DEFAULT_WORD_REQUESTS_PER_MINUTE,
             "started_at": summary.rows[0].started_at,
             "finished_at": summary.rows[0].finished_at,
         }
@@ -800,6 +941,8 @@ def test_synchronous_word_pipeline_executor_passes_expected_job_configuration(
     assert captured["local_model_base_url"] == "http://localhost:8000/v1"
     assert captured["local_model_api_key"] == "local-key"
     assert captured["request_extra_body"] == word_batch_runner.LOCAL_MODEL_DISABLE_THINKING_EXTRA_BODY
+    assert captured["request_concurrency_limit"] == word_batch_runner.DEFAULT_WORD_REQUEST_CONCURRENCY
+    assert captured["requests_per_minute"] == word_batch_runner.DEFAULT_WORD_REQUESTS_PER_MINUTE
     assert captured["department_glossary_library_id"] == library.library_id
     assert captured["source_path"].suffix == ".doc"
     assert captured["processing_source_path"].name == "procedure.converted.docx"
@@ -807,6 +950,92 @@ def test_synchronous_word_pipeline_executor_passes_expected_job_configuration(
     assert captured["output_path"].name == "output.docx"
     assert os.environ["OPENAI_BASE_URL"] == "https://production.example/openai/v1"
     assert os.environ["OPENAI_API_KEY"] == "production-key"
+
+
+def test_cli_entry_point_passes_overwrite_and_request_controls(app, tmp_path, monkeypatch):
+    library = glossary.get_or_create_department_glossary_library(
+        code="cli-robust-controls",
+        name="品保部",
+        department_code="QA",
+    )
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _touch(input_dir / "procedure.doc")
+    module = _load_word_batch_cli_module()
+    captured: dict[str, object] = {}
+
+    def fake_run_word_batch(**kwargs):
+        captured.update(kwargs)
+        row = word_batch_runner.WordBatchReportRow(
+            input_path=str(input_dir / "procedure.doc"),
+            output_path=str(output_dir / "procedure_bilingual_en.docx"),
+            status="planned",
+            job_id="job-cli",
+            error="",
+            model="local-model",
+            glossary_library_id=str(library.library_id),
+            glossary_code="cli-robust-controls",
+            glossary_name="品保部",
+            glossary_department_code="QA",
+            glossary_is_active=True,
+            glossary_entry_count=0,
+            layout_mode=word_layout.BILINGUAL_BELOW,
+            translate_tables=True,
+            stage_2_enabled=True,
+            word_request_concurrency=4,
+            word_requests_per_minute=30,
+            started_at="",
+            finished_at="",
+        )
+        return word_batch_runner.WordBatchRunSummary(
+            scanned=1,
+            planned=1,
+            skipped=0,
+            failed=0,
+            report_json_path=output_dir / word_batch_runner.DEFAULT_WORD_BATCH_REPORT_JSON,
+            report_csv_path=output_dir / word_batch_runner.DEFAULT_WORD_BATCH_REPORT_CSV,
+            rows=[row],
+            glossary=word_batch_runner.WordBatchGlossaryMetadata(
+                library_id=library.library_id,
+                code="cli-robust-controls",
+                name="品保部",
+                department_code="QA",
+                is_active=True,
+                entry_count=0,
+            ),
+            smoke_test=word_batch_runner.WordBatchSmokeResult(ok=True, stage_1_checked=True, stage_2_checked=True),
+        )
+
+    monkeypatch.setattr(module.word_batch_runner, "run_word_batch", fake_run_word_batch)
+
+    exit_code = module.main(
+        [
+            str(input_dir),
+            str(output_dir),
+            "--base-url",
+            "http://localhost:8000/v1",
+            "--api-key",
+            "local-key",
+            "--model",
+            "local-model",
+            "--glossary-library-id",
+            str(library.library_id),
+            "--overwrite",
+            "--file-concurrency",
+            "2",
+            "--word-request-concurrency",
+            "4",
+            "--word-requests-per-minute",
+            "30",
+        ],
+        init_database=False,
+    )
+
+    assert exit_code == 0
+    assert captured["overwrite_existing"] is True
+    assert captured["file_concurrency"] == 2
+    assert captured["word_request_concurrency"] == 4
+    assert captured["word_requests_per_minute"] == 30
 
 
 def test_cli_entry_point_uses_synchronous_executor_by_default(app, tmp_path, monkeypatch):

@@ -127,6 +127,22 @@ async def _consume_translation(
         pass
 
 
+def test_word_translator_request_controls_override_internal_limits(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _FailingClient(),
+    )
+
+    translator = EnhancedWordTranslator(
+        request_concurrency_limit=2,
+        requests_per_minute=30,
+        post_edit_enabled=False,
+    )
+
+    assert translator.concurrency_limit == 2
+    assert translator.rpm_limit == 30
+
+
 def test_word_translator_uses_injected_local_model_client(monkeypatch):
     monkeypatch.setattr(
         "app.services.word_translate.openai_config.create_async_client",

@@ -26,6 +26,16 @@ def _init_database() -> None:
     )
 
 
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid positive integer value: {value}") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(f"invalid positive integer value: {value}")
+    return parsed
+
+
 def _parse_bool(value: str) -> bool:
     normalized = str(value).strip().lower()
     if normalized in {"1", "true", "yes", "y", "on"}:
@@ -55,6 +65,29 @@ def main(
     parser.add_argument("--translate-tables", type=_parse_bool, default=True)
     parser.add_argument("--stage-2-enabled", type=_parse_bool, default=True)
     parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Regenerate files even when the target output already exists.",
+    )
+    parser.add_argument(
+        "--file-concurrency",
+        type=_positive_int,
+        default=word_batch_runner.DEFAULT_FILE_CONCURRENCY,
+        help="Number of Word files to process at once. Default: 1.",
+    )
+    parser.add_argument(
+        "--word-request-concurrency",
+        type=_positive_int,
+        default=word_batch_runner.DEFAULT_WORD_REQUEST_CONCURRENCY,
+        help="Word translation request concurrency for this run. Default: 1.",
+    )
+    parser.add_argument(
+        "--word-requests-per-minute",
+        type=_positive_int,
+        default=word_batch_runner.DEFAULT_WORD_REQUESTS_PER_MINUTE,
+        help="Word translation request pacing for this run. Default: 60.",
+    )
+    parser.add_argument(
         "--disable-stage-2",
         action="store_true",
         help="Disable Stage 2 post-edit smoke testing and later post-edit work.",
@@ -77,6 +110,10 @@ def main(
             layout_mode=word_batch_runner.WORD_BATCH_LAYOUT_MODE,
             translate_tables=args.translate_tables,
             stage_2_enabled=False if args.disable_stage_2 else args.stage_2_enabled,
+            overwrite_existing=args.overwrite,
+            file_concurrency=args.file_concurrency,
+            word_request_concurrency=args.word_request_concurrency,
+            word_requests_per_minute=args.word_requests_per_minute,
             smoke_tester=smoke_tester,
             executor=executor,
         )

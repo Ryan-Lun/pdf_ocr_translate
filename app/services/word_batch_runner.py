@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,9 @@ WORD_BATCH_SOURCE_LANG = "auto"
 WORD_BATCH_TARGET_LANG = "en"
 WORD_BATCH_LAYOUT_MODE = word_layout.BILINGUAL_BELOW
 LOCAL_MODEL_DISABLE_THINKING_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
+DEFAULT_FILE_CONCURRENCY = 1
+DEFAULT_WORD_REQUEST_CONCURRENCY = 1
+DEFAULT_WORD_REQUESTS_PER_MINUTE = 60
 
 
 def _utc_now_iso() -> str:
@@ -108,6 +112,8 @@ class WordBatchItem:
     layout_mode: str
     translate_tables: bool
     stage_2_enabled: bool
+    word_request_concurrency: int
+    word_requests_per_minute: int
 
 
 @dataclass(frozen=True)
@@ -228,6 +234,8 @@ class SynchronousWordPipelineExecutor:
             local_model_base_url=item.local_model_base_url,
             local_model_api_key=item.local_model_api_key,
             stage_2_enabled=item.stage_2_enabled,
+            request_concurrency_limit=item.word_request_concurrency,
+            requests_per_minute=item.word_requests_per_minute,
             request_extra_body=LOCAL_MODEL_DISABLE_THINKING_EXTRA_BODY,
         )
         record = jobs.job_store.get_job(job_id)
@@ -268,6 +276,8 @@ class WordBatchReportRow:
     layout_mode: str
     translate_tables: bool
     stage_2_enabled: bool
+    word_request_concurrency: int
+    word_requests_per_minute: int
     started_at: str
     finished_at: str
 
@@ -299,6 +309,10 @@ def run_word_batch(
     layout_mode: str = WORD_BATCH_LAYOUT_MODE,
     translate_tables: bool = True,
     stage_2_enabled: bool = True,
+    overwrite_existing: bool = False,
+    file_concurrency: int = DEFAULT_FILE_CONCURRENCY,
+    word_request_concurrency: int = DEFAULT_WORD_REQUEST_CONCURRENCY,
+    word_requests_per_minute: int = DEFAULT_WORD_REQUESTS_PER_MINUTE,
     executor: WordBatchExecutor | None = None,
     glossary_resolver: GlossaryResolver | None = None,
     smoke_tester: WordBatchSmokeTester | None = None,
@@ -328,10 +342,21 @@ def run_word_batch(
         stage_2_enabled=stage_2_enabled,
         smoke_tester=smoke_tester,
     )
+    file_concurrency = _require_positive_int(file_concurrency, "file_concurrency")
+    word_request_concurrency = _require_positive_int(
+        word_request_concurrency,
+        "word_request_concurrency",
+    )
+    word_requests_per_minute = _require_positive_int(
+        word_requests_per_minute,
+        "word_requests_per_minute",
+    )
     executor = executor or SynchronousWordPipelineExecutor()
-    rows: list[WordBatchReportRow] = []
+    source_paths = discover_doc_files(input_dir)
+    rows: list[WordBatchReportRow | None] = []
+    items_by_index: dict[int, WordBatchItem] = {}
 
-    for source_path in discover_doc_files(input_dir):
+    for index, source_path in enumerate(source_paths):
         output_path = output_path_for_doc(
             source_path,
             input_dir=input_dir,
@@ -355,8 +380,10 @@ def run_word_batch(
             layout_mode=execution_layout_mode,
             translate_tables=bool(translate_tables),
             stage_2_enabled=bool(stage_2_enabled),
+            word_request_concurrency=word_request_concurrency,
+            word_requests_per_minute=word_requests_per_minute,
         )
-        if output_path.exists():
+        if output_path.exists() and not overwrite_existing:
             rows.append(
                 _report_row(
                     item,
@@ -368,36 +395,64 @@ def run_word_batch(
                 )
             )
             continue
-        try:
-            result = executor(item)
-        except Exception as exc:  # pragma: no cover
-            result = WordBatchExecutionResult(
-                status="failed",
-                error=str(exc),
-                finished_at=_utc_now_iso(),
-            )
-        rows.append(_report_row(item, result))
+        rows.append(None)
+        items_by_index[index] = item
 
+    if file_concurrency == 1:
+        for index, item in items_by_index.items():
+            rows[index] = _execute_report_row(item, executor)
+    else:
+        with ThreadPoolExecutor(max_workers=file_concurrency) as pool:
+            future_by_index = {
+                pool.submit(_execute_report_row, item, executor): index
+                for index, item in items_by_index.items()
+            }
+            for future in as_completed(future_by_index):
+                rows[future_by_index[future]] = future.result()
+
+    report_rows = [row for row in rows if row is not None]
     report_json_path = report_dir / DEFAULT_WORD_BATCH_REPORT_JSON
     report_csv_path = report_dir / DEFAULT_WORD_BATCH_REPORT_CSV
     write_word_batch_reports(
-        rows,
+        report_rows,
         glossary_metadata=glossary_metadata,
         smoke_result=smoke_result,
         json_path=report_json_path,
         csv_path=report_csv_path,
     )
     return WordBatchRunSummary(
-        scanned=len(rows),
-        planned=sum(1 for row in rows if row.status == "planned"),
-        skipped=sum(1 for row in rows if row.status.startswith("skipped")),
-        failed=sum(1 for row in rows if row.status == "failed"),
+        scanned=len(report_rows),
+        planned=sum(1 for row in report_rows if row.status == "planned"),
+        skipped=sum(1 for row in report_rows if row.status.startswith("skipped")),
+        failed=sum(1 for row in report_rows if row.status == "failed"),
         report_json_path=report_json_path,
         report_csv_path=report_csv_path,
-        rows=rows,
+        rows=report_rows,
         glossary=glossary_metadata,
         smoke_test=smoke_result,
     )
+
+
+def _require_positive_int(value: int, name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer") from exc
+    if parsed < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return parsed
+
+
+def _execute_report_row(item: WordBatchItem, executor: WordBatchExecutor) -> WordBatchReportRow:
+    try:
+        result = executor(item)
+    except Exception as exc:  # pragma: no cover
+        result = WordBatchExecutionResult(
+            status="failed",
+            error=str(exc),
+            finished_at=_utc_now_iso(),
+        )
+    return _report_row(item, result)
 
 
 def _normalize_local_model_base_url(base_url: str) -> str:
@@ -503,6 +558,8 @@ def _report_row(item: WordBatchItem, result: WordBatchExecutionResult) -> WordBa
         layout_mode=item.layout_mode,
         translate_tables=item.translate_tables,
         stage_2_enabled=item.stage_2_enabled,
+        word_request_concurrency=item.word_request_concurrency,
+        word_requests_per_minute=item.word_requests_per_minute,
         started_at=result.started_at,
         finished_at=result.finished_at,
     )

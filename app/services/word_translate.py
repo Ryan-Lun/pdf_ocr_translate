@@ -87,6 +87,15 @@ def _request_extra_body_kwargs(extra_body: dict[str, object] | None) -> dict[str
     return {"extra_body": extra_body} if extra_body else {}
 
 
+def _positive_int_or_default(value: int | None, default: int) -> int:
+    if value is None:
+        return default
+    parsed = int(value)
+    if parsed < 1:
+        raise ValueError("value must be a positive integer")
+    return parsed
+
+
 def _word_translation_memory_enabled() -> bool:
     return bool(getattr(state, "TRANSLATION_MEMORY_ENABLED", False))
 
@@ -648,6 +657,8 @@ class EnhancedWordTranslator:
         post_edit_model: str | None = None,
         post_edit_client_factory: Callable[[], Any] | None = None,
         request_extra_body: dict[str, object] | None = None,
+        request_concurrency_limit: int | None = None,
+        requests_per_minute: int | None = None,
     ) -> None:
         self.translation_model = (translation_model or state.WORD_TRANSLATE_MODEL).strip()
         self.client = client if client is not None else openai_config.create_async_client()
@@ -656,8 +667,8 @@ class EnhancedWordTranslator:
         self.post_edit_client_factory = post_edit_client_factory
         self.request_extra_body = request_extra_body
         self.max_retries = 3
-        self.concurrency_limit = 10
-        self.rpm_limit = 950
+        self.concurrency_limit = _positive_int_or_default(request_concurrency_limit, 10)
+        self.rpm_limit = _positive_int_or_default(requests_per_minute, 950)
         self.batch_size = 20
         self.batch_max_chars = 6000
 
@@ -1802,6 +1813,8 @@ def run_word_translate_job(
     local_model_api_key: str = "",
     stage_2_enabled: bool | None = None,
     request_extra_body: dict[str, object] | None = None,
+    request_concurrency_limit: int | None = None,
+    requests_per_minute: int | None = None,
 ) -> None:
     _run_word_job(
         job_id=job_id,
@@ -1820,6 +1833,8 @@ def run_word_translate_job(
         local_model_api_key=local_model_api_key,
         stage_2_enabled=stage_2_enabled,
         request_extra_body=request_extra_body,
+        request_concurrency_limit=request_concurrency_limit,
+        requests_per_minute=requests_per_minute,
     )
 
 
@@ -1840,6 +1855,8 @@ def _run_word_job(
     local_model_api_key: str = "",
     stage_2_enabled: bool | None = None,
     request_extra_body: dict[str, object] | None = None,
+    request_concurrency_limit: int | None = None,
+    requests_per_minute: int | None = None,
 ) -> None:
     layout_mode = normalize_word_layout_mode(layout_mode)
     translate_tables = normalize_translate_tables(translate_tables)
@@ -1882,6 +1899,10 @@ def _run_word_job(
             translator_kwargs["post_edit_enabled"] = stage_2_enabled
         if request_extra_body is not None:
             translator_kwargs["request_extra_body"] = request_extra_body
+        if request_concurrency_limit is not None:
+            translator_kwargs["request_concurrency_limit"] = request_concurrency_limit
+        if requests_per_minute is not None:
+            translator_kwargs["requests_per_minute"] = requests_per_minute
         translator = EnhancedWordTranslator(**translator_kwargs)
         jobs.set_job_state(job_dir, status="running", stage="translate")
 

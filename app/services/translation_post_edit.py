@@ -68,8 +68,27 @@ Do not:
 
 # Output Contract
 
-Return ONLY a JSON object whose keys are the original item ids and whose values are the revised English translations.
-Do not add keys, remove keys, rename keys, merge items, split items, add explanations, or add markdown.
+The output format is mandatory. Return ONLY one valid JSON object.
+Do not wrap the JSON in markdown, ```json fences, comments, or explanatory text.
+
+The JSON object must have this exact shape:
+
+{
+  "item_0001": "revised English translation",
+  "item_0002": "revised English translation"
+}
+
+Output rules:
+
+* Top-level value must be a JSON object, not an array.
+* Keys must be exactly the original input item ids.
+* Every input id must appear exactly once.
+* Do not add, remove, rename, merge, or split ids.
+* Values must be revised English translation strings only.
+* Do not return objects as values.
+* Do not return source text, input payload fields, required_terminology, protected_texts, target_language, or an items array.
+* Do not copy the input payload structure.
+* Do not add explanations, translator notes, markdown, or commentary.
 """.strip()
 
 
