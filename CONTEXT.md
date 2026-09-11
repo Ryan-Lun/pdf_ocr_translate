@@ -28,6 +28,10 @@ _Avoid_: User cancellation, Upload error
 An approved glossary translation that must appear exactly as the chosen target-language term while allowing the surrounding sentence syntax to be translated naturally.
 _Avoid_: Hint, synonym, protected content
 
+**Required Glossary Variant**:
+A controlled inflection of a Required Glossary Term that may be accepted only during Stage 2 post-edit validation when grammatically necessary, without changing the approved lexical family. It is not a synonym, replacement term, or relaxation for Exact Protected Content.
+_Avoid_: Synonym, free rewrite, glossary override
+
 **Department Glossary**:
 A glossary library scoped to a department's approved terminology, selected so terms from different departments are not mixed in the same translation job.
 _Avoid_: System glossary, global glossary, personal glossary

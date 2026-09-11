@@ -142,6 +142,49 @@ _EXACT_PROTECTED_PATTERN = re.compile(
 
 _SEMANTIC_FORCE_TERMS = ("must not", "should not", "may not", "must", "should", "may")
 
+_REQUIRED_GLOSSARY_VARIANTS = {
+    "accuracy": ("accurate", "accurately", "inaccuracy"),
+    "appearance": ("appear", "appears", "appeared", "appearing", "appearances"),
+    "assembly": ("assemble", "assembles", "assembled", "assembling", "assemblies"),
+    "authorization": ("authorize", "authorizes", "authorized", "authorizing"),
+    "brochure": ("brochures",),
+    "capability": ("capabilities", "capable", "capably"),
+    "certificate": ("certificates", "certify", "certified", "certification"),
+    "certification": ("certify", "certifies", "certified", "certifying", "certifications"),
+    "chairman": ("chairmen",),
+    "contents": ("content",),
+    "decommissioning": ("decommission", "decommissions", "decommissioned"),
+    "destructive": ("destroy", "destroys", "destroyed", "destroying", "destruction", "destructively"),
+    "director": ("directors",),
+    "disposal": ("dispose", "disposes", "disposed", "disposing", "disposable"),
+    "effectiveness": ("effect", "effects", "effective", "effectively"),
+    "efficiency": ("efficiencies", "efficient", "efficiently"),
+    "filter": ("filters", "filtered", "filtering"),
+    "flowchart": ("flowcharts",),
+    "foreman": ("foremen",),
+    "functionality": ("function", "functions", "functional", "functionally"),
+    "harm": ("harms", "harmed", "harming", "harmful"),
+    "identifiable": ("identify", "identifies", "identified", "identifying", "identification"),
+    "lock": ("locks", "locked", "locking", "unlock", "unlocked"),
+    "oven": ("ovens",),
+    "polish": ("polishes", "polished", "polishing"),
+    "precision": ("precise", "precisely", "imprecision"),
+    "president": ("presidents", "presidential"),
+    "purpose": ("purposes", "purposeful", "purposefully"),
+    "reporting": ("report", "reports", "reported", "reporter"),
+    "rust": ("rusts", "rusted", "rusting", "rusty"),
+    "scope": ("scopes", "scoped", "scoping"),
+    "splash": ("splashes", "splashed", "splashing"),
+    "stability": ("stable", "stably", "instability"),
+    "standardization": ("standard", "standards", "standardize", "standardizes", "standardized", "standardizing"),
+    "sterilization": ("sterilize", "sterilized", "sterilizing"),
+    "timer": ("timers",),
+    "validation": ("validate", "validated", "validating"),
+    "validate": ("validates", "validated", "validating", "validation", "valid"),
+    "vehicle": ("vehicles",),
+    "verify": ("verifies", "verified", "verifying", "verification", "verifiable"),
+}
+
 
 def collect_exact_protected_texts(*texts: str) -> tuple[str, ...]:
     protected: list[str] = []
@@ -327,8 +370,11 @@ def _validate_revised_text(item: PostEditItem, revised: str) -> tuple[str, ...]:
             required_counts[term.target] = required_counts.get(term.target, 0) + 1
     normalized_revised = _normalize_required_glossary_match_text(revised)
     for target, expected_count in required_counts.items():
-        normalized_target = _normalize_required_glossary_match_text(target)
-        actual_count = normalized_revised.count(normalized_target) if normalized_target else 0
+        actual_count = _required_glossary_term_match_count(
+            normalized_revised,
+            target,
+            allow_stage_2_variants=True,
+        )
         if actual_count < expected_count:
             warnings.append(f"missing_required_glossary_term:{target}")
 
@@ -345,6 +391,42 @@ def _validate_revised_text(item: PostEditItem, revised: str) -> tuple[str, ...]:
             warnings.append(f"semantic_force_changed:{force_term.replace(' ', '_')}")
 
     return tuple(warnings)
+
+
+def _required_glossary_term_match_count(
+    normalized_text: str,
+    target: str,
+    *,
+    allow_stage_2_variants: bool,
+) -> int:
+    normalized_target = _normalize_required_glossary_match_text(target)
+    if not normalized_target:
+        return 0
+    exact_count = _required_glossary_exact_match_count(normalized_text, normalized_target)
+    if exact_count or not allow_stage_2_variants:
+        return exact_count
+    variants = _required_glossary_variants_for_target(normalized_target)
+    return sum(_whole_word_count(normalized_text, variant) for variant in variants)
+
+
+def _required_glossary_exact_match_count(normalized_text: str, normalized_target: str) -> int:
+    if re.fullmatch(r"[a-z]+", normalized_target):
+        return _whole_word_count(normalized_text, normalized_target)
+    return normalized_text.count(normalized_target)
+
+
+def _required_glossary_variants_for_target(normalized_target: str) -> tuple[str, ...]:
+    if normalized_target != normalized_target.strip():
+        return ()
+    if not re.fullmatch(r"[a-z]+", normalized_target):
+        return ()
+    return _REQUIRED_GLOSSARY_VARIANTS.get(normalized_target, ())
+
+
+def _whole_word_count(normalized_text: str, normalized_term: str) -> int:
+    if not normalized_term:
+        return 0
+    return len(re.findall(rf"(?<![a-z]){re.escape(normalized_term)}(?![a-z])", normalized_text))
 
 
 def _normalize_required_glossary_match_text(value: str) -> str:
