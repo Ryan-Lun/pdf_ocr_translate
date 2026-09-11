@@ -2416,17 +2416,26 @@ def required_term_targets_from_text(text: str) -> dict[str, str]:
     return targets
 
 
+def _normalize_required_glossary_match_text(value: str) -> str:
+    normalized = str(value or "").casefold()
+    normalized = re.sub(r"\s*([()])\s*", r"\1", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip()
+
+
 def find_missing_required_glossary_terms(
     text: str,
     required_terms: RequiredTermContext,
 ) -> list[str]:
     term_targets = _required_term_target_map(required_terms)
+    normalized_text = _normalize_required_glossary_match_text(text)
     missing: list[str] = []
     seen: set[str] = set()
     for target in term_targets.values():
-        if not target or target in seen:
+        normalized_target = _normalize_required_glossary_match_text(target)
+        if not normalized_target or normalized_target in seen:
             continue
-        seen.add(target)
-        if target not in text:
+        seen.add(normalized_target)
+        if normalized_target not in normalized_text:
             missing.append(target)
     return missing
