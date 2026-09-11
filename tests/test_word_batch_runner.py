@@ -60,7 +60,7 @@ def _load_word_batch_cli_module():
     return module
 
 
-def test_discover_doc_files_recursively_ignores_docx(tmp_path):
+def test_discover_doc_files_recursively_includes_doc_and_docx(tmp_path):
     _touch(tmp_path / "a.doc")
     _touch(tmp_path / "nested" / "b.DOC")
     _touch(tmp_path / "nested" / "c.docx")
@@ -69,7 +69,7 @@ def test_discover_doc_files_recursively_ignores_docx(tmp_path):
     assert [
         path.relative_to(tmp_path).as_posix()
         for path in word_batch_runner.discover_doc_files(tmp_path)
-    ] == ["a.doc", "nested/b.DOC"]
+    ] == ["a.doc", "nested/b.DOC", "nested/c.docx"]
 
 
 def test_output_path_preserves_relative_directories_with_bilingual_suffix(tmp_path):
@@ -81,7 +81,7 @@ def test_output_path_preserves_relative_directories_with_bilingual_suffix(tmp_pa
         target_lang="en",
     )
 
-    assert output_path == tmp_path / "output" / "dept" / "procedure_bilingual_en.docx"
+    assert output_path == tmp_path / "output" / "dept" / "procedure_en.docx"
 
 
 def test_run_word_batch_skips_existing_outputs_and_uses_fake_executor(tmp_path):
@@ -89,7 +89,7 @@ def test_run_word_batch_skips_existing_outputs_and_uses_fake_executor(tmp_path):
     output_dir = tmp_path / "output"
     _touch(input_dir / "a.doc")
     _touch(input_dir / "nested" / "b.doc")
-    existing_output = output_dir / "nested" / "b_bilingual_en.docx"
+    existing_output = output_dir / "nested" / "b_en.docx"
     _touch(existing_output)
     executed: list[word_batch_runner.WordBatchItem] = []
 
@@ -255,7 +255,7 @@ def test_run_word_batch_overwrites_existing_outputs_when_requested(tmp_path):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     _touch(input_dir / "procedure.doc")
-    existing_output = output_dir / "procedure_bilingual_en.docx"
+    existing_output = output_dir / "procedure_en.docx"
     existing_output.parent.mkdir(parents=True, exist_ok=True)
     existing_output.write_text("old", encoding="utf-8")
     executed: list[str] = []
@@ -379,7 +379,7 @@ def test_report_content_includes_execution_context(tmp_path):
     assert rows == [
         {
             "input_path": str((input_dir / "procedure.doc").resolve()),
-            "output_path": str((output_dir / "procedure_bilingual_en.docx").resolve()),
+            "output_path": str((output_dir / "procedure_en.docx").resolve()),
             "status": "planned",
             "job_id": summary.rows[0].job_id,
             "error": "",
@@ -922,6 +922,10 @@ def test_synchronous_word_pipeline_executor_passes_expected_job_configuration(
         glossary_library_id=library.library_id,
         translate_tables=False,
         stage_2_enabled=True,
+        header_footer_exclude_patterns=(r"^UMS-\d+$",),
+        header_footer_font_size_pt=8,
+        excluded_table_indices=(1,),
+        header_footer_fixed_terms=(("號碼", "No."), ("頁次", "Page")),
         smoke_tester=_fake_smoke_tester,
     )
 
@@ -929,12 +933,17 @@ def test_synchronous_word_pipeline_executor_passes_expected_job_configuration(
     assert row.status == "completed"
     assert row.job_id
     assert row.output_path == str(
-        (tmp_path / "output" / "nested" / "procedure_bilingual_en.docx").resolve()
+        (tmp_path / "output" / "nested" / "procedure_en.docx").resolve()
     )
     assert Path(row.output_path).read_bytes() == b"translated docx"
     assert captured["source_lang"] == "auto"
     assert captured["target_lang"] == "en"
     assert captured["layout_mode"] == word_layout.BILINGUAL_BELOW
+    assert captured["header_footer_layout_mode"] == word_layout.BILINGUAL_BELOW
+    assert captured["header_footer_exclude_patterns"] == (r"^UMS-\d+$",)
+    assert captured["header_footer_font_size_pt"] == 8
+    assert captured["excluded_table_indices"] == (1,)
+    assert captured["header_footer_fixed_terms"] == (("號碼", "No."), ("頁次", "Page"))
     assert captured["translate_tables"] is False
     assert captured["stage_2_enabled"] is True
     assert captured["translation_model"] == "local-model"
@@ -968,7 +977,7 @@ def test_cli_entry_point_passes_overwrite_and_request_controls(app, tmp_path, mo
         captured.update(kwargs)
         row = word_batch_runner.WordBatchReportRow(
             input_path=str(input_dir / "procedure.doc"),
-            output_path=str(output_dir / "procedure_bilingual_en.docx"),
+            output_path=str(output_dir / "procedure_en.docx"),
             status="planned",
             job_id="job-cli",
             error="",
@@ -1027,6 +1036,20 @@ def test_cli_entry_point_passes_overwrite_and_request_controls(app, tmp_path, mo
             "4",
             "--word-requests-per-minute",
             "30",
+            "--header-footer-exclude-pattern",
+            r"^UMS-\d+$",
+            "--header-footer-exclude-pattern",
+            r"^\d+ / \d+$",
+            "--header-footer-font-size",
+            "8.5",
+            "--exclude-table-index",
+            "1",
+            "--exclude-table-index",
+            "3",
+            "--header-footer-term",
+            "號碼=No.",
+            "--header-footer-term",
+            "頁次=Page",
         ],
         init_database=False,
     )
@@ -1036,6 +1059,10 @@ def test_cli_entry_point_passes_overwrite_and_request_controls(app, tmp_path, mo
     assert captured["file_concurrency"] == 2
     assert captured["word_request_concurrency"] == 4
     assert captured["word_requests_per_minute"] == 30
+    assert captured["header_footer_exclude_patterns"] == (r"^UMS-\d+$", r"^\d+ / \d+$")
+    assert captured["header_footer_font_size_pt"] == 8.5
+    assert captured["excluded_table_indices"] == (1, 3)
+    assert captured["header_footer_fixed_terms"] == (("號碼", "No."), ("頁次", "Page"))
 
 
 def test_cli_entry_point_uses_synchronous_executor_by_default(app, tmp_path, monkeypatch):
@@ -1093,4 +1120,4 @@ def test_cli_entry_point_uses_synchronous_executor_by_default(app, tmp_path, mon
     assert captured["layout_mode"] == word_layout.BILINGUAL_BELOW
     assert captured["translate_tables"] is True
     assert captured["stage_2_enabled"] is False
-    assert (output_dir / "procedure_bilingual_en.docx").exists()
+    assert (output_dir / "procedure_en.docx").exists()

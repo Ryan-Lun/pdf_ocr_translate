@@ -112,6 +112,11 @@ async def _consume_translation(
     translate_tables: bool = True,
     user_terms: list[str] | None = None,
     debug_job_dir: Path | None = None,
+    header_footer_layout_mode: str = "replace_original",
+    header_footer_exclude_patterns: tuple[str, ...] = (),
+    header_footer_font_size_pt: float | None = None,
+    excluded_table_indices: tuple[int, ...] = (),
+    header_footer_fixed_terms: tuple[tuple[str, str], ...] = (),
 ) -> None:
     async for _progress, _unused_quality in translator.process_translation(
         source_path=source_path,
@@ -123,6 +128,11 @@ async def _consume_translation(
         layout_mode=layout_mode,
         translate_tables=translate_tables,
         debug_job_dir=debug_job_dir,
+        header_footer_layout_mode=header_footer_layout_mode,
+        header_footer_exclude_patterns=header_footer_exclude_patterns,
+        header_footer_font_size_pt=header_footer_font_size_pt,
+        excluded_table_indices=excluded_table_indices,
+        header_footer_fixed_terms=header_footer_fixed_terms,
     ):
         pass
 
@@ -1165,6 +1175,269 @@ def test_word_translation_bilingual_below_does_not_continue_inherited_numbering_
     assert translated_doc.paragraphs[1].style.name != "Custom Numbered Source"
 
 
+def test_word_translation_bilingual_below_replaces_header_footer_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations([
+            "Body content.",
+            "Header content.",
+            "Footer content.",
+        ]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("本文內容。")
+    source_doc.sections[0].header.paragraphs[0].text = "頁首內容。"
+    source_doc.sections[0].footer.paragraphs[0].text = "頁尾內容。"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "本文內容。",
+        "Body content.",
+    ]
+    assert [paragraph.text for paragraph in translated_doc.sections[0].header.paragraphs] == [
+        "Header content.",
+    ]
+    assert [paragraph.text for paragraph in translated_doc.sections[0].footer.paragraphs] == [
+        "Footer content.",
+    ]
+
+
+def test_word_translation_bilingual_below_inserts_header_footer_translations(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations([
+            "Body content.",
+            "Header content.",
+            "Footer content.",
+        ]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("本文內容。")
+    source_doc.sections[0].header.paragraphs[0].text = "頁首內容。"
+    source_doc.sections[0].header.paragraphs[0].paragraph_format.space_before = Pt(12)
+    source_doc.sections[0].header.paragraphs[0].paragraph_format.space_after = Pt(10)
+    source_doc.sections[0].header.paragraphs[0].paragraph_format.line_spacing = 1.5
+    source_doc.sections[0].footer.paragraphs[0].text = "頁尾內容。"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+            header_footer_layout_mode="bilingual_below",
+            header_footer_font_size_pt=8,
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "本文內容。",
+        "Body content.",
+    ]
+    assert [paragraph.text for paragraph in translated_doc.sections[0].header.paragraphs] == [
+        "頁首內容。",
+        "Header content.",
+    ]
+    assert [paragraph.text for paragraph in translated_doc.sections[0].footer.paragraphs] == [
+        "頁尾內容。",
+        "Footer content.",
+    ]
+    header_translation = translated_doc.sections[0].header.paragraphs[1]
+    header_translation_format = header_translation.paragraph_format
+    assert header_translation_format.space_before == Pt(0)
+    assert header_translation_format.space_after == Pt(0)
+    assert header_translation_format.line_spacing == 1.0
+    assert header_translation.runs[0].font.size == Pt(8)
+
+
+def test_word_translation_bilingual_below_inserts_header_table_cell_translations(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations([
+            "Body content.",
+            "Header table content.",
+        ]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("本文內容。")
+    header_table = source_doc.sections[0].header.add_table(rows=1, cols=1, width=Inches(2))
+    header_table.cell(0, 0).paragraphs[0].text = "頁首表格內容。"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+            header_footer_layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "本文內容。",
+        "Body content.",
+    ]
+    output_cell = translated_doc.sections[0].header.tables[0].cell(0, 0)
+    assert [paragraph.text for paragraph in output_cell.paragraphs] == [
+        "頁首表格內容。",
+        "Header table content.",
+    ]
+
+
+def test_word_translation_bilingual_below_uses_fixed_header_footer_terms_without_llm(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [("頁次", "Body Page Term"), ("號碼", "Body Number Term")],
+    )
+    calls: list[dict] = []
+
+    class _UnexpectedCompletions:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+            message = type("Message", (), {"content": "Body content."})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _UnexpectedChat:
+        completions = _UnexpectedCompletions()
+
+    class _UnexpectedClient:
+        chat = _UnexpectedChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _UnexpectedClient(),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    header_table = source_doc.sections[0].header.add_table(rows=1, cols=2, width=Inches(4))
+    header_table.cell(0, 0).paragraphs[0].text = "號碼"
+    header_table.cell(0, 1).paragraphs[0].text = "頁次："
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+            header_footer_layout_mode="bilingual_below",
+            header_footer_fixed_terms=(("號碼", "No."), ("頁次", "Page")),
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    output_table = translated_doc.sections[0].header.tables[0]
+    assert [paragraph.text for paragraph in output_table.cell(0, 0).paragraphs] == [
+        "號碼",
+        "No.",
+    ]
+    assert [paragraph.text for paragraph in output_table.cell(0, 1).paragraphs] == [
+        "頁次：",
+        "Page：",
+    ]
+    assert calls == []
+
+
+def test_word_translation_bilingual_below_skips_header_footer_matching_exclude_pattern(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations([
+            "Body content.",
+            "Translatable header content.",
+        ]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("本文內容。")
+    header_table = source_doc.sections[0].header.add_table(rows=1, cols=2, width=Inches(4))
+    header_table.cell(0, 0).paragraphs[0].text = "UMS-7002"
+    header_table.cell(0, 1).paragraphs[0].text = "頁首內容。"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+            header_footer_layout_mode="bilingual_below",
+            header_footer_exclude_patterns=(r"^UMS-\d+$",),
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "本文內容。",
+        "Body content.",
+    ]
+    skipped_cell = translated_doc.sections[0].header.tables[0].cell(0, 0)
+    translated_cell = translated_doc.sections[0].header.tables[0].cell(0, 1)
+    assert [paragraph.text for paragraph in skipped_cell.paragraphs] == ["UMS-7002"]
+    assert [paragraph.text for paragraph in translated_cell.paragraphs] == [
+        "頁首內容。",
+        "Translatable header content.",
+    ]
+
+
 def test_word_translation_bilingual_below_inserts_table_cell_translation(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
     monkeypatch.setattr(
@@ -1201,6 +1474,90 @@ def test_word_translation_bilingual_below_inserts_table_cell_translation(tmp_pat
     assert [paragraph.text for paragraph in output_table.cell(0, 0).paragraphs] == [
         "確認設備。",
         "Confirm the equipment.",
+    ]
+
+
+
+def test_word_translation_bilingual_below_translates_nested_table_cell(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Confirm the nested equipment."]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    outer_table = source_doc.add_table(rows=1, cols=1)
+    nested_table = outer_table.cell(0, 0).add_table(rows=1, cols=1)
+    nested_table.cell(0, 0).paragraphs[0].text = "確認內層設備。"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    output_nested_cell = translated_doc.tables[0].cell(0, 0).tables[0].cell(0, 0)
+    assert [paragraph.text for paragraph in output_nested_cell.paragraphs] == [
+        "確認內層設備。",
+        "Confirm the nested equipment.",
+    ]
+
+
+def test_word_translation_bilingual_below_can_exclude_first_body_table_with_nested_content(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Translate the second table."]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    first_table = source_doc.add_table(rows=1, cols=1)
+    first_nested_table = first_table.cell(0, 0).add_table(rows=1, cols=1)
+    first_nested_table.cell(0, 0).paragraphs[0].text = "第一個表格內層內容。"
+    second_table = source_doc.add_table(rows=1, cols=1)
+    second_table.cell(0, 0).paragraphs[0].text = "第二個表格內容。"
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+            excluded_table_indices=(1,),
+        )
+    )
+
+    translated_doc = docx.Document(output_path)
+    skipped_nested_cell = translated_doc.tables[0].cell(0, 0).tables[0].cell(0, 0)
+    translated_cell = translated_doc.tables[1].cell(0, 0)
+    assert [paragraph.text for paragraph in skipped_nested_cell.paragraphs] == [
+        "第一個表格內層內容。",
+    ]
+    assert [paragraph.text for paragraph in translated_cell.paragraphs] == [
+        "第二個表格內容。",
+        "Translate the second table.",
     ]
 
 
@@ -2347,6 +2704,62 @@ def test_word_translation_batches_short_segments(tmp_path, monkeypatch):
     plan = json.loads((tmp_path / "realtime_debug" / "chunk_plan.json").read_text(encoding="utf-8"))
     assert plan[0]["size"] == 3
     assert plan[0]["ids"] == ["item_0001", "item_0002", "item_0003"]
+
+
+def test_word_translation_batch_retries_cjk_source_when_english_output_is_numeric_only(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    requests: list[dict] = []
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "item_0001": "0011",
+                    "item_0002": "Issued per DCN-R95",
+                },
+                ensure_ascii=False,
+            ),
+            "Issued under No. 0011.",
+        ]
+    )
+
+    class _RetryCompletions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            message = type("Message", (), {"content": next(responses)})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _RetryChat:
+        completions = _RetryCompletions()
+
+    class _RetryClient:
+        chat = _RetryChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _RetryClient(),
+    )
+
+    translator = EnhancedWordTranslator(post_edit_enabled=False)
+    result = asyncio.run(
+        translator.translate_texts_batch(
+            ["0011號發行", "依據DCN-R95"],
+            "auto",
+            "en",
+            [],
+            glossary_entries=[],
+        )
+    )
+
+    assert result == {
+        "0011號發行": "Issued under No. 0011.",
+        "依據DCN-R95": "Issued per DCN-R95",
+    }
+    assert len(requests) == 2
 
 
 def test_word_translation_preserves_decimal_prefix_before_required_glossary(tmp_path, monkeypatch):

@@ -20,7 +20,7 @@ import docx
 from docx.document import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Twips
+from docx.shared import Pt, Twips
 from docx.text.paragraph import Paragraph
 from lang_utils import describe_target_language, normalize_lang_code, traditional_chinese_instruction
 from werkzeug.utils import secure_filename
@@ -55,6 +55,65 @@ def normalize_translate_tables(value: object) -> bool:
     if normalized in {"true", "1", "yes", "on"}:
         return True
     return True
+
+
+def _compile_header_footer_exclude_patterns(patterns: Iterable[str] | None) -> tuple[re.Pattern[str], ...]:
+    compiled: list[re.Pattern[str]] = []
+    for pattern in patterns or ():
+        normalized = str(pattern or "").strip()
+        if not normalized:
+            continue
+        compiled.append(re.compile(normalized))
+    return tuple(compiled)
+
+
+def _normalize_excluded_table_indices(indices: Iterable[object] | None) -> frozenset[int]:
+    normalized: set[int] = set()
+    for index in indices or ():
+        parsed = int(index)
+        if parsed < 1:
+            raise ValueError("excluded table indices must be 1-based positive integers")
+        normalized.add(parsed)
+    return frozenset(normalized)
+
+
+def _normalize_header_footer_fixed_terms(
+    terms: Iterable[tuple[object, object]] | dict[object, object] | None,
+) -> tuple[tuple[str, str], ...]:
+    if not terms:
+        return ()
+    raw_items = terms.items() if isinstance(terms, dict) else terms
+    normalized: list[tuple[str, str]] = []
+    for source, target in raw_items:
+        source_text = str(source or "").strip()
+        target_text = str(target or "").strip()
+        if source_text and target_text:
+            normalized.append((source_text, target_text))
+    return tuple(normalized)
+
+
+def _header_footer_fixed_translation(
+    text: str,
+    fixed_terms: Iterable[tuple[str, str]],
+) -> str | None:
+    value = str(text or "")
+    stripped = value.strip()
+    if not stripped:
+        return None
+    for source, target in fixed_terms:
+        if stripped == source:
+            return target
+        match = re.fullmatch(rf"{re.escape(source)}(?P<suffix>\s*[:：])", stripped)
+        if match:
+            return f"{target}{match.group('suffix')}"
+    return None
+
+
+def _matches_header_footer_exclude_pattern(text: str, patterns: Iterable[re.Pattern[str]]) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    return any(pattern.search(value) for pattern in patterns)
 
 
 def _normalize_openai_compatible_base_url(base_url: object) -> str:
@@ -824,7 +883,13 @@ class EnhancedWordTranslator:
             return translations
         raise ValueError("Unsupported batch translation output format.")
 
-    def is_invalid_translation_response(self, source_text: str, translated_text: str) -> bool:
+    def is_invalid_translation_response(
+        self,
+        source_text: str,
+        translated_text: str,
+        *,
+        target_lang: str = "en",
+    ) -> bool:
         if not translated_text:
             return True
         source = (source_text or "").strip()
@@ -844,6 +909,12 @@ class EnhancedWordTranslator:
         )
         lowered = translated.lower()
         if any(marker in lowered for marker in invalid_markers):
+            return True
+        if (
+            normalize_lang_code(target_lang) == "en"
+            and _CJK_TEXT_RE.search(source)
+            and not re.search(r"[A-Za-z]", translated)
+        ):
             return True
         if "\n" not in source and len(source) <= 220:
             expanded_too_much = len(translated) > max(len(source) * 3, len(source) + 80)
@@ -996,13 +1067,31 @@ class EnhancedWordTranslator:
                 if numbering_indent is not None:
                     target_format.left_indent = Twips(numbering_indent)
 
-    def insert_paragraph_after(self, paragraph: Paragraph, new_text: str) -> Paragraph:
+    def compact_paragraph_spacing(self, paragraph: Paragraph) -> None:
+        paragraph_format = paragraph.paragraph_format
+        paragraph_format.first_line_indent = None
+        paragraph_format.space_before = Pt(0)
+        paragraph_format.space_after = Pt(0)
+        paragraph_format.line_spacing = 1.0
+        paragraph_format.line_spacing_rule = None
+        paragraph_format.keep_with_next = False
+
+    def apply_paragraph_font_size(self, paragraph: Paragraph, font_size_pt: float | None) -> None:
+        if font_size_pt is None:
+            return
+        size = Pt(font_size_pt)
+        for run in paragraph.runs:
+            run.font.size = size
+
+    def insert_paragraph_after(self, paragraph: Paragraph, new_text: str, *, compact_spacing: bool = False) -> Paragraph:
         new_paragraph_element = OxmlElement("w:p")
         paragraph._p.addnext(new_paragraph_element)
         new_paragraph = Paragraph(new_paragraph_element, paragraph._parent)
         if not self.paragraph_has_numbering(paragraph):
             new_paragraph.style = paragraph.style
         self.copy_paragraph_format(paragraph, new_paragraph)
+        if compact_spacing:
+            self.compact_paragraph_spacing(new_paragraph)
         new_run = new_paragraph.add_run(new_text or "")
         first_run = paragraph.runs[0] if paragraph.runs else None
         if first_run is not None:
@@ -1035,22 +1124,39 @@ class EnhancedWordTranslator:
         *,
         prefixed_translated_text: str,
         layout_mode: str,
+        compact_insert_spacing: bool = False,
+        translation_font_size_pt: float | None = None,
     ) -> None:
         if layout_mode == WORD_LAYOUT_BILINGUAL_BELOW:
-            self.insert_paragraph_after(paragraph, prefixed_translated_text)
+            inserted_paragraph = self.insert_paragraph_after(
+                paragraph,
+                prefixed_translated_text,
+                compact_spacing=compact_insert_spacing,
+            )
+            self.apply_paragraph_font_size(inserted_paragraph, translation_font_size_pt)
             return
         if self.paragraph_contains_drawing(paragraph):
             self.replace_paragraph_text_preserving_drawings(paragraph, prefixed_translated_text)
+            self.apply_paragraph_font_size(paragraph, translation_font_size_pt)
             return
         first_run = paragraph.runs[0] if paragraph.runs else None
         paragraph.clear()
         new_run = paragraph.add_run(prefixed_translated_text)
         if first_run is not None:
             self.copy_run_style(first_run, new_run)
+        if translation_font_size_pt is not None:
+            new_run.font.size = Pt(translation_font_size_pt)
 
-    def get_body_and_table_paragraphs(self, doc: Document) -> list[Paragraph]:
+    def get_body_and_table_paragraphs(
+        self,
+        doc: Document,
+        *,
+        excluded_table_indices: Iterable[object] | None = None,
+    ) -> list[Paragraph]:
+        excluded_table_indices = _normalize_excluded_table_indices(excluded_table_indices)
         paragraphs: list[Paragraph] = []
         seen_paragraphs: set[int] = set()
+        seen_cells: set[Any] = set()
 
         def append_once(paragraph: Paragraph) -> None:
             paragraph_id = id(paragraph._p)
@@ -1059,33 +1165,82 @@ class EnhancedWordTranslator:
             seen_paragraphs.add(paragraph_id)
             paragraphs.append(paragraph)
 
-        for paragraph in doc.paragraphs:
-            append_once(paragraph)
-
-        seen_cells: set[int] = set()
-        for table in doc.tables:
+        def append_table_paragraphs(table: Any) -> None:
             for row in table.rows:
                 for cell in row.cells:
-                    cell_id = id(cell._tc)
+                    cell_id = cell._tc
                     if cell_id in seen_cells:
                         continue
                     seen_cells.add(cell_id)
                     for paragraph in cell.paragraphs:
                         append_once(paragraph)
+                    for nested_table in cell.tables:
+                        append_table_paragraphs(nested_table)
+
+        for paragraph in doc.paragraphs:
+            append_once(paragraph)
+
+        for table_index, table in enumerate(doc.tables, start=1):
+            if table_index in excluded_table_indices:
+                continue
+            append_table_paragraphs(table)
         return paragraphs
 
     def get_header_footer_paragraphs(self, doc: Document) -> list[Paragraph]:
         paragraphs: list[Paragraph] = []
+        seen_paragraphs: set[int] = set()
+        seen_cells: set[Any] = set()
+
+        def append_once(paragraph: Paragraph) -> None:
+            paragraph_id = id(paragraph._p)
+            if paragraph_id in seen_paragraphs:
+                return
+            seen_paragraphs.add(paragraph_id)
+            paragraphs.append(paragraph)
+
+        def append_table_paragraphs(table: Any) -> None:
+            for row in table.rows:
+                for cell in row.cells:
+                    cell_id = cell._tc
+                    if cell_id in seen_cells:
+                        continue
+                    seen_cells.add(cell_id)
+                    for paragraph in cell.paragraphs:
+                        append_once(paragraph)
+                    for nested_table in cell.tables:
+                        append_table_paragraphs(nested_table)
+
+        def append_part(part: Any) -> None:
+            for paragraph in part.paragraphs:
+                append_once(paragraph)
+            for table in part.tables:
+                append_table_paragraphs(table)
+
         for section in doc.sections:
-            paragraphs.extend(section.header.paragraphs)
-            paragraphs.extend(section.footer.paragraphs)
+            append_part(section.header)
+            append_part(section.first_page_header)
+            append_part(section.even_page_header)
+            append_part(section.footer)
+            append_part(section.first_page_footer)
+            append_part(section.even_page_footer)
         return paragraphs
 
-    def get_all_paragraphs(self, doc: Document) -> list[Paragraph]:
+    def get_all_paragraphs(
+        self,
+        doc: Document,
+        *,
+        excluded_table_indices: Iterable[object] | None = None,
+    ) -> list[Paragraph]:
         return [
-            *self.get_body_and_table_paragraphs(doc),
+            *self.get_body_and_table_paragraphs(
+                doc,
+                excluded_table_indices=excluded_table_indices,
+            ),
             *self.get_header_footer_paragraphs(doc),
         ]
+
+    def header_footer_paragraph_ids(self, doc: Document) -> set[int]:
+        return {id(paragraph._p) for paragraph in self.get_header_footer_paragraphs(doc)}
 
     def get_word_translation_paragraphs(
         self,
@@ -1093,13 +1248,23 @@ class EnhancedWordTranslator:
         *,
         layout_mode: str,
         translate_tables: bool,
+        excluded_table_indices: Iterable[object] | None = None,
     ) -> list[Paragraph]:
         if layout_mode == WORD_LAYOUT_BILINGUAL_BELOW:
             if translate_tables:
-                return self.get_body_and_table_paragraphs(doc)
-            return list(doc.paragraphs)
+                return self.get_all_paragraphs(
+                    doc,
+                    excluded_table_indices=excluded_table_indices,
+                )
+            return [
+                *list(doc.paragraphs),
+                *self.get_header_footer_paragraphs(doc),
+            ]
         if translate_tables:
-            return self.get_all_paragraphs(doc)
+            return self.get_all_paragraphs(
+                doc,
+                excluded_table_indices=excluded_table_indices,
+            )
         return [
             *list(doc.paragraphs),
             *self.get_header_footer_paragraphs(doc),
@@ -1216,7 +1381,7 @@ class EnhancedWordTranslator:
                             f"Word 翻譯連續 {self.max_retries} 次缺少指定 Glossary 術語，已中斷任務：{missing}"
                         )
                     continue
-                if self.is_invalid_translation_response(text, translated_text):
+                if self.is_invalid_translation_response(text, translated_text, target_lang=target_lang):
                     if attempt == self.max_retries - 1:
                         raise RuntimeError(
                             f"Word 翻譯連續 {self.max_retries} 次回傳無效內容，已中斷任務。"
@@ -1504,7 +1669,7 @@ class EnhancedWordTranslator:
                 if (
                     not translated_text
                     or missing_required_terms
-                    or self.is_invalid_translation_response(text, translated_text)
+                    or self.is_invalid_translation_response(text, translated_text, target_lang=target_lang)
                 ):
                     translate_kwargs = _word_translate_text_kwargs(
                         text=text,
@@ -1599,15 +1764,27 @@ class EnhancedWordTranslator:
         layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
         translate_tables: bool = True,
         department_glossary_library_id: object = None,
+        header_footer_layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
+        header_footer_exclude_patterns: Iterable[str] | None = None,
+        header_footer_font_size_pt: float | None = None,
+        excluded_table_indices: Iterable[object] | None = None,
+        header_footer_fixed_terms: Iterable[tuple[object, object]] | dict[object, object] | None = None,
     ):
         layout_mode = normalize_word_layout_mode(layout_mode)
+        header_footer_layout_mode = normalize_word_layout_mode(header_footer_layout_mode)
+        header_footer_exclude_regexes = _compile_header_footer_exclude_patterns(
+            header_footer_exclude_patterns
+        )
+        header_footer_fixed_terms = _normalize_header_footer_fixed_terms(header_footer_fixed_terms)
         doc = docx.Document(source_path)
         self.mark_update_fields_on_open(doc)
         translatable_paragraphs = self.get_word_translation_paragraphs(
             doc,
             layout_mode=layout_mode,
             translate_tables=translate_tables,
+            excluded_table_indices=excluded_table_indices,
         )
+        header_footer_paragraph_ids = self.header_footer_paragraph_ids(doc)
         if debug_job_dir is None:
             debug_job_dir = output_path.parent.parent if output_path.parent.name == "output" else output_path.parent
         glossary_entries, glossary_context = glossary.load_execution_department_glossary(
@@ -1624,16 +1801,31 @@ class EnhancedWordTranslator:
                 )
         prefix_pattern = re.compile(r"^\s*(?:(?:\d+(?:\.\d+)+|\d+\.)\s*|\(\d+\)\s*|[a-zA-Z]\.\s*|\([a-zA-Z]\)\s*)")
         texts_for_translation: dict[str, dict[str, Any]] = {}
+        fixed_header_footer_translations: dict[int, str] = {}
         for paragraph in translatable_paragraphs:
             if self.is_table_of_contents_paragraph(paragraph):
                 continue
             if self.paragraph_contains_any_field_code(paragraph):
+                continue
+            if (
+                id(paragraph._p) in header_footer_paragraph_ids
+                and _matches_header_footer_exclude_pattern(paragraph.text, header_footer_exclude_regexes)
+            ):
                 continue
             core_text = paragraph.text
             match = prefix_pattern.match(core_text)
             prefix = match.group(0) if match else ""
             if match:
                 core_text = core_text[len(prefix) :]
+            is_header_footer_paragraph = id(paragraph._p) in header_footer_paragraph_ids
+            if is_header_footer_paragraph:
+                fixed_translation = _header_footer_fixed_translation(
+                    core_text,
+                    header_footer_fixed_terms,
+                )
+                if fixed_translation is not None:
+                    fixed_header_footer_translations[id(paragraph._p)] = fixed_translation
+                    continue
             if self.should_translate_word_segment(
                 core_text,
                 source_lang=source_language,
@@ -1757,11 +1949,19 @@ class EnhancedWordTranslator:
                 continue
             if self.paragraph_contains_any_field_code(paragraph):
                 continue
+            if (
+                id(paragraph._p) in header_footer_paragraph_ids
+                and _matches_header_footer_exclude_pattern(paragraph.text, header_footer_exclude_regexes)
+            ):
+                continue
             original_text = paragraph.text
             match = prefix_pattern.match(original_text)
             prefix = match.group(0) if match else ""
             core_text = original_text[len(prefix) :] if match else original_text
-            translated_core_text = translated_cache.get(core_text)
+            paragraph_id = id(paragraph._p)
+            translated_core_text = fixed_header_footer_translations.get(paragraph_id)
+            if translated_core_text is None:
+                translated_core_text = translated_cache.get(core_text)
             if translated_core_text is None:
                 continue
             separator = ""
@@ -1773,15 +1973,19 @@ class EnhancedWordTranslator:
             ):
                 separator = " "
             final_text = f"{prefix}{separator}{translated_core_text}"
+            is_header_footer_paragraph = paragraph_id in header_footer_paragraph_ids
+            effective_layout_mode = header_footer_layout_mode if is_header_footer_paragraph else layout_mode
             output_text = (
                 translated_core_text
-                if layout_mode == WORD_LAYOUT_BILINGUAL_BELOW
+                if effective_layout_mode == WORD_LAYOUT_BILINGUAL_BELOW
                 else final_text
             )
             self.apply_paragraph_translation(
                 paragraph,
                 prefixed_translated_text=output_text,
-                layout_mode=layout_mode,
+                layout_mode=effective_layout_mode,
+                compact_insert_spacing=is_header_footer_paragraph,
+                translation_font_size_pt=header_footer_font_size_pt if is_header_footer_paragraph else None,
             )
 
         if debug_job_dir is not None:
@@ -1815,6 +2019,11 @@ def run_word_translate_job(
     request_extra_body: dict[str, object] | None = None,
     request_concurrency_limit: int | None = None,
     requests_per_minute: int | None = None,
+    header_footer_layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
+    header_footer_exclude_patterns: Iterable[str] | None = None,
+    header_footer_font_size_pt: float | None = None,
+    excluded_table_indices: Iterable[object] | None = None,
+    header_footer_fixed_terms: Iterable[tuple[object, object]] | dict[object, object] | None = None,
 ) -> None:
     _run_word_job(
         job_id=job_id,
@@ -1835,6 +2044,11 @@ def run_word_translate_job(
         request_extra_body=request_extra_body,
         request_concurrency_limit=request_concurrency_limit,
         requests_per_minute=requests_per_minute,
+        header_footer_layout_mode=header_footer_layout_mode,
+        header_footer_exclude_patterns=header_footer_exclude_patterns,
+        header_footer_font_size_pt=header_footer_font_size_pt,
+        excluded_table_indices=excluded_table_indices,
+        header_footer_fixed_terms=header_footer_fixed_terms,
     )
 
 
@@ -1857,8 +2071,14 @@ def _run_word_job(
     request_extra_body: dict[str, object] | None = None,
     request_concurrency_limit: int | None = None,
     requests_per_minute: int | None = None,
+    header_footer_layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
+    header_footer_exclude_patterns: Iterable[str] | None = None,
+    header_footer_font_size_pt: float | None = None,
+    excluded_table_indices: Iterable[object] | None = None,
+    header_footer_fixed_terms: Iterable[tuple[object, object]] | dict[object, object] | None = None,
 ) -> None:
     layout_mode = normalize_word_layout_mode(layout_mode)
+    header_footer_layout_mode = normalize_word_layout_mode(header_footer_layout_mode)
     translate_tables = normalize_translate_tables(translate_tables)
     now_ts = time.time()
     jobs.set_job_state(
@@ -1933,6 +2153,11 @@ def _run_word_job(
                 layout_mode=layout_mode,
                 translate_tables=translate_tables,
                 department_glossary_library_id=selected_library_id,
+                header_footer_layout_mode=header_footer_layout_mode,
+                header_footer_exclude_patterns=header_footer_exclude_patterns,
+                header_footer_font_size_pt=header_footer_font_size_pt,
+                excluded_table_indices=excluded_table_indices,
+                header_footer_fixed_terms=header_footer_fixed_terms,
             ):
                 last_progress = float(progress)
                 jobs.set_job_state(

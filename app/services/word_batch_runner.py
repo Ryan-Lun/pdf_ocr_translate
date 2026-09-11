@@ -40,7 +40,7 @@ def discover_doc_files(input_dir: Path) -> list[Path]:
     return sorted(
         path
         for path in input_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() == ".doc"
+        if path.is_file() and path.suffix.lower() in {".doc", ".docx"}
     )
 
 
@@ -52,7 +52,7 @@ def output_path_for_doc(
     target_lang: str,
 ) -> Path:
     relative_path = source_path.relative_to(input_dir)
-    filename = f"{source_path.stem}_bilingual_{_target_suffix(target_lang)}.docx"
+    filename = f"{source_path.stem}_{_target_suffix(target_lang)}.docx"
     return output_dir / relative_path.with_name(filename)
 
 
@@ -112,6 +112,10 @@ class WordBatchItem:
     layout_mode: str
     translate_tables: bool
     stage_2_enabled: bool
+    header_footer_exclude_patterns: tuple[str, ...]
+    header_footer_font_size_pt: float | None
+    excluded_table_indices: tuple[int, ...]
+    header_footer_fixed_terms: tuple[tuple[str, str], ...]
     word_request_concurrency: int
     word_requests_per_minute: int
 
@@ -230,6 +234,11 @@ class SynchronousWordPipelineExecutor:
             system_prompt="",
             layout_mode=word_layout.BILINGUAL_BELOW,
             translate_tables=item.translate_tables,
+            header_footer_layout_mode=word_layout.BILINGUAL_BELOW,
+            header_footer_exclude_patterns=item.header_footer_exclude_patterns,
+            header_footer_font_size_pt=item.header_footer_font_size_pt,
+            excluded_table_indices=item.excluded_table_indices,
+            header_footer_fixed_terms=item.header_footer_fixed_terms,
             translation_model=item.model,
             local_model_base_url=item.local_model_base_url,
             local_model_api_key=item.local_model_api_key,
@@ -309,6 +318,10 @@ def run_word_batch(
     layout_mode: str = WORD_BATCH_LAYOUT_MODE,
     translate_tables: bool = True,
     stage_2_enabled: bool = True,
+    header_footer_exclude_patterns: tuple[str, ...] | list[str] | None = None,
+    header_footer_font_size_pt: float | None = None,
+    excluded_table_indices: tuple[int, ...] | list[int] | None = None,
+    header_footer_fixed_terms: tuple[tuple[str, str], ...] | list[tuple[str, str]] | None = None,
     overwrite_existing: bool = False,
     file_concurrency: int = DEFAULT_FILE_CONCURRENCY,
     word_request_concurrency: int = DEFAULT_WORD_REQUEST_CONCURRENCY,
@@ -351,6 +364,9 @@ def run_word_batch(
         word_requests_per_minute,
         "word_requests_per_minute",
     )
+    header_footer_exclude_patterns = tuple(str(pattern) for pattern in (header_footer_exclude_patterns or ()))
+    excluded_table_indices = tuple(_require_positive_int(index, "excluded_table_indices") for index in (excluded_table_indices or ()))
+    header_footer_fixed_terms = _normalize_header_footer_fixed_terms(header_footer_fixed_terms)
     executor = executor or SynchronousWordPipelineExecutor()
     source_paths = discover_doc_files(input_dir)
     rows: list[WordBatchReportRow | None] = []
@@ -380,6 +396,10 @@ def run_word_batch(
             layout_mode=execution_layout_mode,
             translate_tables=bool(translate_tables),
             stage_2_enabled=bool(stage_2_enabled),
+            header_footer_exclude_patterns=header_footer_exclude_patterns,
+            header_footer_font_size_pt=header_footer_font_size_pt,
+            excluded_table_indices=excluded_table_indices,
+            header_footer_fixed_terms=header_footer_fixed_terms,
             word_request_concurrency=word_request_concurrency,
             word_requests_per_minute=word_requests_per_minute,
         )
@@ -431,6 +451,18 @@ def run_word_batch(
         glossary=glossary_metadata,
         smoke_test=smoke_result,
     )
+
+
+def _normalize_header_footer_fixed_terms(
+    terms: tuple[tuple[str, str], ...] | list[tuple[str, str]] | None,
+) -> tuple[tuple[str, str], ...]:
+    normalized: list[tuple[str, str]] = []
+    for source, target in terms or ():
+        source_text = str(source or "").strip()
+        target_text = str(target or "").strip()
+        if source_text and target_text:
+            normalized.append((source_text, target_text))
+    return tuple(normalized)
 
 
 def _require_positive_int(value: int, name: str) -> int:

@@ -45,6 +45,27 @@ def _parse_bool(value: str) -> bool:
     raise argparse.ArgumentTypeError(f"invalid boolean value: {value}")
 
 
+def _positive_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid positive number value: {value}") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"invalid positive number value: {value}")
+    return parsed
+
+
+def _header_footer_term(value: str) -> tuple[str, str]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("header/footer term must use SOURCE=TARGET format")
+    source, target = value.split("=", 1)
+    source = source.strip()
+    target = target.strip()
+    if not source or not target:
+        raise argparse.ArgumentTypeError("header/footer term source and target cannot be empty")
+    return source, target
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -64,6 +85,32 @@ def main(
     parser.add_argument("--glossary-library-id", required=True)
     parser.add_argument("--translate-tables", type=_parse_bool, default=True)
     parser.add_argument("--stage-2-enabled", type=_parse_bool, default=True)
+    parser.add_argument(
+        "--header-footer-exclude-pattern",
+        action="append",
+        default=[],
+        help="Regex pattern for header/footer text to skip. Can be supplied multiple times.",
+    )
+    parser.add_argument(
+        "--header-footer-font-size",
+        type=_positive_float,
+        default=None,
+        help="Font size in points for translated header/footer text only.",
+    )
+    parser.add_argument(
+        "--header-footer-term",
+        type=_header_footer_term,
+        action="append",
+        default=[],
+        help="Fixed header/footer field translation in SOURCE=TARGET format. Can be supplied multiple times.",
+    )
+    parser.add_argument(
+        "--exclude-table-index",
+        type=_positive_int,
+        action="append",
+        default=[],
+        help="1-based body table index to skip. Can be supplied multiple times.",
+    )
     parser.add_argument(
         "--overwrite",
         action="store_true",
@@ -110,6 +157,10 @@ def main(
             layout_mode=word_batch_runner.WORD_BATCH_LAYOUT_MODE,
             translate_tables=args.translate_tables,
             stage_2_enabled=False if args.disable_stage_2 else args.stage_2_enabled,
+            header_footer_exclude_patterns=tuple(args.header_footer_exclude_pattern or ()),
+            header_footer_font_size_pt=args.header_footer_font_size,
+            excluded_table_indices=tuple(args.exclude_table_index or ()),
+            header_footer_fixed_terms=tuple(args.header_footer_term or ()),
             overwrite_existing=args.overwrite,
             file_concurrency=args.file_concurrency,
             word_request_concurrency=args.word_request_concurrency,
