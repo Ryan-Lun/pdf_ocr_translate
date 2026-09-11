@@ -27,6 +27,7 @@
 | `21-版本號與Changelog管理.md` | 附錄 F. 版本號與 Changelog 管理 |
 | `22-DepartmentGlossarySQLTransition.md` | 附錄 G. Department Glossary SQL Transition 操作指引 |
 | `23-DepartmentGlossaryRegressionAcceptance.md` | 附錄 H. Department Glossary 整體回歸測試與人工驗收案例 |
+| `24-WordLocalBatchRunner操作與驗收指引.md` | 附錄 I. Word Local Batch Runner 操作與驗收指引 |
 
 ## 待補充項目
 
