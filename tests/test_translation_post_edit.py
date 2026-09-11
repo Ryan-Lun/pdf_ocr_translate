@@ -174,6 +174,52 @@ def test_stage_2_falls_back_when_required_glossary_term_is_replaced(monkeypatch)
     assert result.items[0].validation_warnings == ("missing_required_glossary_term:Appearance",)
 
 
+def test_stage_2_accepts_required_glossary_term_case_difference(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    item = _item(
+        required_terms=(RequiredGlossaryTerm("0001", "電解拋光", "electrolytic polishing"),),
+        draft="electrolytic polishing whitening: Check the appearance.",
+    )
+
+    result = asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [item],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(
+                ['{"seg-1": "Electrolytic polishing whitening: Check the appearance."}'],
+                [],
+            ),
+        )
+    )
+
+    assert result.items[0].text == "Electrolytic polishing whitening: Check the appearance."
+    assert result.items[0].used_fallback is False
+    assert result.items[0].validation_warnings == ()
+
+
+def test_stage_2_accepts_required_glossary_term_parenthesis_spacing(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    item = _item(
+        required_terms=(RequiredGlossaryTerm("0001", "電解拋光", "electrolytic polishing(EP)"),),
+        draft="electrolytic polishing(EP) whitening: Check the appearance.",
+    )
+
+    result = asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [item],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(
+                ['{"seg-1": "Electrolytic polishing (EP) whitening: Check the appearance."}'],
+                [],
+            ),
+        )
+    )
+
+    assert result.items[0].text == "Electrolytic polishing (EP) whitening: Check the appearance."
+    assert result.items[0].used_fallback is False
+    assert result.items[0].validation_warnings == ()
+
+
 def test_stage_2_falls_back_on_invalid_json_or_missing_ids(monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
 
@@ -334,6 +380,52 @@ def test_stage_2_falls_back_when_numbers_or_dates_are_modified(monkeypatch):
     assert result.items[0].fallback_reason == "missing_protected_text:2026-09-02"
     assert "missing_protected_text:10 mm" in result.items[0].validation_warnings
     assert result.items[0].stage_2_text == "Inspect the 12 mm gap on 2026/09/02."
+
+
+def test_stage_2_accepts_protected_measurement_unit_spacing(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    item = _item(
+        source="深度小於 0.2mm。",
+        draft="The depth is less than 0.2mm.",
+        protected_texts=translation_post_edit.collect_exact_protected_texts(
+            "深度小於 0.2mm。",
+            "The depth is less than 0.2mm.",
+        ),
+    )
+
+    result = asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [item],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(['{"seg-1": "The depth is less than 0.2 mm."}'], []),
+        )
+    )
+
+    assert result.items[0].text == "The depth is less than 0.2 mm."
+    assert result.items[0].used_fallback is False
+    assert result.items[0].validation_warnings == ()
+
+
+def test_stage_2_keeps_exact_protected_text_validation_strict(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    item = _item(
+        source="檢查 PRJ-2026-A。",
+        draft="Check PRJ-2026-A.",
+        protected_texts=("PRJ-2026-A",),
+    )
+
+    result = asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [item],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(['{"seg-1": "Check prj-2026-a."}'], []),
+        )
+    )
+
+    assert result.items[0].text == "Check PRJ-2026-A."
+    assert result.items[0].used_fallback is True
+    assert result.items[0].fallback_reason == "missing_protected_text:PRJ-2026-A"
+    assert result.items[0].stage_2_text == "Check prj-2026-a."
 
 
 def test_stage_2_falls_back_when_semantic_force_is_weakened(monkeypatch):

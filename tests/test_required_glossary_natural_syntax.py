@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from app.services import batch, markdown_translate, realtime_translate
+from app.services import batch, markdown_translate, realtime_translate, state
 from app.services.word_translate import EnhancedWordTranslator
 
 
@@ -87,7 +87,30 @@ def test_case_1_word_required_glossary_allows_natural_reposition(monkeypatch):
     assert "<term" not in result
 
 
-def test_case_2_batch_tracks_multiple_required_glossary_terms_in_one_item():
+def test_word_required_glossary_validation_allows_case_only_difference(monkeypatch):
+    requests: list[dict] = []
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _AsyncClient(['Figure 7: Appearance of High-Pressure Gas Specific Equipment'], requests),
+    )
+
+    translator = EnhancedWordTranslator()
+    result = asyncio.run(
+        translator.translate_text(
+            "圖七 高壓氣體特定設備外觀",
+            "auto",
+            "en",
+            [],
+            glossary_entries=[("外觀", "appearance")],
+        )
+    )
+
+    assert result == "Figure 7: Appearance of High-Pressure Gas Specific Equipment"
+    assert len(requests) == 1
+
+
+def test_case_2_batch_tracks_multiple_required_glossary_terms_in_one_item(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
     ocr_pages = [
         {
             "page_index_0based": 0,

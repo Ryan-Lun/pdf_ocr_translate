@@ -66,6 +66,27 @@ Do not:
 * change Exact Protected Content or mask tokens
 * rewrite wording that is already natural merely for stylistic variety
 
+# Spelling Quality
+
+Check the revised English for obvious spelling errors.
+
+Correct clear spelling mistakes in ordinary English words.
+
+Do not alter:
+* Required Glossary Terms
+* Exact Protected Content
+* mask tokens
+* technical terms
+* product names
+* model numbers
+* document codes
+* abbreviations
+* component or part names
+
+If a word may be a domain-specific term, product term, code, abbreviation, or approved terminology, preserve it unless it is clearly misspelled in context.
+
+Do not introduce new spelling variants when revising the Stage 1 translation.
+
 # Output Contract
 
 The output format is mandatory. Return ONLY one valid JSON object.
@@ -229,7 +250,7 @@ async def post_edit_texts_batch(
                 {"role": "system", "content": POST_EDIT_SYSTEM_PROMPT},
                 {"role": "user", "content": _build_user_payload(item_tuple, target_lang=target_lang)},
             ],
-            temperature=getattr(state, "TRANSLATION_POST_EDIT_TEMPERATURE", 0.0),
+            temperature=getattr(state, "TRANSLATION_POST_EDIT_TEMPERATURE", 0.1),
             max_tokens=getattr(state, "TRANSLATION_POST_EDIT_MAX_TOKENS", 6000),
             **_extra_body_kwargs(request_extra_body),
         )
@@ -331,14 +352,16 @@ def _validate_revised_text(item: PostEditItem, revised: str) -> tuple[str, ...]:
     for term in item.required_terms:
         if term.target:
             required_counts[term.target] = required_counts.get(term.target, 0) + 1
+    normalized_revised = _normalize_required_glossary_match_text(revised)
     for target, expected_count in required_counts.items():
-        actual_count = revised.count(target)
+        normalized_target = _normalize_required_glossary_match_text(target)
+        actual_count = normalized_revised.count(normalized_target) if normalized_target else 0
         if actual_count < expected_count:
             warnings.append(f"missing_required_glossary_term:{target}")
 
     for protected_text in item.protected_texts:
         expected_count = _expected_protected_text_count(item, protected_text)
-        if protected_text and revised.count(protected_text) < expected_count:
+        if protected_text and _protected_text_count(revised, protected_text) < expected_count:
             warnings.append(f"missing_protected_text:{protected_text}")
     order_warning = _validate_protected_text_order(item, revised)
     if order_warning:
@@ -349,6 +372,13 @@ def _validate_revised_text(item: PostEditItem, revised: str) -> tuple[str, ...]:
             warnings.append(f"semantic_force_changed:{force_term.replace(' ', '_')}")
 
     return tuple(warnings)
+
+
+def _normalize_required_glossary_match_text(value: str) -> str:
+    normalized = str(value or "").casefold()
+    normalized = re.sub(r"\s*([()])\s*", r"\1", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip()
 
 
 def _semantic_force_terms(text: str) -> tuple[str, ...]:
@@ -378,6 +408,31 @@ def _expected_protected_text_count(item: PostEditItem, protected_text: str) -> i
         str(item.draft_text or "").count(value),
         str(item.source_text or "").count(value),
         1,
+    )
+
+
+_MEASUREMENT_PROTECTED_RE = re.compile(
+    r"^\d+(?:\.\d+)?\s?(?:%|mm|cm|m|kg|g|mg|ml|L|°C|℃|V|A|W|kW|Hz|rpm)$"
+)
+
+
+def _protected_text_count(text: str, protected_text: str) -> int:
+    if _is_measurement_protected_text(protected_text):
+        return _normalize_measurement_protected_text(text).count(
+            _normalize_measurement_protected_text(protected_text)
+        )
+    return str(text or "").count(protected_text)
+
+
+def _is_measurement_protected_text(value: str) -> bool:
+    return _MEASUREMENT_PROTECTED_RE.fullmatch(str(value or "").strip()) is not None
+
+
+def _normalize_measurement_protected_text(value: str) -> str:
+    return re.sub(
+        r"\b(\d+(?:\.\d+)?)\s+(%|mm|cm|m|kg|g|mg|ml|L|°C|℃|V|A|W|kW|Hz|rpm)\b",
+        r"\1\2",
+        str(value or ""),
     )
 
 
