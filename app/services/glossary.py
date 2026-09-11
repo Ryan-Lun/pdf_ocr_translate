@@ -1854,6 +1854,34 @@ def glossary_pairs_for_translation(
     return pairs
 
 
+_CJK_SOURCE_TERM_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]")
+
+
+def _supports_inter_cjk_word_break_match(source_term: str) -> bool:
+    return bool(source_term) and _CJK_SOURCE_TERM_RE.search(source_term) is not None
+
+
+def source_term_match_length(text: str, source_term: str, start: int = 0) -> int | None:
+    source = str(source_term or "")
+    if not source:
+        return None
+    if str(text or "").startswith(source, start):
+        return len(source)
+    if not _supports_inter_cjk_word_break_match(source):
+        return None
+
+    value = str(text or "")
+    cursor = start
+    for index, char in enumerate(source):
+        if cursor >= len(value) or value[cursor] != char:
+            return None
+        cursor += 1
+        if index < len(source) - 1:
+            while cursor < len(value) and value[cursor].isspace():
+                cursor += 1
+    return cursor - start
+
+
 def build_glossary_management_payload(
     *,
     library_id: object | None = None,
@@ -2310,7 +2338,8 @@ def apply_required_glossary_terms(
     while i < len(text):
         matched = False
         for src, dst in pairs:
-            if text.startswith(src, i):
+            match_length = source_term_match_length(text, src, i)
+            if match_length is not None:
                 term_id = f"{term_index:04d}"
                 required_terms.append(
                     RequiredGlossaryTerm(id=term_id, source=src, target=dst)
@@ -2322,7 +2351,7 @@ def apply_required_glossary_terms(
                 )
                 out_parts.append(protected)
                 hits.append((src, dst))
-                i += len(src)
+                i += match_length
                 term_index += 1
                 matched = True
                 break
@@ -2365,11 +2394,12 @@ def apply_glossary_with_protection(
     while i < len(text):
         matched = False
         for src, dst in pairs:
-            if text.startswith(src, i):
+            match_length = source_term_match_length(text, src, i)
+            if match_length is not None:
                 protected = f"{_PROTECTED_TERM_PREFIX}{term_index:04d}::{dst}]]]"
                 out_parts.append(protected)
                 hits.append((src, dst))
-                i += len(src)
+                i += match_length
                 term_index += 1
                 matched = True
                 break

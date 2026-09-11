@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from app.services import batch, markdown_translate, realtime_translate, state
+from app.services import batch, glossary, markdown_translate, realtime_translate, state
 from app.services.word_translate import EnhancedWordTranslator
 
 
@@ -236,3 +236,15 @@ def test_case_6_realtime_rejects_synonym_for_required_glossary_term():
             ["p0000-l0000"],
             {"p0000-l0000": {"0001": "Appearance"}},
         )
+
+def test_required_glossary_matches_cjk_term_split_by_word_line_break():
+    application = glossary.apply_required_glossary_terms(
+        "號\n碼：",
+        [("號碼", "No.")],
+        source_lang="zh",
+        target_lang="en",
+    )
+
+    assert application.text == '<term id="0001">No.</term>：'
+    assert [term.source for term in application.required_terms] == ["號碼"]
+    assert [term.target for term in application.required_terms] == ["No."]

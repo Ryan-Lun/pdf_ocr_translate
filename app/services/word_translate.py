@@ -101,11 +101,14 @@ def _header_footer_fixed_translation(
     if not stripped:
         return None
     for source, target in fixed_terms:
-        if stripped == source:
+        match_length = glossary.source_term_match_length(stripped, source, 0)
+        if match_length is None:
+            continue
+        suffix = stripped[match_length:]
+        if not suffix:
             return target
-        match = re.fullmatch(rf"{re.escape(source)}(?P<suffix>\s*[:：])", stripped)
-        if match:
-            return f"{target}{match.group('suffix')}"
+        if re.fullmatch(r"\s*[:：]", suffix):
+            return f"{target}{suffix}"
     return None
 
 
@@ -114,6 +117,87 @@ def _matches_header_footer_exclude_pattern(text: str, patterns: Iterable[re.Patt
     if not value:
         return False
     return any(pattern.search(value) for pattern in patterns)
+
+
+def _paragraph_table_cell_key(paragraph: Paragraph) -> Any | None:
+    parent = paragraph._p.getparent()
+    while parent is not None:
+        if parent.tag == qn("w:tc"):
+            return parent
+        parent = parent.getparent()
+    return None
+
+
+def _header_footer_cell_glossary_translation(
+    texts: Iterable[str],
+    glossary_pairs: Iterable[tuple[str, str]],
+) -> str | None:
+    combined = "".join(str(text or "").strip() for text in texts if str(text or "").strip())
+    if not combined:
+        return None
+    for source, target in glossary_pairs:
+        match_length = glossary.source_term_match_length(combined, source, 0)
+        if match_length is None:
+            continue
+        suffix = combined[match_length:]
+        if not suffix:
+            return target
+        if re.fullmatch(r"\s*[:：]", suffix):
+            return f"{target}{suffix}"
+    return None
+
+
+def _header_footer_cell_glossary_translation_map(
+    paragraphs: Iterable[Paragraph],
+    *,
+    header_footer_paragraph_ids: set[int],
+    header_footer_exclude_regexes: Iterable[re.Pattern[str]],
+    glossary_entries: list[tuple[str, str]],
+    source_lang: str,
+    target_lang: str,
+    prefix_pattern: re.Pattern[str],
+) -> tuple[dict[int, str], set[int]]:
+    glossary_pairs = glossary.glossary_pairs_for_translation(
+        glossary_entries,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    if not glossary_pairs:
+        return {}, set()
+
+    cells: dict[Any, list[tuple[Paragraph, str]]] = {}
+    for paragraph in paragraphs:
+        paragraph_id = id(paragraph._p)
+        if paragraph_id not in header_footer_paragraph_ids:
+            continue
+        if _matches_header_footer_exclude_pattern(paragraph.text, header_footer_exclude_regexes):
+            continue
+        cell_key = _paragraph_table_cell_key(paragraph)
+        if cell_key is None:
+            continue
+        core_text = paragraph.text
+        match = prefix_pattern.match(core_text)
+        if match:
+            core_text = core_text[len(match.group(0)) :]
+        if not core_text.strip():
+            continue
+        cells.setdefault(cell_key, []).append((paragraph, core_text))
+
+    translations: dict[int, str] = {}
+    source_paragraph_ids: set[int] = set()
+    for cell_paragraphs in cells.values():
+        if len(cell_paragraphs) < 2:
+            continue
+        fixed_translation = _header_footer_cell_glossary_translation(
+            [core_text for _, core_text in cell_paragraphs],
+            glossary_pairs,
+        )
+        if fixed_translation is None:
+            continue
+        for paragraph, _ in cell_paragraphs[:-1]:
+            source_paragraph_ids.add(id(paragraph._p))
+        translations[id(cell_paragraphs[-1][0]._p)] = fixed_translation
+    return translations, source_paragraph_ids
 
 
 def _normalize_openai_compatible_base_url(base_url: object) -> str:
@@ -1802,15 +1886,34 @@ class EnhancedWordTranslator:
         prefix_pattern = re.compile(r"^\s*(?:(?:\d+(?:\.\d+)+|\d+\.)\s*|\(\d+\)\s*|[a-zA-Z]\.\s*|\([a-zA-Z]\)\s*)")
         texts_for_translation: dict[str, dict[str, Any]] = {}
         fixed_header_footer_translations: dict[int, str] = {}
+        header_footer_cell_source_paragraph_ids: set[int] = set()
+        if header_footer_layout_mode == WORD_LAYOUT_BILINGUAL_BELOW:
+            (
+                fixed_header_footer_translations,
+                header_footer_cell_source_paragraph_ids,
+            ) = _header_footer_cell_glossary_translation_map(
+                translatable_paragraphs,
+                header_footer_paragraph_ids=header_footer_paragraph_ids,
+                header_footer_exclude_regexes=header_footer_exclude_regexes,
+                glossary_entries=glossary_entries,
+                source_lang=source_language,
+                target_lang=target_language,
+                prefix_pattern=prefix_pattern,
+            )
         for paragraph in translatable_paragraphs:
             if self.is_table_of_contents_paragraph(paragraph):
                 continue
             if self.paragraph_contains_any_field_code(paragraph):
                 continue
+            paragraph_id = id(paragraph._p)
             if (
-                id(paragraph._p) in header_footer_paragraph_ids
+                paragraph_id in header_footer_paragraph_ids
                 and _matches_header_footer_exclude_pattern(paragraph.text, header_footer_exclude_regexes)
             ):
+                continue
+            if paragraph_id in header_footer_cell_source_paragraph_ids:
+                continue
+            if paragraph_id in fixed_header_footer_translations:
                 continue
             core_text = paragraph.text
             match = prefix_pattern.match(core_text)
@@ -1949,10 +2052,13 @@ class EnhancedWordTranslator:
                 continue
             if self.paragraph_contains_any_field_code(paragraph):
                 continue
+            paragraph_id = id(paragraph._p)
             if (
-                id(paragraph._p) in header_footer_paragraph_ids
+                paragraph_id in header_footer_paragraph_ids
                 and _matches_header_footer_exclude_pattern(paragraph.text, header_footer_exclude_regexes)
             ):
+                continue
+            if paragraph_id in header_footer_cell_source_paragraph_ids:
                 continue
             original_text = paragraph.text
             match = prefix_pattern.match(original_text)
