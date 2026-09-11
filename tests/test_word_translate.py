@@ -3174,6 +3174,39 @@ def test_word_translation_preserves_header_field_code_paragraph(tmp_path, monkey
     assert " PAGE " in header_xml
 
 
+def test_word_translate_stage_1_does_not_accept_required_glossary_variant(monkeypatch):
+    class _VariantCompletions:
+        async def create(self, **kwargs):
+            message = type("Message", (), {"content": "Standardizing operations is required."})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _VariantChat:
+        completions = _VariantCompletions()
+
+    class _VariantClient:
+        chat = _VariantChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _VariantClient(),
+    )
+
+    translator = EnhancedWordTranslator()
+    translator.max_retries = 1
+
+    with pytest.raises(RuntimeError, match="缺少指定 Glossary 術語.*standardization"):
+        asyncio.run(
+            translator.translate_text(
+                "使作業方式標準化。",
+                "zh",
+                "en",
+                [],
+                glossary_entries=[("標準化", "standardization")],
+            )
+        )
+
+
 def test_word_translate_uses_required_glossary_term_wrapper(monkeypatch):
     requests: list[dict] = []
 

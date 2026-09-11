@@ -197,6 +197,190 @@ def test_stage_2_accepts_required_glossary_term_case_difference(monkeypatch):
     assert result.items[0].validation_warnings == ()
 
 
+def test_stage_2_accepts_whitelisted_required_glossary_variants(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    item = _item(
+        required_terms=(
+            RequiredGlossaryTerm("0001", "標準化", "standardization"),
+            RequiredGlossaryTerm("0002", "驗證", "validation"),
+            RequiredGlossaryTerm("0003", "滅菌", "sterilization"),
+        ),
+        draft="The standardization, validation, and sterilization steps are defined.",
+    )
+
+    result = asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [item],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(
+                [
+                    json.dumps(
+                        {
+                            "seg-1": (
+                                "Standardizing personnel operations, validate the "
+                                "records, and sterilized products are documented."
+                            )
+                        }
+                    )
+                ],
+                [],
+            ),
+        )
+    )
+
+    assert result.items[0].text == (
+        "Standardizing personnel operations, validate the records, "
+        "and sterilized products are documented."
+    )
+    assert result.items[0].used_fallback is False
+    assert result.items[0].validation_warnings == ()
+
+
+def test_stage_2_accepts_curated_general_english_variants_from_quality_glossary(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    item = _item(
+        required_terms=(
+            RequiredGlossaryTerm("0001", "查證", "verify"),
+            RequiredGlossaryTerm("0002", "外觀", "appearance"),
+            RequiredGlossaryTerm("0003", "拋光", "polish"),
+            RequiredGlossaryTerm("0004", "處置", "disposal"),
+        ),
+        draft="Verify the appearance, polish condition, and disposal process.",
+    )
+
+    result = asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [item],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(
+                [
+                    json.dumps(
+                        {
+                            "seg-1": (
+                                "Verified appearances are checked after polishing, "
+                                "then disposable items are handled."
+                            )
+                        }
+                    )
+                ],
+                [],
+            ),
+        )
+    )
+
+    assert result.items[0].text == (
+        "Verified appearances are checked after polishing, "
+        "then disposable items are handled."
+    )
+    assert result.items[0].used_fallback is False
+    assert result.items[0].validation_warnings == ()
+
+
+def test_stage_2_rejects_curated_general_english_antonym_variants(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    item = _item(
+        required_terms=(
+            RequiredGlossaryTerm("0001", "確效", "validate"),
+            RequiredGlossaryTerm("0002", "有效性", "effectiveness"),
+            RequiredGlossaryTerm("0003", "穩定性", "stability"),
+            RequiredGlossaryTerm("0004", "損害", "harm"),
+        ),
+        draft="Validate effectiveness, stability, and harm.",
+    )
+
+    result = asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [item],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(
+                ['{"seg-1": "Invalid, ineffective, unstable, and harmless results are listed."}'],
+                [],
+            ),
+        )
+    )
+
+    assert result.items[0].text == "Validate effectiveness, stability, and harm."
+    assert result.items[0].used_fallback is True
+    assert result.items[0].validation_warnings == (
+        "missing_required_glossary_term:validate",
+        "missing_required_glossary_term:effectiveness",
+        "missing_required_glossary_term:stability",
+        "missing_required_glossary_term:harm",
+    )
+
+
+def test_stage_2_falls_back_when_required_glossary_variant_is_not_whitelisted(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    item = _item(
+        required_terms=(RequiredGlossaryTerm("0001", "標準化", "standardization"),),
+        draft="The standardization process is defined.",
+    )
+
+    result = asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [item],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(
+                ['{"seg-1": "The unified process is defined."}'],
+                [],
+            ),
+        )
+    )
+
+    assert result.items[0].text == "The standardization process is defined."
+    assert result.items[0].used_fallback is True
+    assert result.items[0].fallback_reason == "missing_required_glossary_term:standardization"
+    assert result.items[0].validation_warnings == ("missing_required_glossary_term:standardization",)
+
+
+def test_stage_2_does_not_accept_variants_for_strict_required_glossary_terms(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    item = _item(
+        required_terms=(
+            RequiredGlossaryTerm("0001", "產品包裝作業管制程序", "Product packaging control procedure"),
+            RequiredGlossaryTerm("0002", "新竹廠生產部", "HC Production Division"),
+            RequiredGlossaryTerm("0003", "號碼", "No."),
+            RequiredGlossaryTerm("0004", "修訂版次", "Rev. #"),
+        ),
+        draft=(
+            "Product packaging control procedure, HC Production Division, "
+            "No., and Rev. # are listed."
+        ),
+    )
+
+    result = asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [item],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(
+                [
+                    json.dumps(
+                        {
+                            "seg-1": (
+                                "Packaging procedure, HC Production Dept., "
+                                "Number, and Revision are listed."
+                            )
+                        }
+                    )
+                ],
+                [],
+            ),
+        )
+    )
+
+    assert result.items[0].text == (
+        "Product packaging control procedure, HC Production Division, "
+        "No., and Rev. # are listed."
+    )
+    assert result.items[0].used_fallback is True
+    assert result.items[0].validation_warnings == (
+        "missing_required_glossary_term:Product packaging control procedure",
+        "missing_required_glossary_term:HC Production Division",
+        "missing_required_glossary_term:No.",
+        "missing_required_glossary_term:Rev. #",
+    )
+
+
 def test_stage_2_accepts_required_glossary_term_parenthesis_spacing(monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
     item = _item(
