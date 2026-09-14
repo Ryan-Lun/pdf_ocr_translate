@@ -461,6 +461,69 @@ def test_word_translation_stage_2_revises_llm_batch_output(tmp_path, monkeypatch
     assert captured_items[0].protected_texts == ("ABC-123", "10 mm")
 
 
+def test_word_translation_stage_2_artifact_records_accepted_glossary_variants(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [("標準化", "standardization")],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["The standardization process is defined."]),
+    )
+
+    async def fake_post_edit(items, **kwargs):
+        item_tuple = tuple(items)
+        return translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(
+                translation_post_edit.PostEditResultItem(
+                    item_tuple[0].id,
+                    "Standardizing operations is required.",
+                    stage_2_text="Standardizing operations is required.",
+                    accepted_glossary_variants=(
+                        translation_post_edit.AcceptedGlossaryVariant(
+                            approved_term="standardization",
+                            matched_variant="standardizing",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.services.word_translate.translation_post_edit.post_edit_texts_batch",
+        fake_post_edit,
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("標準化流程。")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            debug_job_dir=tmp_path,
+        )
+    )
+
+    artifact = json.loads((tmp_path / "word_stage_2_post_edit.json").read_text(encoding="utf-8"))
+    assert artifact["items"][0]["accepted_glossary_variants"] == [
+        {
+            "approved_term": "standardization",
+            "matched_variant": "standardizing",
+        }
+    ]
+    assert artifact["items"][0]["validation_warnings"] == []
+
+
 def test_word_translation_stage_2_revises_bilingual_below_llm_output(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
     monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)

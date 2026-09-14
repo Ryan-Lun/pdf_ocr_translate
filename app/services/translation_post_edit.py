@@ -28,7 +28,7 @@ Follow these priorities in order:
 
 1. Preserve the exact meaning of the source.
 2. Preserve technical information, component names, factual values, and semantic relationships.
-3. Preserve Required Glossary Terms exactly as supplied.
+3. Preserve Required Glossary Terms exactly as supplied, except for explicitly listed Required Glossary Variants used only when grammatically necessary.
 4. Preserve Exact Protected Content and mask tokens exactly as supplied.
 5. Preserve the source's degree of obligation, certainty, permission, and prohibition, including must / should / may.
 6. Improve naturalness, English collocation, and professional readability.
@@ -62,7 +62,7 @@ Do not:
 * change the subject or actor
 * change conditions, requirements, exceptions, scope, or logical relationships
 * weaken or strengthen obligation, permission, prohibition, certainty, or commitment
-* replace Required Glossary Terms with synonyms
+* replace Required Glossary Terms with synonyms or unlisted variants
 * change Exact Protected Content or mask tokens
 * rewrite wording that is already natural merely for stylistic variety
 
@@ -73,7 +73,7 @@ Check the revised English for obvious spelling errors.
 Correct clear spelling mistakes in ordinary English words.
 
 Do not alter:
-* Required Glossary Terms
+* Required Glossary Terms, except explicitly listed Required Glossary Variants used only when grammatically necessary
 * Exact Protected Content
 * mask tokens
 * technical terms
@@ -104,6 +104,18 @@ class PostEditItem:
 
 
 @dataclass(frozen=True)
+class AcceptedGlossaryVariant:
+    approved_term: str
+    matched_variant: str
+
+
+@dataclass(frozen=True)
+class PostEditValidationResult:
+    warnings: tuple[str, ...] = ()
+    accepted_glossary_variants: tuple[AcceptedGlossaryVariant, ...] = ()
+
+
+@dataclass(frozen=True)
 class PostEditResultItem:
     id: str
     text: str
@@ -111,6 +123,7 @@ class PostEditResultItem:
     fallback_reason: str | None = None
     stage_2_text: str | None = None
     validation_warnings: tuple[str, ...] = ()
+    accepted_glossary_variants: tuple[AcceptedGlossaryVariant, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -155,6 +168,7 @@ _REQUIRED_GLOSSARY_VARIANTS = {
     "contents": ("content",),
     "decommissioning": ("decommission", "decommissions", "decommissioned"),
     "destructive": ("destroy", "destroys", "destroyed", "destroying", "destruction", "destructively"),
+    "definition": ("define", "defines", "defined", "defining", "definitions", "definable"),
     "director": ("directors",),
     "disposal": ("dispose", "disposes", "disposed", "disposing", "disposable"),
     "effectiveness": ("effect", "effects", "effective", "effectively"),
@@ -184,6 +198,40 @@ _REQUIRED_GLOSSARY_VARIANTS = {
     "vehicle": ("vehicles",),
     "verify": ("verifies", "verified", "verifying", "verification", "verifiable"),
 }
+
+
+def _format_required_glossary_variants_for_prompt() -> str:
+    return "\n".join(
+        f"* {approved_term}: {', '.join(variants)}"
+        for approved_term, variants in sorted(_REQUIRED_GLOSSARY_VARIANTS.items())
+        if variants
+    )
+
+
+_REQUIRED_GLOSSARY_VARIANT_BOUNDARY_PROMPT = f"""
+# Required Glossary Variants
+
+Required Glossary Variants are controlled inflection forms of Required Glossary Terms.
+
+The following first-phase allowed variants are the only Required Glossary Variants that may be used during Stage 2:
+
+{_format_required_glossary_variants_for_prompt()}
+
+Rules:
+
+* Use an allowed variant only when grammatically necessary for natural target-language syntax.
+* Required Glossary Variants are not synonyms, free rewrites, or glossary overrides.
+* Do not invent variants that are not explicitly listed above.
+* Do not use a listed variant to change the source meaning, technical information, glossary governance, component names, factual values, logical relationships, or semantic force.
+* Keep the variant in the same approved lexical family as the Required Glossary Term.
+* If the approved Required Glossary Term already fits naturally, preserve the supplied term instead of changing it to a variant.
+* Variant handling applies only to Required Glossary Terms; do not change Exact Protected Content, mask tokens, product names, model numbers, document codes, URLs, email addresses, or user-defined do-not-translate text.
+""".strip()
+
+POST_EDIT_SYSTEM_PROMPT = POST_EDIT_SYSTEM_PROMPT.replace(
+    "\n# Output Contract",
+    f"\n\n{_REQUIRED_GLOSSARY_VARIANT_BOUNDARY_PROMPT}\n\n# Output Contract",
+)
 
 
 def collect_exact_protected_texts(*texts: str) -> tuple[str, ...]:
@@ -349,34 +397,42 @@ def _build_result_item(item: PostEditItem, revised_by_id: Mapping[str, Any]) -> 
             stage_2_text=revised,
         )
 
-    validation_warnings = _validate_revised_text(item, revised)
-    if validation_warnings:
+    validation = _validate_revised_text(item, revised)
+    if validation.warnings:
         return PostEditResultItem(
             item.id,
             item.draft_text,
             used_fallback=True,
-            fallback_reason=validation_warnings[0],
+            fallback_reason=validation.warnings[0],
             stage_2_text=revised,
-            validation_warnings=validation_warnings,
+            validation_warnings=validation.warnings,
         )
-    return PostEditResultItem(item.id, revised, stage_2_text=revised)
+    return PostEditResultItem(
+        item.id,
+        revised,
+        stage_2_text=revised,
+        accepted_glossary_variants=validation.accepted_glossary_variants,
+    )
 
 
-def _validate_revised_text(item: PostEditItem, revised: str) -> tuple[str, ...]:
+def _validate_revised_text(item: PostEditItem, revised: str) -> PostEditValidationResult:
     warnings: list[str] = []
+    accepted_variants: list[AcceptedGlossaryVariant] = []
     required_counts: dict[str, int] = {}
     for term in item.required_terms:
         if term.target:
             required_counts[term.target] = required_counts.get(term.target, 0) + 1
     normalized_revised = _normalize_required_glossary_match_text(revised)
     for target, expected_count in required_counts.items():
-        actual_count = _required_glossary_term_match_count(
+        match_result = _required_glossary_term_match_result(
             normalized_revised,
             target,
             allow_stage_2_variants=True,
         )
-        if actual_count < expected_count:
+        if match_result.count < expected_count:
             warnings.append(f"missing_required_glossary_term:{target}")
+        else:
+            accepted_variants.extend(match_result.accepted_glossary_variants)
 
     for protected_text in item.protected_texts:
         expected_count = _expected_protected_text_count(item, protected_text)
@@ -390,7 +446,16 @@ def _validate_revised_text(item: PostEditItem, revised: str) -> tuple[str, ...]:
         if not _contains_force_marker(revised, force_term):
             warnings.append(f"semantic_force_changed:{force_term.replace(' ', '_')}")
 
-    return tuple(warnings)
+    return PostEditValidationResult(
+        warnings=tuple(warnings),
+        accepted_glossary_variants=tuple(_unique_accepted_glossary_variants(accepted_variants)),
+    )
+
+
+@dataclass(frozen=True)
+class _RequiredGlossaryMatchResult:
+    count: int
+    accepted_glossary_variants: tuple[AcceptedGlossaryVariant, ...] = ()
 
 
 def _required_glossary_term_match_count(
@@ -399,14 +464,59 @@ def _required_glossary_term_match_count(
     *,
     allow_stage_2_variants: bool,
 ) -> int:
+    return _required_glossary_term_match_result(
+        normalized_text,
+        target,
+        allow_stage_2_variants=allow_stage_2_variants,
+    ).count
+
+
+def _required_glossary_term_match_result(
+    normalized_text: str,
+    target: str,
+    *,
+    allow_stage_2_variants: bool,
+) -> _RequiredGlossaryMatchResult:
     normalized_target = _normalize_required_glossary_match_text(target)
     if not normalized_target:
-        return 0
+        return _RequiredGlossaryMatchResult(0)
+
     exact_count = _required_glossary_exact_match_count(normalized_text, normalized_target)
-    if exact_count or not allow_stage_2_variants:
-        return exact_count
-    variants = _required_glossary_variants_for_target(normalized_target)
-    return sum(_whole_word_count(normalized_text, variant) for variant in variants)
+    if not allow_stage_2_variants:
+        return _RequiredGlossaryMatchResult(exact_count)
+
+    accepted_variants: list[AcceptedGlossaryVariant] = []
+    variant_count = 0
+    for variant in _required_glossary_variants_for_target(normalized_target):
+        count = _whole_word_count(normalized_text, variant)
+        if count <= 0:
+            continue
+        variant_count += count
+        accepted_variants.append(
+            AcceptedGlossaryVariant(
+                approved_term=target,
+                matched_variant=variant,
+            )
+        )
+
+    return _RequiredGlossaryMatchResult(
+        exact_count + variant_count,
+        tuple(_unique_accepted_glossary_variants(accepted_variants)),
+    )
+
+
+def _unique_accepted_glossary_variants(
+    variants: Iterable[AcceptedGlossaryVariant],
+) -> tuple[AcceptedGlossaryVariant, ...]:
+    seen: set[tuple[str, str]] = set()
+    unique: list[AcceptedGlossaryVariant] = []
+    for variant in variants:
+        key = (variant.approved_term, variant.matched_variant)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(variant)
+    return tuple(unique)
 
 
 def _required_glossary_exact_match_count(normalized_text: str, normalized_target: str) -> int:
@@ -572,7 +682,7 @@ def _build_artifact_item(
 ) -> dict[str, Any]:
     stage_1_draft = item.draft_text if item is not None else ""
     stage_2_revised = result_item.stage_2_text if result_item.stage_2_text is not None else result_item.text
-    return {
+    artifact_item = {
         "id": result_item.id,
         "source_text": item.source_text if item is not None else "",
         "stage_1_draft": stage_1_draft,
@@ -583,3 +693,12 @@ def _build_artifact_item(
         "fallback_reason": result_item.fallback_reason,
         "validation_warnings": list(result_item.validation_warnings),
     }
+    if result_item.accepted_glossary_variants:
+        artifact_item["accepted_glossary_variants"] = [
+            {
+                "approved_term": variant.approved_term,
+                "matched_variant": variant.matched_variant,
+            }
+            for variant in result_item.accepted_glossary_variants
+        ]
+    return artifact_item
