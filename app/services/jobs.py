@@ -424,6 +424,8 @@ def set_job_state(
     if extra_meta:
         meta.update(_without_none(extra_meta))
     if status == "completed":
+        meta.pop("error", None)
+        meta.pop("failed_at", None)
         meta.pop("last_warning", None)
         meta.pop("last_warning_at", None)
 
@@ -431,6 +433,8 @@ def set_job_state(
     if extra_meta:
         payload.update(_without_none(extra_meta))
     if status == "completed":
+        payload.pop("error", None)
+        payload.pop("failed_at", None)
         payload.pop("last_warning", None)
         payload.pop("last_warning_at", None)
 

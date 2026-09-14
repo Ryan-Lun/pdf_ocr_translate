@@ -69,6 +69,59 @@ def test_set_job_state_updates_sql_before_snapshot_failure(app, tmp_path, monkey
         _delete_job(job_id)
 
 
+def test_completed_job_state_clears_stale_error_metadata(app, tmp_path):
+    job_id = _job_id()
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    jobs.write_job_meta(
+        job_dir,
+        {
+            "job_type": "word_translate",
+            "job_name": "completed-after-retry",
+            "progress": 20.0,
+        },
+    )
+    job_store.create_job(
+        job_id=job_id,
+        job_type="word_translate",
+        stage="translate",
+        status="running",
+        progress=20.0,
+        job_name="completed-after-retry",
+    )
+
+    try:
+        failed_at = jobs.fail_job(
+            job_dir,
+            stage="failed",
+            error_message="Word translation failed because a glossary term was missing.",
+            completed_at=100.0,
+        )
+        failed_meta = jobs.load_job_meta(job_dir) or {}
+        assert failed_meta["error"] == "Word translation failed because a glossary term was missing."
+        assert failed_meta["failed_at"] == failed_at
+
+        jobs.set_job_state(
+            job_dir,
+            status="completed",
+            stage="completed",
+            progress=100.0,
+            completed_at=200.0,
+            extra_meta={"translate_completed_at": 200.0},
+        )
+
+        completed_meta = jobs.load_job_meta(job_dir) or {}
+        assert completed_meta["word_stage"] == "completed"
+        assert "error" not in completed_meta
+        assert "failed_at" not in completed_meta
+
+        record = job_store.get_job(job_id)
+        assert record.status == "completed"
+        assert record.error_message is None
+    finally:
+        _delete_job(job_id)
+
+
 def test_build_jobs_list_prefers_sql_state_over_stale_snapshot(app, tmp_path, monkeypatch):
     job_id = _job_id()
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path)

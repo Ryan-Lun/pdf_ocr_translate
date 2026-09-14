@@ -4,7 +4,7 @@ import asyncio
 import json
 
 from app.config import BaseConfig
-from app.services import state, translation_post_edit
+from app.services import state, translation_post_edit, word_translate
 from app.services.glossary import RequiredGlossaryTerm
 
 
@@ -131,6 +131,37 @@ def test_stage_2_uses_source_and_draft_and_returns_revised_json(monkeypatch):
     assert "rewrite wording that is already natural merely for stylistic variety" in system_prompt
     assert "<ORIGINAL_SOURCE>" in user_payload
     assert "<STAGE_1_DRAFT_TRANSLATION>" in user_payload
+
+
+def test_stage_2_prompt_defines_required_glossary_variant_boundary(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    requests: list[dict] = []
+
+    asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [_item(draft="The standardization process is defined.")],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(
+                ['{"seg-1": "The standardization process is defined."}'],
+                requests,
+            ),
+        )
+    )
+
+    system_prompt = requests[0]["messages"][0]["content"]
+    assert "Required Glossary Variants" in system_prompt
+    assert "standardization: standard, standards, standardize, standardizes, standardized, standardizing" in system_prompt
+    assert "definition: define, defines, defined, defining, definitions, definable" in system_prompt
+    assert "only when grammatically necessary" in system_prompt
+    assert "not synonyms, free rewrites, or glossary overrides" in system_prompt
+    assert "do not change Exact Protected Content" in system_prompt
+
+
+def test_stage_2_variant_prompt_does_not_change_stage_1_prompt():
+    stage_1_prompt = word_translate.build_word_system_prompt_with_source("zh", "en")
+
+    assert "Required Glossary Variants" not in stage_1_prompt
+    assert "standardization: standard, standards, standardize" not in stage_1_prompt
 
 
 def test_stage_2_accepts_unchanged_natural_draft(monkeypatch):
@@ -307,6 +338,103 @@ def test_stage_2_rejects_curated_general_english_antonym_variants(monkeypatch):
         "missing_required_glossary_term:stability",
         "missing_required_glossary_term:harm",
     )
+
+
+def test_stage_2_result_records_accepted_required_glossary_variants(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    item = _item(
+        required_terms=(RequiredGlossaryTerm("0001", "標準化", "standardization"),),
+        draft="The standardization process is defined.",
+    )
+
+    result = asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [item],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(
+                ['{"seg-1": "Standardizing operations is required."}'],
+                [],
+            ),
+        )
+    )
+
+    assert result.items[0].text == "Standardizing operations is required."
+    assert result.items[0].used_fallback is False
+    assert result.items[0].validation_warnings == ()
+    assert result.items[0].accepted_glossary_variants == (
+        translation_post_edit.AcceptedGlossaryVariant(
+            approved_term="standardization",
+            matched_variant="standardizing",
+        ),
+    )
+
+
+def test_stage_2_accepts_capitalized_required_glossary_variant(monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True, raising=False)
+    item = _item(
+        required_terms=(RequiredGlossaryTerm("0001", "定義", "Definition"),),
+        draft="Purpose: To Definition the operational workflow.",
+    )
+
+    result = asyncio.run(
+        translation_post_edit.post_edit_texts_batch(
+            [item],
+            target_lang="en",
+            client_factory=lambda: _AsyncClient(
+                ['{"seg-1": "Purpose: To define the operational workflow."}'],
+                [],
+            ),
+        )
+    )
+
+    assert result.items[0].text == "Purpose: To define the operational workflow."
+    assert result.items[0].used_fallback is False
+    assert result.items[0].validation_warnings == ()
+    assert result.items[0].accepted_glossary_variants == (
+        translation_post_edit.AcceptedGlossaryVariant(
+            approved_term="Definition",
+            matched_variant="define",
+        ),
+    )
+
+
+def test_stage_2_artifact_serializes_accepted_required_glossary_variants(tmp_path):
+    item = _item(
+        required_terms=(RequiredGlossaryTerm("0001", "標準化", "standardization"),),
+        draft="The standardization process is defined.",
+    )
+    result = translation_post_edit.PostEditBatchResult(
+        enabled=True,
+        items=(
+            translation_post_edit.PostEditResultItem(
+                "seg-1",
+                "Standardizing operations is required.",
+                stage_2_text="Standardizing operations is required.",
+                accepted_glossary_variants=(
+                    translation_post_edit.AcceptedGlossaryVariant(
+                        approved_term="standardization",
+                        matched_variant="standardizing",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    artifact_path = translation_post_edit.write_post_edit_artifact(
+        tmp_path,
+        [item],
+        result,
+        filename="word_stage_2_post_edit.json",
+    )
+
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert artifact["items"][0]["accepted_glossary_variants"] == [
+        {
+            "approved_term": "standardization",
+            "matched_variant": "standardizing",
+        }
+    ]
+    assert artifact["items"][0]["validation_warnings"] == []
 
 
 def test_stage_2_falls_back_when_required_glossary_variant_is_not_whitelisted(monkeypatch):
