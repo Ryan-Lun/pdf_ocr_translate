@@ -956,20 +956,23 @@ def test_word_translation_writes_final_and_writeback_artifacts(tmp_path, monkeyp
     }
     assert writeback_artifact["items"] == [
         {
+            "writeback_id": "writeback_0001",
             "writeback_index": 1,
             "id": "item_0001",
-            "location": "body_or_table",
+            "location": "body",
             "layout_mode": "bilingual_below",
             "source_text": "來源文字",
             "core_text": "來源文字",
             "prefix": "",
             "applied_translation": "Stage 2 final.",
             "translated_core_text": "Stage 2 final.",
+            "final_source": "stage_2",
         }
     ]
     assert not (tmp_path / "output" / "word_stage_1_translations.json").exists()
     assert not (tmp_path / "output" / "word_final_translations.json").exists()
-    assert json.loads((tmp_path / "output" / "word_writeback_map.json").read_text(encoding="utf-8")) == writeback_artifact
+    assert not (tmp_path / "output" / "word_writeback_map.json").exists()
+    assert writeback_artifact["discarded_items"] == []
     assert [paragraph.text for paragraph in docx.Document(output_path).paragraphs] == [
         "來源文字",
         writeback_artifact["items"][0]["applied_translation"],
@@ -1082,6 +1085,49 @@ def test_word_final_artifact_records_tm_exact_provenance(app, tmp_path, monkeypa
         }
     ]
     assert json.loads((tmp_path / "word_stage_1_translations.json").read_text(encoding="utf-8")) == {"items": []}
+
+
+def test_word_writeback_map_records_repeated_source_text_writebacks(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Repeated translation."]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("重複文字")
+    source_doc.add_paragraph("重複文字")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator(post_edit_enabled=False)
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            debug_job_dir=tmp_path,
+        )
+    )
+
+    writeback_artifact = json.loads((tmp_path / "word_writeback_map.json").read_text(encoding="utf-8"))
+    assert [item["writeback_id"] for item in writeback_artifact["items"]] == [
+        "writeback_0001",
+        "writeback_0002",
+    ]
+    assert [item["id"] for item in writeback_artifact["items"]] == ["item_0001", "item_0001"]
+    assert [item["applied_translation"] for item in writeback_artifact["items"]] == [
+        "Repeated translation.",
+        "Repeated translation.",
+    ]
+    assert writeback_artifact["discarded_items"] == []
 
 
 def test_word_translation_stage_2_fallback_keeps_stage_1_output(tmp_path, monkeypatch):
@@ -1939,8 +1985,42 @@ def test_word_translation_bilingual_below_uses_fixed_header_footer_terms_without
         "頁次：",
         "Page：",
     ]
+    final_artifact = json.loads((tmp_path / "word_final_translations.json").read_text(encoding="utf-8"))
+    writeback_artifact = json.loads((tmp_path / "word_writeback_map.json").read_text(encoding="utf-8"))
+    assert final_artifact["items"] == [
+        {
+            "id": "fixed_header_footer_0001",
+            "source_text": "號碼",
+            "final_translation": "No.",
+            "final_source": "fixed_header_footer",
+            "fallback_reason": None,
+            "post_process_actions": [],
+        },
+        {
+            "id": "fixed_header_footer_0002",
+            "source_text": "頁次：",
+            "final_translation": "Page：",
+            "final_source": "fixed_header_footer",
+            "fallback_reason": None,
+            "post_process_actions": [],
+        },
+    ]
+    assert [item["location"] for item in writeback_artifact["items"]] == ["header_table", "header_table"]
+    assert [item["id"] for item in writeback_artifact["items"]] == [
+        "fixed_header_footer_0001",
+        "fixed_header_footer_0002",
+    ]
+    assert [item["writeback_id"] for item in writeback_artifact["items"]] == [
+        "writeback_0001",
+        "writeback_0002",
+    ]
+    assert [item["final_source"] for item in writeback_artifact["items"]] == [
+        "fixed_header_footer",
+        "fixed_header_footer",
+    ]
+    assert writeback_artifact["discarded_items"] == []
+    assert not (tmp_path / "output" / "word_writeback_map.json").exists()
     assert calls == []
-
 
 
 def test_word_translation_bilingual_below_uses_fixed_header_footer_term_split_by_line_break_without_llm(tmp_path, monkeypatch):

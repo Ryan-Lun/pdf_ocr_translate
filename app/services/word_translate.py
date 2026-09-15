@@ -126,6 +126,7 @@ def _write_word_final_translations_artifact(
     item_ids: dict[str, str],
     translations: dict[str, str],
     provenance: dict[str, dict[str, Any]],
+    extra_rows: Iterable[dict[str, Any]] | None = None,
 ) -> None:
     rows = []
     for source_text in item_ids:
@@ -142,6 +143,8 @@ def _write_word_final_translations_artifact(
                 "post_process_actions": list(item_provenance.get("post_process_actions") or []),
             }
         )
+    if extra_rows:
+        rows.extend(extra_rows)
     _write_word_json_artifact(
         job_dir,
         WORD_FINAL_TRANSLATIONS_ARTIFACT,
@@ -149,12 +152,16 @@ def _write_word_final_translations_artifact(
     )
 
 
-def _write_word_writeback_map_artifact(job_dir: Path, rows: list[dict[str, Any]]) -> None:
+def _write_word_writeback_map_artifact(
+    job_dir: Path,
+    rows: list[dict[str, Any]],
+    *,
+    discarded_items: list[dict[str, Any]] | None = None,
+) -> None:
     _write_word_json_artifact(
         job_dir,
         WORD_WRITEBACK_MAP_ARTIFACT,
-        {"items": rows},
-        mirror_to_output=True,
+        {"items": rows, "discarded_items": discarded_items or []},
     )
 
 
@@ -912,6 +919,34 @@ def ensure_docx_source(source_path: Path, converted_path: Path | None = None) ->
 
     message = "; ".join(errors) if errors else "no available converter"
     raise RuntimeError(f"Unable to convert .doc to .docx: {message}")
+
+
+def _paragraph_location_map(doc: Document) -> dict[int, str]:
+    locations: dict[int, str] = {}
+
+    def remember(paragraphs: Iterable[Paragraph], location: str) -> None:
+        for paragraph in paragraphs:
+            locations.setdefault(id(paragraph._p), location)
+
+    def table_paragraphs(tables: Iterable[Any]) -> list[Paragraph]:
+        paragraphs: list[Paragraph] = []
+        for table in tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    paragraphs.extend(cell.paragraphs)
+                    paragraphs.extend(table_paragraphs(cell.tables))
+        return paragraphs
+
+    remember(doc.paragraphs, "body")
+    remember(table_paragraphs(doc.tables), "table")
+    for section in doc.sections:
+        for header in (section.header, section.first_page_header, section.even_page_header):
+            remember(header.paragraphs, "header")
+            remember(table_paragraphs(header.tables), "header_table")
+        for footer in (section.footer, section.first_page_footer, section.even_page_footer):
+            remember(footer.paragraphs, "footer")
+            remember(table_paragraphs(footer.tables), "footer_table")
+    return locations
 
 
 class EnhancedWordTranslator:
@@ -2106,6 +2141,7 @@ class EnhancedWordTranslator:
             translate_tables=translate_tables,
             excluded_table_indices=excluded_table_indices,
         )
+        paragraph_locations = _paragraph_location_map(doc)
         header_footer_paragraph_ids = self.header_footer_paragraph_ids(doc)
         if debug_job_dir is None:
             debug_job_dir = output_path.parent.parent if output_path.parent.name == "output" else output_path.parent
@@ -2188,6 +2224,11 @@ class EnhancedWordTranslator:
             text: f"item_{index:04d}"
             for index, text in enumerate(unique_texts, start=1)
         }
+        fixed_header_footer_item_ids: dict[int, str] = {}
+        for paragraph in translatable_paragraphs:
+            paragraph_id = id(paragraph._p)
+            if paragraph_id in fixed_header_footer_translations and paragraph_id not in fixed_header_footer_item_ids:
+                fixed_header_footer_item_ids[paragraph_id] = f"fixed_header_footer_{len(fixed_header_footer_item_ids) + 1:04d}"
         texts_for_llm: list[str] = []
         for text in unique_texts:
             tm_result = _retrieve_word_translation_memory(
@@ -2296,6 +2337,22 @@ class EnhancedWordTranslator:
         if cancel_event is not None and cancel_event.is_set():
             raise WordTranslationCancelled("Word translation cancelled.")
 
+        fixed_header_footer_final_rows: list[dict[str, Any]] = []
+        for paragraph in translatable_paragraphs:
+            paragraph_id = id(paragraph._p)
+            if paragraph_id not in fixed_header_footer_translations:
+                continue
+            fixed_header_footer_final_rows.append(
+                {
+                    "id": fixed_header_footer_item_ids.get(paragraph_id, ""),
+                    "source_text": paragraph.text,
+                    "final_translation": fixed_header_footer_translations[paragraph_id],
+                    "final_source": "fixed_header_footer",
+                    "fallback_reason": None,
+                    "post_process_actions": [],
+                }
+            )
+
         if debug_job_dir is not None:
             _write_word_stage_1_translations_artifact(debug_job_dir, stage_1_artifact_rows)
             _write_word_final_translations_artifact(
@@ -2303,9 +2360,11 @@ class EnhancedWordTranslator:
                 item_ids=item_ids,
                 translations=translated_cache,
                 provenance=final_provenance,
+                extra_rows=fixed_header_footer_final_rows,
             )
 
         writeback_rows: list[dict[str, Any]] = []
+        written_item_ids: set[str] = set()
         writeback_index = 0
         for paragraph in translatable_paragraphs:
             if self.is_table_of_contents_paragraph(paragraph):
@@ -2325,7 +2384,9 @@ class EnhancedWordTranslator:
             prefix = match.group(0) if match else ""
             core_text = original_text[len(prefix) :] if match else original_text
             paragraph_id = id(paragraph._p)
+            fixed_header_footer_translation = paragraph_id in fixed_header_footer_translations
             translated_core_text = fixed_header_footer_translations.get(paragraph_id)
+            item_id = fixed_header_footer_item_ids.get(paragraph_id, item_ids.get(core_text, ""))
             if translated_core_text is None:
                 translated_core_text = translated_cache.get(core_text)
             if translated_core_text is None:
@@ -2347,17 +2408,21 @@ class EnhancedWordTranslator:
                 else final_text
             )
             writeback_index += 1
+            writeback_id = f"writeback_{writeback_index:04d}"
+            written_item_ids.add(item_id)
             writeback_rows.append(
                 {
+                    "writeback_id": writeback_id,
                     "writeback_index": writeback_index,
-                    "id": item_ids.get(core_text, ""),
-                    "location": "header_footer" if is_header_footer_paragraph else "body_or_table",
+                    "id": item_id,
+                    "location": paragraph_locations.get(paragraph_id, "header" if is_header_footer_paragraph else "body"),
                     "layout_mode": effective_layout_mode,
                     "source_text": original_text,
                     "core_text": core_text,
                     "prefix": prefix,
                     "applied_translation": output_text,
                     "translated_core_text": translated_core_text,
+                    "final_source": "fixed_header_footer" if fixed_header_footer_translation else final_provenance.get(core_text, {}).get("final_source", "stage_1"),
                 }
             )
             self.apply_paragraph_translation(
@@ -2368,8 +2433,33 @@ class EnhancedWordTranslator:
                 translation_font_size_pt=header_footer_font_size_pt if is_header_footer_paragraph else None,
             )
 
+        discarded_items: list[dict[str, Any]] = []
+        for source_text, item_id in item_ids.items():
+            if item_id in written_item_ids:
+                continue
+            reason = "not_in_final_cache" if source_text not in translated_cache else "not_written"
+            discarded_items.append(
+                {
+                    "id": item_id,
+                    "source_text": source_text,
+                    "drop_reason": reason,
+                    "final_source": final_provenance.get(source_text, {}).get("final_source"),
+                }
+            )
+        for paragraph_id, item_id in fixed_header_footer_item_ids.items():
+            if item_id in written_item_ids:
+                continue
+            discarded_items.append(
+                {
+                    "id": item_id,
+                    "source_text": "",
+                    "drop_reason": "fixed_header_footer_superseded",
+                    "final_source": "fixed_header_footer",
+                }
+            )
+
         if debug_job_dir is not None:
-            _write_word_writeback_map_artifact(debug_job_dir, writeback_rows)
+            _write_word_writeback_map_artifact(debug_job_dir, writeback_rows, discarded_items=discarded_items)
             glossary.write_required_glossary_hits_artifact(
                 debug_job_dir,
                 glossary_hit_collector,
