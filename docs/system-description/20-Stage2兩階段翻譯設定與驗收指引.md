@@ -86,6 +86,8 @@ Stage 2 的輸入包含 original source、Stage 1 draft、Required Glossary Term
 | PDF 原版面 batch 翻譯 | Azure batch 結果解析後、合併到 PDF editor payload 前 | `pdf_batch_stage_2_post_edit.json` |
 | PDF 重建 / Markdown 翻譯 | Markdown/HTML text node 翻譯後、寫入輸出前 | `pdf_markdown_stage_2_post_edit.json` |
 
+上表列的是 Stage 2 post-edit debug artifact。Word job 的人工除錯第一入口是 `word_translation_lifecycle.json`，不是 `word_stage_2_post_edit.json`。
+
 Quick 模式是否套用 Stage 2 另由獨立 issue 評估，尚未列入本指引的正式 production 驗收。
 
 ## Translation Memory 關係
@@ -100,11 +102,19 @@ Stage 2 輸出不會自動寫入 Translation Memory。TM 仍需人工確認或�
 
 ## Artifact 位置
 
-Word job 完成後檢查：
+Word job 完成後，人工除錯應先檢查 lifecycle artifact：
+
+```text
+out/word_overlay/<job_id>/word_translation_lifecycle.json
+```
+
+`word_translation_lifecycle.json` 會串起同一個 item id 的 Stage 1、Stage 2、final translation、writeback、Translation Memory、Glossary、fixed header/footer、post-process actions 與 discarded items。若需要追查 Stage 2 本身，再檢查：
 
 ```text
 out/word_overlay/<job_id>/word_stage_2_post_edit.json
 ```
+
+`word_stage_2_post_edit.json` 只是 Stage 2 post-edit debug artifact，不是 Word job 的 final truth。實際寫入 Word 的文字應以 `word_translation_lifecycle.json`、`word_writeback_map.json` 與 `word_final_translations.json` 的對照為準。
 
 PDF 原版面 batch job 完成後檢查：
 
@@ -124,7 +134,7 @@ PDF 重建 / Markdown job 完成後檢查：
 out/jobs/<job_id>/pdf_markdown_stage_2_post_edit.json
 ```
 
-實際 job root 可能依部署設定不同，請以該 job 的 `job_dir` 為準。Artifact 位於 job 目錄根層，不在 `output/` 子目錄內。
+實際 job root 可能依部署設定不同，請以該 job 的 `job_dir` 為準。Canonical debug artifacts 位於 job 目錄根層，不在 `output/` 子目錄內；`output/` 只應視為輸出成品位置，不再作為 debug artifact 鏡像位置。
 
 ## Artifact 欄位
 
@@ -295,9 +305,10 @@ Operators must remove this label.
 
 1. job id 與流程類型：Word、PDF batch 或 PDF Markdown。
 2. `.env` 中 Stage 2 相關設定，但不得貼出 API key。
-3. 對應 artifact 中該 segment 的 `source_text`、`stage_1_draft`、`stage_2_revised`、`final_text`、`used_fallback`、`fallback_reason`、`validation_warnings`。
-4. 若問題是過度改寫，標出哪個 technical information、component name、factual value 或 semantic force 被改變。
-5. 若問題是沒有改善 translationese，提供你認為較自然且仍保留 accuracy 的建議譯文。
+3. Word job 請先附上 `word_translation_lifecycle.json` 中對應 item 的 `id`、`source_text`、`stage_1_translation`、`stage_2`、`final_translation`、`final_source`、`writeback_ids`、`fallback_reason` 與 `post_process_actions`。
+4. 若問題集中在 Stage 2，再附上 `word_stage_2_post_edit.json` 中該 segment 的 `source_text`、`stage_1_draft`、`stage_2_revised`、`final_text`、`used_fallback`、`fallback_reason`、`validation_warnings`。
+5. 若問題是過度改寫，標出哪個 technical information、component name、factual value 或 semantic force 被改變。
+6. 若問題是沒有改善 translationese，提供你認為較自然且仍保留 accuracy 的建議譯文。
 
 ## 失敗判定
 

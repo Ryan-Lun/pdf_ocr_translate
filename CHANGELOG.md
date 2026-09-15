@@ -18,6 +18,24 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.7.1 - 2026-09-15
+
+### Changed
+
+- Word 翻譯 debug artifact 文件改以 `word_translation_lifecycle.json` 作為人工除錯第一入口，並明確區分 Stage 1、Stage 2、final translation 與 writeback provenance。
+- Stage 2 與 Word Local Batch Runner 操作文件補充 canonical artifact 位置：Word debug artifacts 以 job root 為準，`output/` 不再視為 debug artifact 鏡像位置。
+- 新增 ADR-0011，記錄 Word translation lifecycle artifact 的人工除錯入口決策，以及 `word_stage_2_post_edit.json` 不是 final truth 的 trade-off。
+
+### Fixed
+
+- Word Local Batch Runner 建立的 runner-owned job 不再被 worker orphan recovery 重排後重複執行，避免 `output/translation_output` 與 `out/word_overlay/<job_id>` debug artifacts 來自不同執行輪次。
+
+### Validation
+
+- 已執行 `PYTHONPATH=. .venv/bin/pytest -q tests/test_job_store.py::test_recover_orphaned_active_jobs_requeues_running_rows tests/test_job_store.py::test_recover_orphaned_active_jobs_keeps_external_runner_owned_rows tests/test_word_translate.py::test_enqueue_word_job_from_upload_stores_creator_name tests/test_word_translate.py::test_enqueue_word_job_from_upload_can_create_non_queued_runner_job tests/test_word_batch_runner.py::test_synchronous_word_pipeline_executor_passes_expected_job_configuration`，結果為 5 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest -q tests/test_word_batch_runner.py`，結果為 25 passed。
+- 已執行 #98 lifecycle 精準測試組，結果為 7 passed。
+
 ## 0.7.0 - 2026-09-08
 
 ### Added

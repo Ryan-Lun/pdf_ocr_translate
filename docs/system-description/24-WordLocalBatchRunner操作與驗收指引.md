@@ -155,14 +155,22 @@ procedure.doc -> procedure_en.docx
 procedure.docx -> procedure_en.docx
 ```
 
-每個成功或失敗的檔案都有對應 `job_id`。可依 `job_id` 檢查 `out/word_overlay/<job_id>/`，常用檢查項目包含：
+每個成功或失敗的檔案都有對應 `job_id`。可依 `job_id` 檢查 `out/word_overlay/<job_id>/`。人工檢查順序建議如下：
 
-- `output.docx`
+1. `word_translation_lifecycle.json`：第一入口，串起 Stage 1、Stage 2、final、writeback、TM、Glossary、fixed header/footer、post-process actions 與 discarded items。
+2. `word_writeback_map.json`：確認實際寫入 Word 的段落、location、layout mode、writeback id 與 applied translation。
+3. `word_final_translations.json`：確認 final translation、final source、fallback reason 與 post-process actions。
+4. `word_stage_1_translations.json` / `word_stage_2_post_edit.json`：需要追查 LLM draft 或 Stage 2 validation 時再看。`word_stage_2_post_edit.json` 不是 final truth。
+5. `realtime_debug/chunks/*`：需要追查 request / response / parse error 時再看。
+6. job state / metadata 檔案：確認 job setting、glossary library、模型、時間與狀態。
+
+其他常用檢查項目包含：
+
+- `output/output.docx`
 - `source.doc` 或 `source.docx`
 - `*.converted.docx`
-- `word_stage_2_post_edit.json`
-- `realtime_debug/chunks/*`
-- job state / metadata 檔案
+
+Canonical debug artifacts 只在 job root。`output/` 只放輸出成品與必要 deliverables，不再作為 debug artifact 鏡像位置。
 
 ## 單份樣本人工驗收清單
 
@@ -176,7 +184,9 @@ procedure.docx -> procedure_en.docx
 - 確認章節編號如 `3.1`、`(1)`、`A.` 不會在譯文段落中重複或接續編號。
 - 確認 Department Glossary 指定術語有被套用，且沒有被 Stage 2 改成 synonym 或拼錯。
 - 確認地端模型沒有產生中文夾雜、空白異常、錯字或明顯 hallucination。
-- 確認 `word_stage_2_post_edit.json` 中 `stage_1_draft`、`stage_2_revised`、`fallback_reason` 與 `validation_warnings` 符合預期。
+- 先用 `word_translation_lifecycle.json` 確認 final translation、final source、writeback ids、TM / Glossary summary 與 discarded items 符合預期。
+- 再用 `word_writeback_map.json` 確認實際寫入 Word 的 `applied_translation` 與輸出 `.docx` 對得起來。
+- 若需要追查 Stage 2，再檢查 `word_stage_2_post_edit.json` 中 `stage_1_draft`、`stage_2_revised`、`fallback_reason` 與 `validation_warnings`；不要把它當成 final truth。
 - 確認 `word_batch_report.json` / `.csv` 的 scanned、planned、skipped、failed 與實際檔案數一致。
 
 ## 失敗處理
