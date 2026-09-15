@@ -364,6 +364,7 @@ def create_job_state(
     document_mode: str | None = None,
     payload: dict[str, Any] | None = None,
     meta: dict[str, Any] | None = None,
+    worker_id: str | None = None,
     started_at: float | None = None,
     completed_at: float | None = None,
 ) -> None:
@@ -379,6 +380,7 @@ def create_job_state(
         target_lang=target_lang,
         document_mode=document_mode,
         payload=payload,
+        worker_id=worker_id,
         started_at=datetime_from_timestamp(started_at),
         completed_at=datetime_from_timestamp(completed_at),
     )

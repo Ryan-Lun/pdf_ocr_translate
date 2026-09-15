@@ -880,6 +880,17 @@ def test_synchronous_word_pipeline_executor_passes_expected_job_configuration(
     input_dir = tmp_path / "input"
     _touch(input_dir / "nested" / "procedure.doc")
     captured: dict[str, object] = {}
+    real_enqueue_word_job_from_upload = word_batch_runner.word_translate.enqueue_word_job_from_upload
+
+    def fake_enqueue_word_job_from_upload(*args, **kwargs):
+        captured["queue_for_worker"] = kwargs.get("queue_for_worker")
+        return real_enqueue_word_job_from_upload(*args, **kwargs)
+
+    monkeypatch.setattr(
+        word_batch_runner.word_translate,
+        "enqueue_word_job_from_upload",
+        fake_enqueue_word_job_from_upload,
+    )
 
     def fake_run_word_translate_job(**kwargs):
         captured.update(kwargs)
@@ -952,6 +963,7 @@ def test_synchronous_word_pipeline_executor_passes_expected_job_configuration(
     assert captured["request_extra_body"] == word_batch_runner.LOCAL_MODEL_DISABLE_THINKING_EXTRA_BODY
     assert captured["request_concurrency_limit"] == word_batch_runner.DEFAULT_WORD_REQUEST_CONCURRENCY
     assert captured["requests_per_minute"] == word_batch_runner.DEFAULT_WORD_REQUESTS_PER_MINUTE
+    assert captured["queue_for_worker"] is False
     assert captured["department_glossary_library_id"] == library.library_id
     assert captured["source_path"].suffix == ".doc"
     assert captured["processing_source_path"].name == "procedure.converted.docx"

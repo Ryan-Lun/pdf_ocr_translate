@@ -69,6 +69,31 @@ def test_recover_orphaned_active_jobs_requeues_running_rows(app):
         _delete_job_if_exists(orphaned_job_id)
 
 
+def test_recover_orphaned_active_jobs_keeps_external_runner_owned_rows(app):
+    runner_job_id = uuid.uuid4().hex
+
+    try:
+        job_store.create_job(
+            job_id=runner_job_id,
+            job_type="word_translate",
+            stage="prepare",
+            status="running",
+            job_name="runner-owned",
+            worker_id="word_batch_runner",
+        )
+
+        recovered = job_store.recover_orphaned_active_jobs()
+        record = job_store.get_job(runner_job_id)
+
+        assert runner_job_id not in recovered
+        assert record is not None
+        assert record.status == "running"
+        assert record.stage == "prepare"
+        assert record.worker_id == "word_batch_runner"
+    finally:
+        _delete_job_if_exists(runner_job_id)
+
+
 def test_recover_orphaned_active_jobs_requeues_dead_local_worker_rows(app, monkeypatch):
     orphaned_job_id = uuid.uuid4().hex
 

@@ -3020,8 +3020,40 @@ def test_enqueue_word_job_from_upload_stores_creator_name(tmp_path, monkeypatch)
     assert meta is not None
     assert meta["creator_name"] == "alice"
     assert "avg_quality" not in meta
+    assert captured["status"] == "queued"
+    assert captured["stage"] == "queued"
+    assert captured["worker_id"] is None
     assert captured["payload"]["creator_name"] == "alice"
+    assert captured["payload"]["queue_for_worker"] is True
     assert "avg_quality" not in captured["payload"]
+
+
+def test_enqueue_word_job_from_upload_can_create_non_queued_runner_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    captured: dict[str, object] = {}
+
+    def fake_create_job(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.create_job", fake_create_job)
+    monkeypatch.setattr("app.services.word_translate.jobs.job_store.register_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.services.word_translate.jobs.notify_jobs_update", lambda: None)
+
+    source_path = tmp_path / "source.docx"
+    source_path.write_bytes(b"docx")
+
+    enqueue_word_job_from_upload(
+        source_path,
+        "sample",
+        "auto",
+        "en",
+        queue_for_worker=False,
+    )
+
+    assert captured["status"] == "running"
+    assert captured["stage"] == "prepare"
+    assert captured["worker_id"] == "word_batch_runner"
+    assert captured["payload"]["queue_for_worker"] is False
 
 
 def test_enqueue_word_job_from_upload_stores_system_prompt(tmp_path, monkeypatch):

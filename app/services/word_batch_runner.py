@@ -212,6 +212,7 @@ class SynchronousWordPipelineExecutor:
             layout_mode=word_layout.BILINGUAL_BELOW,
             translate_tables=item.translate_tables,
             department_glossary_context=_department_glossary_context_from_item(item),
+            queue_for_worker=False,
         )
         job_dir = jobs.job_dir(job_id, job_root=jobs.job_root_for_type("word_translate"))
         source_name = str((jobs.load_job_meta(job_dir) or {}).get("source_filename") or item.input_path.name)

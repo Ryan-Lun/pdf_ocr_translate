@@ -37,6 +37,7 @@ WORD_STAGE_1_TRANSLATIONS_ARTIFACT = "word_stage_1_translations.json"
 WORD_FINAL_TRANSLATIONS_ARTIFACT = "word_final_translations.json"
 WORD_WRITEBACK_MAP_ARTIFACT = "word_writeback_map.json"
 WORD_TRANSLATION_LIFECYCLE_ARTIFACT = "word_translation_lifecycle.json"
+WORD_BATCH_RUNNER_WORKER_ID = "word_batch_runner"
 _WORD_STALE_ARTIFACTS = (
     WORD_STAGE_1_TRANSLATIONS_ARTIFACT,
     WORD_FINAL_TRANSLATIONS_ARTIFACT,
@@ -2942,6 +2943,7 @@ def enqueue_word_job_from_upload(
     layout_mode: str | None = None,
     translate_tables: object = True,
     department_glossary_context: dict[str, object] | None = None,
+    queue_for_worker: bool = True,
 ) -> str:
     job_id = uuid.uuid4().hex
     job_dir = jobs.job_dir(job_id, job_root=jobs.job_root_for_type("word_translate"))
@@ -2995,12 +2997,18 @@ def enqueue_word_job_from_upload(
         "translate_tables": normalized_translate_tables,
         "source_filename": safe_name,
         "processing_started_at": now_ts,
+        "queue_for_worker": bool(queue_for_worker),
         **department_glossary_config,
     }
+    initial_stage = "queued" if queue_for_worker else "prepare"
+    initial_status = "queued" if queue_for_worker else "running"
+    initial_worker_id = None if queue_for_worker else WORD_BATCH_RUNNER_WORKER_ID
     jobs.create_job_state(
         job_dir,
         job_type="word_translate",
-        stage="queued",
+        stage=initial_stage,
+        status=initial_status,
+        worker_id=initial_worker_id,
         job_name=display_name,
         owner_work_id=owner or None,
         target_lang=target_lang,
