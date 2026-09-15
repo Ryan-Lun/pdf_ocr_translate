@@ -889,6 +889,38 @@ def test_write_post_edit_artifact_merges_multiple_batches(tmp_path):
     assert [item["id"] for item in artifact["items"]] == ["a", "b"]
 
 
+def test_write_post_edit_artifact_can_overwrite_existing_batches(tmp_path):
+    first = (
+        _item(item_id="a", source="來源 A", draft="Stage 1 A."),
+    )
+    second = (
+        _item(item_id="b", source="來源 B", draft="Stage 1 B."),
+    )
+
+    translation_post_edit.write_post_edit_artifact(
+        tmp_path,
+        first,
+        translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(translation_post_edit.PostEditResultItem("a", "Stage 2 A.", stage_2_text="Stage 2 A."),),
+        ),
+        filename="stage_2_post_edit.json",
+    )
+    translation_post_edit.write_post_edit_artifact(
+        tmp_path,
+        second,
+        translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(translation_post_edit.PostEditResultItem("b", "Stage 2 B.", stage_2_text="Stage 2 B."),),
+        ),
+        filename="stage_2_post_edit.json",
+        merge_existing=False,
+    )
+
+    artifact = json.loads((tmp_path / "stage_2_post_edit.json").read_text(encoding="utf-8"))
+    assert [item["id"] for item in artifact["items"]] == ["b"]
+
+
 def test_stage_2_settings_are_exposed_to_flask_config():
     assert isinstance(BaseConfig.TRANSLATION_POST_EDIT_ENABLED, bool)
     assert isinstance(BaseConfig.TRANSLATION_POST_EDIT_MODEL, str)

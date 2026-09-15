@@ -33,6 +33,16 @@ WORD_JOB_EVENTS_LOCK = threading.Lock()
 WORD_ALLOWED_EXTENSIONS = {".doc", ".docx"}
 WORD_LAYOUT_REPLACE_ORIGINAL = word_layout.REPLACE_ORIGINAL
 WORD_LAYOUT_BILINGUAL_BELOW = word_layout.BILINGUAL_BELOW
+WORD_FINAL_TRANSLATIONS_ARTIFACT = "word_final_translations.json"
+WORD_WRITEBACK_MAP_ARTIFACT = "word_writeback_map.json"
+_WORD_STALE_ARTIFACTS = (
+    WORD_FINAL_TRANSLATIONS_ARTIFACT,
+    WORD_WRITEBACK_MAP_ARTIFACT,
+    "word_stage_2_post_edit.json",
+    "glossary_hits.json",
+    "tm_matches.json",
+    "tm_references.json",
+)
 _CJK_TEXT_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]")
 
 
@@ -66,6 +76,54 @@ def _repair_cjk_bracket_translations(translations: dict[str, str]) -> dict[str, 
         source_text: _repair_cjk_brackets_from_source(source_text, translated_text)
         for source_text, translated_text in translations.items()
     }
+
+
+def _write_word_json_artifact(job_dir: Path, filename: str, payload: Any) -> None:
+    for path in (job_dir / filename, job_dir / "output" / filename):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _cleanup_word_run_artifacts(job_dir: Path, output_path: Path) -> None:
+    for filename in _WORD_STALE_ARTIFACTS:
+        for path in (job_dir / filename, job_dir / "output" / filename):
+            if path.exists():
+                path.unlink()
+    for path in (job_dir / "realtime_debug", job_dir / "output" / "realtime_debug"):
+        if path.exists():
+            shutil.rmtree(path)
+    if output_path.exists():
+        output_path.unlink()
+
+
+def _write_word_final_translations_artifact(
+    job_dir: Path,
+    *,
+    item_ids: dict[str, str],
+    translations: dict[str, str],
+) -> None:
+    rows = [
+        {
+            "id": item_ids.get(source_text, ""),
+            "source_text": source_text,
+            "final_translation": translations[source_text],
+        }
+        for source_text in item_ids
+        if source_text in translations
+    ]
+    _write_word_json_artifact(
+        job_dir,
+        WORD_FINAL_TRANSLATIONS_ARTIFACT,
+        {"items": rows},
+    )
+
+
+def _write_word_writeback_map_artifact(job_dir: Path, rows: list[dict[str, Any]]) -> None:
+    _write_word_json_artifact(
+        job_dir,
+        WORD_WRITEBACK_MAP_ARTIFACT,
+        {"items": rows},
+    )
 
 
 def normalize_word_layout_mode(value: object) -> str:
@@ -1618,6 +1676,7 @@ class EnhancedWordTranslator:
                         reason=f"post_edit_error:{exc.__class__.__name__}",
                     ),
                     filename="word_stage_2_post_edit.json",
+                    merge_existing=False,
                 )
             return _repair_cjk_bracket_translations(translations)
 
@@ -1627,6 +1686,7 @@ class EnhancedWordTranslator:
                 post_edit_items,
                 post_edit_result,
                 filename="word_stage_2_post_edit.json",
+                merge_existing=False,
             )
 
         revised = dict(translations)
@@ -2100,6 +2160,15 @@ class EnhancedWordTranslator:
         if cancel_event is not None and cancel_event.is_set():
             raise WordTranslationCancelled("Word translation cancelled.")
 
+        if debug_job_dir is not None:
+            _write_word_final_translations_artifact(
+                debug_job_dir,
+                item_ids=item_ids,
+                translations=translated_cache,
+            )
+
+        writeback_rows: list[dict[str, Any]] = []
+        writeback_index = 0
         for paragraph in translatable_paragraphs:
             if self.is_table_of_contents_paragraph(paragraph):
                 continue
@@ -2139,6 +2208,20 @@ class EnhancedWordTranslator:
                 if effective_layout_mode == WORD_LAYOUT_BILINGUAL_BELOW
                 else final_text
             )
+            writeback_index += 1
+            writeback_rows.append(
+                {
+                    "writeback_index": writeback_index,
+                    "id": item_ids.get(core_text, ""),
+                    "location": "header_footer" if is_header_footer_paragraph else "body_or_table",
+                    "layout_mode": effective_layout_mode,
+                    "source_text": original_text,
+                    "core_text": core_text,
+                    "prefix": prefix,
+                    "applied_translation": output_text,
+                    "translated_core_text": translated_core_text,
+                }
+            )
             self.apply_paragraph_translation(
                 paragraph,
                 prefixed_translated_text=output_text,
@@ -2148,6 +2231,7 @@ class EnhancedWordTranslator:
             )
 
         if debug_job_dir is not None:
+            _write_word_writeback_map_artifact(debug_job_dir, writeback_rows)
             glossary.write_required_glossary_hits_artifact(
                 debug_job_dir,
                 glossary_hit_collector,
@@ -2240,6 +2324,7 @@ def _run_word_job(
     header_footer_layout_mode = normalize_word_layout_mode(header_footer_layout_mode)
     translate_tables = normalize_translate_tables(translate_tables)
     now_ts = time.time()
+    _cleanup_word_run_artifacts(job_dir, output_path)
     jobs.set_job_state(
         job_dir,
         status="running",

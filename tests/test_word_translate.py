@@ -18,6 +18,7 @@ from docx.oxml.ns import qn
 from app.services import glossary, job_store, jobs, state, translation_memory, translation_post_edit
 from app.services.word_translate import (
     EnhancedWordTranslator,
+    _cleanup_word_run_artifacts,
     _repair_cjk_brackets_from_source,
     build_word_system_prompt,
     build_word_system_prompt_with_source,
@@ -136,6 +137,41 @@ async def _consume_translation(
         header_footer_fixed_terms=header_footer_fixed_terms,
     ):
         pass
+
+
+def test_cleanup_word_run_artifacts_removes_stale_debug_and_output(tmp_path):
+    output_path = tmp_path / "output" / "output.docx"
+    source_path = tmp_path / "source.docx"
+    source_path.write_text("source", encoding="utf-8")
+    for relative in (
+        "word_stage_2_post_edit.json",
+        "word_final_translations.json",
+        "word_writeback_map.json",
+        "glossary_hits.json",
+        "tm_matches.json",
+        "tm_references.json",
+        "output/word_stage_2_post_edit.json",
+        "output/word_final_translations.json",
+        "output/word_writeback_map.json",
+        "output/glossary_hits.json",
+        "output/tm_matches.json",
+        "output/tm_references.json",
+        "realtime_debug/chunks/chunk_0001/payload.txt",
+        "output/realtime_debug/chunks/chunk_0001/payload.txt",
+        "output/output.docx",
+    ):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("stale", encoding="utf-8")
+
+    _cleanup_word_run_artifacts(tmp_path, output_path)
+
+    assert source_path.exists()
+    assert not output_path.exists()
+    assert not (tmp_path / "word_stage_2_post_edit.json").exists()
+    assert not (tmp_path / "output" / "word_stage_2_post_edit.json").exists()
+    assert not (tmp_path / "realtime_debug").exists()
+    assert not (tmp_path / "output" / "realtime_debug").exists()
 
 
 def test_repair_cjk_brackets_from_source_restores_model_ascii_brackets():
@@ -265,6 +301,68 @@ def test_word_stage_2_fallback_repairs_cjk_brackets_from_source(monkeypatch):
     )
 
     assert revised == {"請填寫【專案計劃書 Q-2010】。": "Please complete 【Project Plan Q-2010】."}
+
+
+def test_word_stage_2_artifact_overwrites_previous_run_items(tmp_path, monkeypatch):
+    responses = iter([
+        translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(
+                translation_post_edit.PostEditResultItem(
+                    "item_0001",
+                    "Stage 2 first.",
+                    stage_2_text="Stage 2 first.",
+                ),
+            ),
+        ),
+        translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(
+                translation_post_edit.PostEditResultItem(
+                    "item_0002",
+                    "Stage 2 second.",
+                    stage_2_text="Stage 2 second.",
+                ),
+            ),
+        ),
+    ])
+
+    async def fake_post_edit_texts_batch(*args, **kwargs):
+        return next(responses)
+
+    monkeypatch.setattr(
+        translation_post_edit,
+        "post_edit_texts_batch",
+        fake_post_edit_texts_batch,
+    )
+    translator = EnhancedWordTranslator(
+        client=_FailingClient(),
+        post_edit_enabled=True,
+    )
+
+    asyncio.run(
+        translator.post_edit_word_translations(
+            {"第一段": "Stage 1 first."},
+            item_ids={"第一段": "item_0001"},
+            glossary_applications={},
+            target_lang="en",
+            user_terms=[],
+            debug_job_dir=tmp_path,
+        )
+    )
+    asyncio.run(
+        translator.post_edit_word_translations(
+            {"第二段": "Stage 1 second."},
+            item_ids={"第二段": "item_0002"},
+            glossary_applications={},
+            target_lang="en",
+            user_terms=[],
+            debug_job_dir=tmp_path,
+        )
+    )
+
+    artifact = json.loads((tmp_path / "word_stage_2_post_edit.json").read_text(encoding="utf-8"))
+    assert [item["id"] for item in artifact["items"]] == ["item_0002"]
 
 
 def test_word_translator_passes_stage_2_local_model_configuration(monkeypatch):
@@ -776,6 +874,86 @@ def test_word_translation_stage_2_revises_bilingual_below_llm_output(tmp_path, m
     assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
         "來源文字",
         "Stage 2 bilingual revision.",
+    ]
+
+
+def test_word_translation_writes_final_and_writeback_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Stage 1 draft."]),
+    )
+
+    async def fake_post_edit(items, **kwargs):
+        item_tuple = tuple(items)
+        return translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(
+                translation_post_edit.PostEditResultItem(
+                    item_tuple[0].id,
+                    "Stage 2 final.",
+                    stage_2_text="Stage 2 final.",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.services.word_translate.translation_post_edit.post_edit_texts_batch",
+        fake_post_edit,
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("來源文字")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            layout_mode="bilingual_below",
+            debug_job_dir=tmp_path,
+        )
+    )
+
+    final_artifact = json.loads((tmp_path / "word_final_translations.json").read_text(encoding="utf-8"))
+    writeback_artifact = json.loads((tmp_path / "word_writeback_map.json").read_text(encoding="utf-8"))
+    assert final_artifact == {
+        "items": [
+            {
+                "id": "item_0001",
+                "source_text": "來源文字",
+                "final_translation": "Stage 2 final.",
+            }
+        ]
+    }
+    assert writeback_artifact["items"] == [
+        {
+            "writeback_index": 1,
+            "id": "item_0001",
+            "location": "body_or_table",
+            "layout_mode": "bilingual_below",
+            "source_text": "來源文字",
+            "core_text": "來源文字",
+            "prefix": "",
+            "applied_translation": "Stage 2 final.",
+            "translated_core_text": "Stage 2 final.",
+        }
+    ]
+    assert json.loads((tmp_path / "output" / "word_final_translations.json").read_text(encoding="utf-8")) == final_artifact
+    assert json.loads((tmp_path / "output" / "word_writeback_map.json").read_text(encoding="utf-8")) == writeback_artifact
+    assert [paragraph.text for paragraph in docx.Document(output_path).paragraphs] == [
+        "來源文字",
+        writeback_artifact["items"][0]["applied_translation"],
     ]
 
 

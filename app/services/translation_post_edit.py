@@ -689,10 +689,11 @@ def write_post_edit_artifact(
     result: PostEditBatchResult,
     *,
     filename: str = "stage_2_post_edit.json",
+    merge_existing: bool = True,
 ) -> Path:
     artifact_path = Path(job_dir) / filename
     existing_items: list[dict[str, Any]] = []
-    if artifact_path.exists():
+    if merge_existing and artifact_path.exists():
         try:
             existing_artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
             existing_items = [
