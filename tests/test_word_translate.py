@@ -15,9 +15,10 @@ from docx.shared import Inches, Pt, Twips
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-from app.services import job_store, jobs, state, translation_memory, translation_post_edit
+from app.services import glossary, job_store, jobs, state, translation_memory, translation_post_edit
 from app.services.word_translate import (
     EnhancedWordTranslator,
+    _repair_cjk_brackets_from_source,
     build_word_system_prompt,
     build_word_system_prompt_with_source,
     enqueue_word_job_from_upload,
@@ -137,6 +138,20 @@ async def _consume_translation(
         pass
 
 
+def test_repair_cjk_brackets_from_source_restores_model_ascii_brackets():
+    assert _repair_cjk_brackets_from_source(
+        "請填寫【專案計劃書 Q-2010】。",
+        "Please complete [Project Plan Q-2010].",
+    ) == "Please complete 【Project Plan Q-2010】."
+
+
+def test_repair_cjk_brackets_from_source_does_not_touch_unrelated_ascii_brackets():
+    assert _repair_cjk_brackets_from_source(
+        "請填寫專案計劃書。",
+        "Please complete [Project Plan].",
+    ) == "Please complete [Project Plan]."
+
+
 def test_word_translator_request_controls_override_internal_limits(monkeypatch):
     monkeypatch.setattr(
         "app.services.word_translate.openai_config.create_async_client",
@@ -179,6 +194,77 @@ def test_word_translator_uses_injected_local_model_client(monkeypatch):
     assert translated == "Test."
     assert requests[0]["model"] == "local-model"
     assert requests[0]["extra_body"] == extra_body
+
+
+def test_word_stage_2_repairs_cjk_brackets_from_source(monkeypatch):
+    async def fake_post_edit_texts_batch(
+        items,
+        *,
+        target_lang,
+        model=None,
+        client_factory=None,
+        enabled=None,
+        request_extra_body=None,
+    ):
+        return translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(
+                translation_post_edit.PostEditResultItem(
+                    "item_0001",
+                    "Please complete [Project Plan Q-2010].",
+                    stage_2_text="Please complete [Project Plan Q-2010].",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        translation_post_edit,
+        "post_edit_texts_batch",
+        fake_post_edit_texts_batch,
+    )
+    translator = EnhancedWordTranslator(
+        client=_FailingClient(),
+        post_edit_enabled=True,
+    )
+
+    revised = asyncio.run(
+        translator.post_edit_word_translations(
+            {"請填寫【專案計劃書 Q-2010】。": "Please complete [Project Plan Q-2010]."},
+            item_ids={"請填寫【專案計劃書 Q-2010】。": "item_0001"},
+            glossary_applications={},
+            target_lang="en",
+            user_terms=[],
+        )
+    )
+
+    assert revised == {"請填寫【專案計劃書 Q-2010】。": "Please complete 【Project Plan Q-2010】."}
+
+
+def test_word_stage_2_fallback_repairs_cjk_brackets_from_source(monkeypatch):
+    async def fake_post_edit_texts_batch(*args, **kwargs):
+        raise RuntimeError("post edit failed")
+
+    monkeypatch.setattr(
+        translation_post_edit,
+        "post_edit_texts_batch",
+        fake_post_edit_texts_batch,
+    )
+    translator = EnhancedWordTranslator(
+        client=_FailingClient(),
+        post_edit_enabled=True,
+    )
+
+    revised = asyncio.run(
+        translator.post_edit_word_translations(
+            {"請填寫【專案計劃書 Q-2010】。": "Please complete [Project Plan Q-2010]."},
+            item_ids={"請填寫【專案計劃書 Q-2010】。": "item_0001"},
+            glossary_applications={},
+            target_lang="en",
+            user_terms=[],
+        )
+    )
+
+    assert revised == {"請填寫【專案計劃書 Q-2010】。": "Please complete 【Project Plan Q-2010】."}
 
 
 def test_word_translator_passes_stage_2_local_model_configuration(monkeypatch):
@@ -961,6 +1047,44 @@ def test_word_translation_tm_exact_match_skips_stage_2_in_replace_original(app, 
 
     translated_doc = docx.Document(output_path)
     assert [paragraph.text for paragraph in translated_doc.paragraphs] == ["Confirm the equipment."]
+
+
+def test_word_translation_tm_exact_match_repairs_cjk_brackets(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _FailingClient(),
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.translation_post_edit.post_edit_texts_batch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("TM exact match must skip Stage 2")),
+    )
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
+    translation_memory.upsert_sql_entry(
+        source_text="請填寫【專案計劃書 Q-2010】。",
+        target_text="Please complete [Project Plan Q-2010].",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="word",
+        status="approved",
+        source="test",
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("請填寫【專案計劃書 Q-2010】。")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(_consume_translation(translator, source_path, output_path, source_language="zh"))
+
+    translated_doc = docx.Document(output_path)
+    assert [paragraph.text for paragraph in translated_doc.paragraphs] == [
+        "Please complete 【Project Plan Q-2010】."
+    ]
 
 
 def test_word_translation_bilingual_below_can_exclude_table_content_from_pipeline(tmp_path, monkeypatch):
@@ -3093,6 +3217,57 @@ def test_word_translate_batch_returns_text_mapping_without_quality_scores(monkey
     assert all(isinstance(value, str) for value in result.values())
 
 
+def test_word_translate_batch_repairs_cjk_brackets_when_stage_2_disabled(monkeypatch):
+    class _BatchCompletions:
+        async def create(self, **kwargs):
+            payload = kwargs["messages"][-1]["content"]
+            raw_items = payload.split("<SOURCE_ITEMS_JSON>\n", 1)[1].split(
+                "\n</SOURCE_ITEMS_JSON>",
+                1,
+            )[0]
+            items = json.loads(raw_items)
+            message = type(
+                "Message",
+                (),
+                {
+                    "content": json.dumps(
+                        {
+                            items[0]["id"]: "Please complete [Project Plan Q-2010].",
+                            items[1]["id"]: "Note.",
+                        },
+                        ensure_ascii=False,
+                    )
+                },
+            )()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _BatchChat:
+        completions = _BatchCompletions()
+
+    class _BatchClient:
+        chat = _BatchChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _BatchClient(),
+    )
+
+    translator = EnhancedWordTranslator(post_edit_enabled=False)
+
+    result = asyncio.run(
+        translator.translate_texts_batch(
+            ["請填寫【專案計劃書 Q-2010】。", "備註"],
+            "auto",
+            "en",
+            [],
+            glossary_entries=[],
+        )
+    )
+
+    assert result["請填寫【專案計劃書 Q-2010】。"] == "Please complete 【Project Plan Q-2010】."
+
+
 def test_word_translation_blank_response_still_retries_and_fails(monkeypatch):
     class _BlankCompletions:
         async def create(self, **kwargs):
@@ -3237,7 +3412,40 @@ def test_word_translation_preserves_header_field_code_paragraph(tmp_path, monkey
     assert " PAGE " in header_xml
 
 
-def test_word_translate_stage_1_does_not_accept_required_glossary_variant(monkeypatch):
+def test_word_translate_stage_1_repairs_cjk_brackets_from_source(monkeypatch):
+    class _BracketCompletions:
+        async def create(self, **kwargs):
+            message = type("Message", (), {"content": "Please complete [Project Plan Q-2010]."})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _BracketChat:
+        completions = _BracketCompletions()
+
+    class _BracketClient:
+        chat = _BracketChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _BracketClient(),
+    )
+
+    translator = EnhancedWordTranslator(post_edit_enabled=False)
+
+    result = asyncio.run(
+        translator.translate_text(
+            "請填寫【專案計劃書 Q-2010】。",
+            "zh",
+            "en",
+            [],
+            glossary_entries=[],
+        )
+    )
+
+    assert result == "Please complete 【Project Plan Q-2010】."
+
+
+def test_word_translate_stage_1_accepts_curated_required_glossary_variant(monkeypatch):
     class _VariantCompletions:
         async def create(self, **kwargs):
             message = type("Message", (), {"content": "Standardizing operations is required."})()
@@ -3253,6 +3461,61 @@ def test_word_translate_stage_1_does_not_accept_required_glossary_variant(monkey
     monkeypatch.setattr(
         "app.services.word_translate.openai_config.create_async_client",
         lambda: _VariantClient(),
+    )
+
+    translator = EnhancedWordTranslator()
+    translator.max_retries = 1
+
+    result = asyncio.run(
+        translator.translate_text(
+            "使作業方式標準化。",
+            "zh",
+            "en",
+            [],
+            glossary_entries=[("標準化", "standardization")],
+        )
+    )
+
+    assert result == "Standardizing operations is required."
+
+
+def test_word_translate_stage_1_accepts_verify_inflection_variants():
+    translator = EnhancedWordTranslator()
+    application = glossary.apply_required_glossary_terms(
+        "請查證結果。",
+        [("查證", "verify")],
+        source_lang="zh",
+        target_lang="en",
+    )
+
+    assert translator._missing_required_glossary_terms(
+        "Verification is required.",
+        application,
+        target_lang="en",
+    ) == []
+    assert translator._missing_required_glossary_terms(
+        "The result was verified.",
+        application,
+        target_lang="en",
+    ) == []
+
+
+def test_word_translate_stage_1_rejects_unlisted_required_glossary_synonym(monkeypatch):
+    class _SynonymCompletions:
+        async def create(self, **kwargs):
+            message = type("Message", (), {"content": "Unified operations are required."})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _SynonymChat:
+        completions = _SynonymCompletions()
+
+    class _SynonymClient:
+        chat = _SynonymChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _SynonymClient(),
     )
 
     translator = EnhancedWordTranslator()

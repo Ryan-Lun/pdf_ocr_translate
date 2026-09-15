@@ -40,6 +40,34 @@ class WordTranslationCancelled(Exception):
     pass
 
 
+def _repair_cjk_brackets_from_source(source: str, translation: str) -> str:
+    if not source or not translation:
+        return translation
+    if "【" not in source and "】" not in source:
+        return translation
+    if "[" in source or "]" in source:
+        return translation
+    if "【" in translation or "】" in translation:
+        return translation
+    if source.count("【") != translation.count("["):
+        return translation
+    if source.count("】") != translation.count("]"):
+        return translation
+    repaired = translation
+    if source.count("【"):
+        repaired = repaired.replace("[", "【")
+    if source.count("】"):
+        repaired = repaired.replace("]", "】")
+    return repaired
+
+
+def _repair_cjk_bracket_translations(translations: dict[str, str]) -> dict[str, str]:
+    return {
+        source_text: _repair_cjk_brackets_from_source(source_text, translated_text)
+        for source_text, translated_text in translations.items()
+    }
+
+
 def normalize_word_layout_mode(value: object) -> str:
     return word_layout.normalize(value)
 
@@ -432,6 +460,12 @@ Preserve factual values exactly, including:
 * identifiers
 
 Do not calculate, normalize, round, convert, or reinterpret values unless explicitly instructed.
+
+Preserve full-width CJK brackets exactly:
+
+* 【 must remain 【
+* 】 must remain 】
+* Do not replace full-width CJK brackets with [ or ].
 
 Preserve non-translatable content such as:
 
@@ -916,11 +950,25 @@ class EnhancedWordTranslator:
         self,
         translated_text: str,
         required_terms: glossary.RequiredTermContext,
+        *,
+        target_lang: str = "en",
     ) -> list[str]:
-        return glossary.find_missing_required_glossary_terms(
+        missing_terms = glossary.find_missing_required_glossary_terms(
             translated_text,
             required_terms,
         )
+        if normalize_lang_code(target_lang) != "en" or not missing_terms:
+            return missing_terms
+        return [
+            term
+            for term in missing_terms
+            if translation_post_edit.required_glossary_term_match_count(
+                translated_text,
+                term,
+                allow_variants=True,
+            )
+            <= 0
+        ]
 
     def _chunk_translation_texts(self, texts: list[str]) -> list[list[str]]:
         batches: list[list[str]] = []
@@ -1450,6 +1498,7 @@ class EnhancedWordTranslator:
                 missing_required_terms = self._missing_required_glossary_terms(
                     translated_text,
                     glossary_application,
+                    target_lang=target_lang,
                 )
                 if not translated_text:
                     if attempt == self.max_retries - 1:
@@ -1471,6 +1520,7 @@ class EnhancedWordTranslator:
                             f"Word 翻譯連續 {self.max_retries} 次回傳無效內容，已中斷任務。"
                         )
                     continue
+                translated_text = _repair_cjk_brackets_from_source(text, translated_text)
                 if debug_job_dir is not None and debug_custom_id:
                     translation_debug.record_parsed(
                         job_dir=debug_job_dir,
@@ -1516,9 +1566,9 @@ class EnhancedWordTranslator:
         if not translations:
             return translations
         if self.post_edit_enabled is None and not translation_post_edit.is_enabled():
-            return translations
+            return _repair_cjk_bracket_translations(translations)
         if self.post_edit_enabled is False:
-            return translations
+            return _repair_cjk_bracket_translations(translations)
         if cancel_event is not None and cancel_event.is_set():
             raise WordTranslationCancelled("Word translation cancelled.")
 
@@ -1544,7 +1594,7 @@ class EnhancedWordTranslator:
                 )
             )
         if not post_edit_items:
-            return translations
+            return _repair_cjk_bracket_translations(translations)
 
         try:
             post_edit_result = await translation_post_edit.post_edit_texts_batch(
@@ -1569,7 +1619,7 @@ class EnhancedWordTranslator:
                     ),
                     filename="word_stage_2_post_edit.json",
                 )
-            return translations
+            return _repair_cjk_bracket_translations(translations)
 
         if debug_job_dir is not None:
             translation_post_edit.write_post_edit_artifact(
@@ -1590,7 +1640,7 @@ class EnhancedWordTranslator:
                     result_item.id,
                     result_item.fallback_reason,
                 )
-            revised[text] = result_item.text
+            revised[text] = _repair_cjk_brackets_from_source(text, result_item.text)
         return revised
 
 
@@ -1749,6 +1799,7 @@ class EnhancedWordTranslator:
                 missing_required_terms = self._missing_required_glossary_terms(
                     translated_text,
                     glossary_application,
+                    target_lang=target_lang,
                 )
                 if (
                     not translated_text
@@ -1770,6 +1821,7 @@ class EnhancedWordTranslator:
                         user_terms,
                         **translate_kwargs,
                     )
+                translated_text = _repair_cjk_brackets_from_source(text, translated_text)
                 parsed_translations[item_id] = translated_text
                 results[text] = translated_text
             results = await self.post_edit_word_translations(
@@ -1959,6 +2011,7 @@ class EnhancedWordTranslator:
             exact_match = tm_result.exact_match if tm_result else None
             translated_text = str(exact_match.target_text or "").strip() if exact_match else ""
             if translated_text:
+                translated_text = _repair_cjk_brackets_from_source(text, translated_text)
                 translated_cache[text] = translated_text
                 translation_memory.add_artifact_match(
                     tm_artifact_collector,

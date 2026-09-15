@@ -66,6 +66,14 @@ Do not:
 * change Exact Protected Content or mask tokens
 * rewrite wording that is already natural merely for stylistic variety
 
+# Punctuation Preservation
+
+Preserve full-width CJK brackets exactly:
+
+* 【 must remain 【
+* 】 must remain 】
+* Do not replace full-width CJK brackets with [ or ].
+
 # Spelling Quality
 
 Check the revised English for obvious spelling errors.
@@ -529,6 +537,20 @@ def _required_glossary_term_match_result(
     return _RequiredGlossaryMatchResult(
         exact_count + variant_count,
         tuple(_unique_accepted_glossary_variants(accepted_variants)),
+    )
+
+
+def required_glossary_term_match_count(
+    text: str,
+    target: str,
+    *,
+    allow_variants: bool = False,
+) -> int:
+    normalized_text = _normalize_required_glossary_match_text(text)
+    return _required_glossary_term_match_count(
+        normalized_text,
+        target,
+        allow_stage_2_variants=allow_variants,
     )
 
 
