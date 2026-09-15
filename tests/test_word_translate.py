@@ -145,12 +145,14 @@ def test_cleanup_word_run_artifacts_removes_stale_debug_and_output(tmp_path):
     source_path.write_text("source", encoding="utf-8")
     for relative in (
         "word_stage_2_post_edit.json",
+        "word_stage_1_translations.json",
         "word_final_translations.json",
         "word_writeback_map.json",
         "glossary_hits.json",
         "tm_matches.json",
         "tm_references.json",
         "output/word_stage_2_post_edit.json",
+        "output/word_stage_1_translations.json",
         "output/word_final_translations.json",
         "output/word_writeback_map.json",
         "output/glossary_hits.json",
@@ -169,7 +171,9 @@ def test_cleanup_word_run_artifacts_removes_stale_debug_and_output(tmp_path):
     assert source_path.exists()
     assert not output_path.exists()
     assert not (tmp_path / "word_stage_2_post_edit.json").exists()
+    assert not (tmp_path / "word_stage_1_translations.json").exists()
     assert not (tmp_path / "output" / "word_stage_2_post_edit.json").exists()
+    assert not (tmp_path / "output" / "word_stage_1_translations.json").exists()
     assert not (tmp_path / "realtime_debug").exists()
     assert not (tmp_path / "output" / "realtime_debug").exists()
 
@@ -925,14 +929,28 @@ def test_word_translation_writes_final_and_writeback_artifacts(tmp_path, monkeyp
         )
     )
 
+    stage_1_artifact = json.loads((tmp_path / "word_stage_1_translations.json").read_text(encoding="utf-8"))
     final_artifact = json.loads((tmp_path / "word_final_translations.json").read_text(encoding="utf-8"))
     writeback_artifact = json.loads((tmp_path / "word_writeback_map.json").read_text(encoding="utf-8"))
+    assert stage_1_artifact == {
+        "items": [
+            {
+                "id": "item_0001",
+                "chunk_id": "chunk_0001",
+                "source_text": "來源文字",
+                "stage_1_translation": "Stage 1 draft.",
+            }
+        ]
+    }
     assert final_artifact == {
         "items": [
             {
                 "id": "item_0001",
                 "source_text": "來源文字",
                 "final_translation": "Stage 2 final.",
+                "final_source": "stage_2",
+                "fallback_reason": None,
+                "post_process_actions": [],
             }
         ]
     }
@@ -949,12 +967,121 @@ def test_word_translation_writes_final_and_writeback_artifacts(tmp_path, monkeyp
             "translated_core_text": "Stage 2 final.",
         }
     ]
-    assert json.loads((tmp_path / "output" / "word_final_translations.json").read_text(encoding="utf-8")) == final_artifact
+    assert not (tmp_path / "output" / "word_stage_1_translations.json").exists()
+    assert not (tmp_path / "output" / "word_final_translations.json").exists()
     assert json.loads((tmp_path / "output" / "word_writeback_map.json").read_text(encoding="utf-8")) == writeback_artifact
     assert [paragraph.text for paragraph in docx.Document(output_path).paragraphs] == [
         "來源文字",
         writeback_artifact["items"][0]["applied_translation"],
     ]
+
+
+def test_word_final_artifact_records_stage_2_disabled_repair_provenance(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", False)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations([
+            "Please complete [Project Plan Q-2010].",
+            "Note.",
+        ]),
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("請填寫【專案計劃書 Q-2010】。")
+    source_doc.add_paragraph("備註")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator(post_edit_enabled=False)
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            debug_job_dir=tmp_path,
+        )
+    )
+
+    final_artifact = json.loads((tmp_path / "word_final_translations.json").read_text(encoding="utf-8"))
+    assert final_artifact["items"] == [
+        {
+            "id": "item_0001",
+            "source_text": "請填寫【專案計劃書 Q-2010】。",
+            "final_translation": "Please complete 【Project Plan Q-2010】.",
+            "final_source": "stage_2_disabled",
+            "fallback_reason": None,
+            "post_process_actions": ["repair_cjk_brackets"],
+        },
+        {
+            "id": "item_0002",
+            "source_text": "備註",
+            "final_translation": "Note.",
+            "final_source": "stage_2_disabled",
+            "fallback_reason": None,
+            "post_process_actions": [],
+        },
+    ]
+
+
+def test_word_final_artifact_records_tm_exact_provenance(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", True)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _FailingClient(),
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.translation_post_edit.post_edit_texts_batch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("TM exact match must skip Stage 2")),
+    )
+    with job_store.session_scope() as session:
+        session.query(job_store.TranslationMemoryEntryRecord).delete()
+    translation_memory.upsert_sql_entry(
+        source_text="確認設備是否正常。",
+        target_text="Confirm the equipment.",
+        source_lang="zh",
+        target_lang="en",
+        document_mode="word",
+        status="approved",
+        source="test",
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("確認設備是否正常。")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            debug_job_dir=tmp_path,
+        )
+    )
+
+    final_artifact = json.loads((tmp_path / "word_final_translations.json").read_text(encoding="utf-8"))
+    assert final_artifact["items"] == [
+        {
+            "id": "item_0001",
+            "source_text": "確認設備是否正常。",
+            "final_translation": "Confirm the equipment.",
+            "final_source": "tm_exact",
+            "fallback_reason": None,
+            "post_process_actions": [],
+        }
+    ]
+    assert json.loads((tmp_path / "word_stage_1_translations.json").read_text(encoding="utf-8")) == {"items": []}
 
 
 def test_word_translation_stage_2_fallback_keeps_stage_1_output(tmp_path, monkeypatch):

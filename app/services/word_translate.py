@@ -33,9 +33,11 @@ WORD_JOB_EVENTS_LOCK = threading.Lock()
 WORD_ALLOWED_EXTENSIONS = {".doc", ".docx"}
 WORD_LAYOUT_REPLACE_ORIGINAL = word_layout.REPLACE_ORIGINAL
 WORD_LAYOUT_BILINGUAL_BELOW = word_layout.BILINGUAL_BELOW
+WORD_STAGE_1_TRANSLATIONS_ARTIFACT = "word_stage_1_translations.json"
 WORD_FINAL_TRANSLATIONS_ARTIFACT = "word_final_translations.json"
 WORD_WRITEBACK_MAP_ARTIFACT = "word_writeback_map.json"
 _WORD_STALE_ARTIFACTS = (
+    WORD_STAGE_1_TRANSLATIONS_ARTIFACT,
     WORD_FINAL_TRANSLATIONS_ARTIFACT,
     WORD_WRITEBACK_MAP_ARTIFACT,
     "word_stage_2_post_edit.json",
@@ -78,8 +80,17 @@ def _repair_cjk_bracket_translations(translations: dict[str, str]) -> dict[str, 
     }
 
 
-def _write_word_json_artifact(job_dir: Path, filename: str, payload: Any) -> None:
-    for path in (job_dir / filename, job_dir / "output" / filename):
+def _write_word_json_artifact(
+    job_dir: Path,
+    filename: str,
+    payload: Any,
+    *,
+    mirror_to_output: bool = False,
+) -> None:
+    paths = [job_dir / filename]
+    if mirror_to_output:
+        paths.append(job_dir / "output" / filename)
+    for path in paths:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -96,21 +107,41 @@ def _cleanup_word_run_artifacts(job_dir: Path, output_path: Path) -> None:
         output_path.unlink()
 
 
+def _translation_repair_actions(source_text: str, before: str, after: str) -> list[str]:
+    return ["repair_cjk_brackets"] if before != after and after == _repair_cjk_brackets_from_source(source_text, before) else []
+
+
+def _write_word_stage_1_translations_artifact(job_dir: Path, rows: list[dict[str, Any]]) -> None:
+    rows.sort(key=lambda row: str(row.get("id") or ""))
+    _write_word_json_artifact(
+        job_dir,
+        WORD_STAGE_1_TRANSLATIONS_ARTIFACT,
+        {"items": rows},
+    )
+
+
 def _write_word_final_translations_artifact(
     job_dir: Path,
     *,
     item_ids: dict[str, str],
     translations: dict[str, str],
+    provenance: dict[str, dict[str, Any]],
 ) -> None:
-    rows = [
-        {
-            "id": item_ids.get(source_text, ""),
-            "source_text": source_text,
-            "final_translation": translations[source_text],
-        }
-        for source_text in item_ids
-        if source_text in translations
-    ]
+    rows = []
+    for source_text in item_ids:
+        if source_text not in translations:
+            continue
+        item_provenance = provenance.get(source_text, {})
+        rows.append(
+            {
+                "id": item_ids.get(source_text, ""),
+                "source_text": source_text,
+                "final_translation": translations[source_text],
+                "final_source": item_provenance.get("final_source", "stage_1"),
+                "fallback_reason": item_provenance.get("fallback_reason"),
+                "post_process_actions": list(item_provenance.get("post_process_actions") or []),
+            }
+        )
     _write_word_json_artifact(
         job_dir,
         WORD_FINAL_TRANSLATIONS_ARTIFACT,
@@ -123,6 +154,7 @@ def _write_word_writeback_map_artifact(job_dir: Path, rows: list[dict[str, Any]]
         job_dir,
         WORD_WRITEBACK_MAP_ARTIFACT,
         {"items": rows},
+        mirror_to_output=True,
     )
 
 
@@ -1620,13 +1652,36 @@ class EnhancedWordTranslator:
         cancel_event: threading.Event | None = None,
         warning_callback: Callable[[str], None] | None = None,
         debug_job_dir: Path | None = None,
+        final_provenance: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, str]:
         if not translations:
             return translations
         if self.post_edit_enabled is None and not translation_post_edit.is_enabled():
-            return _repair_cjk_bracket_translations(translations)
+            repaired = _repair_cjk_bracket_translations(translations)
+            if final_provenance is not None:
+                for source_text, draft_text in translations.items():
+                    final_provenance[source_text] = {
+                        "final_source": "stage_2_disabled",
+                        "fallback_reason": None,
+                        "post_process_actions": [
+                            *list(final_provenance.get(source_text, {}).get("post_process_actions") or []),
+                            *_translation_repair_actions(source_text, draft_text, repaired[source_text]),
+                        ],
+                    }
+            return repaired
         if self.post_edit_enabled is False:
-            return _repair_cjk_bracket_translations(translations)
+            repaired = _repair_cjk_bracket_translations(translations)
+            if final_provenance is not None:
+                for source_text, draft_text in translations.items():
+                    final_provenance[source_text] = {
+                        "final_source": "stage_2_disabled",
+                        "fallback_reason": None,
+                        "post_process_actions": [
+                            *list(final_provenance.get(source_text, {}).get("post_process_actions") or []),
+                            *_translation_repair_actions(source_text, draft_text, repaired[source_text]),
+                        ],
+                    }
+            return repaired
         if cancel_event is not None and cancel_event.is_set():
             raise WordTranslationCancelled("Word translation cancelled.")
 
@@ -1652,7 +1707,18 @@ class EnhancedWordTranslator:
                 )
             )
         if not post_edit_items:
-            return _repair_cjk_bracket_translations(translations)
+            repaired = _repair_cjk_bracket_translations(translations)
+            if final_provenance is not None:
+                for source_text, draft_text in translations.items():
+                    final_provenance[source_text] = {
+                        "final_source": "stage_2_disabled",
+                        "fallback_reason": None,
+                        "post_process_actions": [
+                            *list(final_provenance.get(source_text, {}).get("post_process_actions") or []),
+                            *_translation_repair_actions(source_text, draft_text, repaired[source_text]),
+                        ],
+                    }
+            return repaired
 
         try:
             post_edit_result = await translation_post_edit.post_edit_texts_batch(
@@ -1678,7 +1744,18 @@ class EnhancedWordTranslator:
                     filename="word_stage_2_post_edit.json",
                     merge_existing=False,
                 )
-            return _repair_cjk_bracket_translations(translations)
+            repaired = _repair_cjk_bracket_translations(translations)
+            if final_provenance is not None:
+                for source_text, draft_text in translations.items():
+                    final_provenance[source_text] = {
+                        "final_source": "stage_2_fallback_to_stage_1",
+                        "fallback_reason": f"post_edit_error:{exc.__class__.__name__}",
+                        "post_process_actions": [
+                            *list(final_provenance.get(source_text, {}).get("post_process_actions") or []),
+                            *_translation_repair_actions(source_text, draft_text, repaired[source_text]),
+                        ],
+                    }
+            return repaired
 
         if debug_job_dir is not None:
             translation_post_edit.write_post_edit_artifact(
@@ -1700,7 +1777,17 @@ class EnhancedWordTranslator:
                     result_item.id,
                     result_item.fallback_reason,
                 )
-            revised[text] = _repair_cjk_brackets_from_source(text, result_item.text)
+            final_text = _repair_cjk_brackets_from_source(text, result_item.text)
+            revised[text] = final_text
+            if final_provenance is not None:
+                final_provenance[text] = {
+                    "final_source": "stage_2_fallback_to_stage_1" if result_item.used_fallback else "stage_2",
+                    "fallback_reason": result_item.fallback_reason,
+                    "post_process_actions": [
+                        *list(final_provenance.get(text, {}).get("post_process_actions") or []),
+                        *_translation_repair_actions(text, result_item.text, final_text),
+                    ],
+                }
         return revised
 
 
@@ -1719,6 +1806,8 @@ class EnhancedWordTranslator:
         warning_callback: Callable[[str], None] | None = None,
         glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
         translation_memory_references: dict[str, list[translation_memory.TranslationMemoryMatch]] | None = None,
+        stage_1_artifact_rows: list[dict[str, Any]] | None = None,
+        final_provenance: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, str]:
         if not texts:
             return {}
@@ -1751,6 +1840,15 @@ class EnhancedWordTranslator:
                 user_terms,
                 **translate_kwargs,
             )
+            if stage_1_artifact_rows is not None:
+                stage_1_artifact_rows.append(
+                    {
+                        "id": item_id,
+                        "chunk_id": debug_custom_id or "",
+                        "source_text": text,
+                        "stage_1_translation": translated_text,
+                    }
+                )
             return await self.post_edit_word_translations(
                 {text: translated_text},
                 item_ids={text: item_id},
@@ -1760,6 +1858,7 @@ class EnhancedWordTranslator:
                 cancel_event=cancel_event,
                 warning_callback=warning_callback,
                 debug_job_dir=debug_job_dir,
+                final_provenance=final_provenance,
             )
 
         item_ids = item_ids or {
@@ -1881,9 +1980,25 @@ class EnhancedWordTranslator:
                         user_terms,
                         **translate_kwargs,
                     )
+                stage_1_before_repair = translated_text
                 translated_text = _repair_cjk_brackets_from_source(text, translated_text)
+                if final_provenance is not None:
+                    repair_actions = _translation_repair_actions(text, stage_1_before_repair, translated_text)
+                    if repair_actions:
+                        final_provenance[text] = {
+                            "post_process_actions": repair_actions,
+                        }
                 parsed_translations[item_id] = translated_text
                 results[text] = translated_text
+                if stage_1_artifact_rows is not None:
+                    stage_1_artifact_rows.append(
+                        {
+                            "id": item_id,
+                            "chunk_id": debug_custom_id or "",
+                            "source_text": text,
+                            "stage_1_translation": translated_text,
+                        }
+                    )
             results = await self.post_edit_word_translations(
                 results,
                 item_ids=item_ids,
@@ -1893,6 +2008,7 @@ class EnhancedWordTranslator:
                 cancel_event=cancel_event,
                 warning_callback=warning_callback,
                 debug_job_dir=debug_job_dir,
+                final_provenance=final_provenance,
             )
             parsed_translations = {item_ids[text]: results[text] for text in results if text in item_ids}
             if debug_job_dir is not None and debug_custom_id:
@@ -1934,6 +2050,15 @@ class EnhancedWordTranslator:
                     **translate_kwargs,
                 )
                 results[text] = translated_text
+                if stage_1_artifact_rows is not None:
+                    stage_1_artifact_rows.append(
+                        {
+                            "id": item_ids[text],
+                            "chunk_id": debug_custom_id or "",
+                            "source_text": text,
+                            "stage_1_translation": translated_text,
+                        }
+                    )
             return await self.post_edit_word_translations(
                 results,
                 item_ids=item_ids,
@@ -1943,6 +2068,7 @@ class EnhancedWordTranslator:
                 cancel_event=cancel_event,
                 warning_callback=warning_callback,
                 debug_job_dir=debug_job_dir,
+                final_provenance=final_provenance,
             )
 
     async def process_translation(
@@ -2054,6 +2180,8 @@ class EnhancedWordTranslator:
 
         unique_texts = list(texts_for_translation.keys())
         translated_cache: dict[str, str] = {}
+        final_provenance: dict[str, dict[str, Any]] = {}
+        stage_1_artifact_rows: list[dict[str, Any]] = []
         tm_reference_map: dict[str, list[translation_memory.TranslationMemoryMatch]] = {}
         tm_artifact_collector = translation_memory.create_artifact_collector()
         item_ids = {
@@ -2071,8 +2199,14 @@ class EnhancedWordTranslator:
             exact_match = tm_result.exact_match if tm_result else None
             translated_text = str(exact_match.target_text or "").strip() if exact_match else ""
             if translated_text:
+                tm_translation = translated_text
                 translated_text = _repair_cjk_brackets_from_source(text, translated_text)
                 translated_cache[text] = translated_text
+                final_provenance[text] = {
+                    "final_source": "tm_exact",
+                    "fallback_reason": None,
+                    "post_process_actions": _translation_repair_actions(text, tm_translation, translated_text),
+                }
                 translation_memory.add_artifact_match(
                     tm_artifact_collector,
                     segment_id=item_ids[text],
@@ -2135,6 +2269,8 @@ class EnhancedWordTranslator:
                     warning_callback=warning_callback,
                     glossary_hit_collector=glossary_hit_collector,
                     translation_memory_references=tm_reference_map,
+                    stage_1_artifact_rows=stage_1_artifact_rows,
+                    final_provenance=final_provenance,
                 )
                 await asyncio.sleep(request_delay)
                 return results
@@ -2161,10 +2297,12 @@ class EnhancedWordTranslator:
             raise WordTranslationCancelled("Word translation cancelled.")
 
         if debug_job_dir is not None:
+            _write_word_stage_1_translations_artifact(debug_job_dir, stage_1_artifact_rows)
             _write_word_final_translations_artifact(
                 debug_job_dir,
                 item_ids=item_ids,
                 translations=translated_cache,
+                provenance=final_provenance,
             )
 
         writeback_rows: list[dict[str, Any]] = []
