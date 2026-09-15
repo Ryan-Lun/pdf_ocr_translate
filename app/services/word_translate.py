@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from openai import AsyncOpenAI
 
@@ -36,10 +36,12 @@ WORD_LAYOUT_BILINGUAL_BELOW = word_layout.BILINGUAL_BELOW
 WORD_STAGE_1_TRANSLATIONS_ARTIFACT = "word_stage_1_translations.json"
 WORD_FINAL_TRANSLATIONS_ARTIFACT = "word_final_translations.json"
 WORD_WRITEBACK_MAP_ARTIFACT = "word_writeback_map.json"
+WORD_TRANSLATION_LIFECYCLE_ARTIFACT = "word_translation_lifecycle.json"
 _WORD_STALE_ARTIFACTS = (
     WORD_STAGE_1_TRANSLATIONS_ARTIFACT,
     WORD_FINAL_TRANSLATIONS_ARTIFACT,
     WORD_WRITEBACK_MAP_ARTIFACT,
+    WORD_TRANSLATION_LIFECYCLE_ARTIFACT,
     "word_stage_2_post_edit.json",
     "glossary_hits.json",
     "tm_matches.json",
@@ -120,15 +122,14 @@ def _write_word_stage_1_translations_artifact(job_dir: Path, rows: list[dict[str
     )
 
 
-def _write_word_final_translations_artifact(
-    job_dir: Path,
+def _word_final_translation_rows(
     *,
     item_ids: dict[str, str],
     translations: dict[str, str],
     provenance: dict[str, dict[str, Any]],
     extra_rows: Iterable[dict[str, Any]] | None = None,
-) -> None:
-    rows = []
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for source_text in item_ids:
         if source_text not in translations:
             continue
@@ -145,6 +146,14 @@ def _write_word_final_translations_artifact(
         )
     if extra_rows:
         rows.extend(extra_rows)
+    return rows
+
+
+def _write_word_final_translations_artifact(
+    job_dir: Path,
+    *,
+    rows: list[dict[str, Any]],
+) -> None:
     _write_word_json_artifact(
         job_dir,
         WORD_FINAL_TRANSLATIONS_ARTIFACT,
@@ -162,6 +171,194 @@ def _write_word_writeback_map_artifact(
         job_dir,
         WORD_WRITEBACK_MAP_ARTIFACT,
         {"items": rows, "discarded_items": discarded_items or []},
+    )
+
+
+def _required_terms_for_lifecycle(required_terms: glossary.RequiredTermContext) -> list[dict[str, str]]:
+    if required_terms is None:
+        return []
+    terms: Iterable[Any]
+    if isinstance(required_terms, glossary.GlossaryApplication):
+        terms = required_terms.required_terms
+    elif isinstance(required_terms, Mapping):
+        return [
+            {
+                "source_term": "",
+                "approved_term": str(target),
+            }
+            for target in required_terms.values()
+        ]
+    else:
+        terms = required_terms
+    return [
+        {
+            "source_term": str(getattr(term, "source", "")),
+            "approved_term": str(getattr(term, "target", "")),
+        }
+        for term in terms
+        if getattr(term, "target", None)
+    ]
+
+
+def _build_word_lifecycle_glossary_summary(
+    glossary_hit_collector: Iterable[tuple[str, glossary.RequiredTermContext]],
+) -> dict[str, list[dict[str, str]]]:
+    glossary_by_id: dict[str, list[dict[str, str]]] = {}
+    seen_by_id: dict[str, set[tuple[str, str]]] = {}
+    for item_id, required_terms in glossary_hit_collector:
+        item_key = str(item_id or "")
+        if not item_key:
+            continue
+        seen = seen_by_id.setdefault(item_key, set())
+        rows = glossary_by_id.setdefault(item_key, [])
+        for term in _required_terms_for_lifecycle(required_terms):
+            key = (term["source_term"], term["approved_term"])
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(term)
+    return glossary_by_id
+
+
+def _build_word_lifecycle_tm_summary(
+    tm_artifact_collector: translation_memory.TranslationMemoryArtifactCollector | None,
+) -> dict[str, dict[str, Any]]:
+    tm_by_id: dict[str, dict[str, Any]] = {}
+    collector = tm_artifact_collector or translation_memory.create_artifact_collector()
+    for match in collector.matches:
+        item_id = str(match.get("segment_id") or "")
+        if not item_id:
+            continue
+        tm_by_id.setdefault(
+            item_id,
+            {
+                "exact_match": None,
+                "references": [],
+                "has_references": False,
+            },
+        )["exact_match"] = {
+            "entry_id": match.get("entry_id"),
+            "match_type": match.get("match_type"),
+            "score": match.get("score"),
+            "target_text": match.get("tm_target_text"),
+        }
+    for reference in collector.references:
+        item_id = str(reference.get("segment_id") or "")
+        if not item_id:
+            continue
+        summary = tm_by_id.setdefault(
+            item_id,
+            {
+                "exact_match": None,
+                "references": [],
+                "has_references": False,
+            },
+        )
+        summary["has_references"] = True
+        summary["references"].append(
+            {
+                "entry_id": reference.get("entry_id"),
+                "match_type": reference.get("match_type"),
+                "score": reference.get("score"),
+                "target_text": reference.get("tm_target_text"),
+            }
+        )
+    return tm_by_id
+
+
+def _write_word_translation_lifecycle_artifact(
+    job_dir: Path,
+    *,
+    stage_1_rows: list[dict[str, Any]],
+    final_rows: list[dict[str, Any]],
+    writeback_rows: list[dict[str, Any]],
+    discarded_items: list[dict[str, Any]],
+    glossary_hit_collector: Iterable[tuple[str, glossary.RequiredTermContext]],
+    tm_artifact_collector: translation_memory.TranslationMemoryArtifactCollector | None,
+) -> None:
+    stage_1_by_id = {str(row.get("id") or ""): row for row in stage_1_rows}
+    final_by_id = {str(row.get("id") or ""): row for row in final_rows}
+    writebacks_by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in writeback_rows:
+        item_id = str(row.get("id") or "")
+        if item_id:
+            writebacks_by_id.setdefault(item_id, []).append(row)
+
+    glossary_by_id = _build_word_lifecycle_glossary_summary(glossary_hit_collector)
+    tm_by_id = _build_word_lifecycle_tm_summary(tm_artifact_collector)
+    item_ids = sorted(
+        {
+            *stage_1_by_id.keys(),
+            *final_by_id.keys(),
+            *writebacks_by_id.keys(),
+            *glossary_by_id.keys(),
+            *tm_by_id.keys(),
+        }
+        - {""}
+    )
+
+    rows: list[dict[str, Any]] = []
+    for item_id in item_ids:
+        stage_1_row = stage_1_by_id.get(item_id, {})
+        final_row = final_by_id.get(item_id, {})
+        writeback_group = writebacks_by_id.get(item_id, [])
+        source_text = (
+            final_row.get("source_text")
+            or stage_1_row.get("source_text")
+            or (writeback_group[0].get("source_text") if writeback_group else "")
+        )
+        final_source = final_row.get("final_source")
+        fallback_reason = final_row.get("fallback_reason")
+        rows.append(
+            {
+                "id": item_id,
+                "source_text": source_text,
+                "stage_1_translation": stage_1_row.get("stage_1_translation"),
+                "stage_1_chunk_id": stage_1_row.get("chunk_id"),
+                "stage_2": {
+                    "result": final_row.get("final_translation") if final_source == "stage_2" else None,
+                    "used_fallback": final_source == "stage_2_fallback_to_stage_1",
+                    "fallback_reason": fallback_reason,
+                },
+                "final_translation": final_row.get("final_translation"),
+                "final_source": final_source,
+                "fallback_reason": fallback_reason,
+                "post_process_actions": list(final_row.get("post_process_actions") or []),
+                "writeback_ids": [str(row.get("writeback_id") or "") for row in writeback_group],
+                "writebacks": writeback_group,
+                "glossary": {
+                    "required_terms": glossary_by_id.get(item_id, []),
+                },
+                "translation_memory": tm_by_id.get(
+                    item_id,
+                    {
+                        "exact_match": None,
+                        "references": [],
+                        "has_references": False,
+                    },
+                ),
+            }
+        )
+
+    discarded_by_id = {str(item.get("id") or ""): item for item in discarded_items}
+    discarded_rows = []
+    for item_id in sorted(discarded_by_id):
+        discarded = dict(discarded_by_id[item_id])
+        discarded["has_stage_1_translation"] = item_id in stage_1_by_id
+        discarded["has_final_translation"] = item_id in final_by_id
+        discarded["writeback_ids"] = [
+            str(row.get("writeback_id") or "")
+            for row in writebacks_by_id.get(item_id, [])
+        ]
+        discarded_rows.append(discarded)
+
+    _write_word_json_artifact(
+        job_dir,
+        WORD_TRANSLATION_LIFECYCLE_ARTIFACT,
+        {
+            "items": rows,
+            "discarded_items": discarded_rows,
+        },
     )
 
 
@@ -2353,14 +2550,18 @@ class EnhancedWordTranslator:
                 }
             )
 
+        final_artifact_rows = _word_final_translation_rows(
+            item_ids=item_ids,
+            translations=translated_cache,
+            provenance=final_provenance,
+            extra_rows=fixed_header_footer_final_rows,
+        )
+
         if debug_job_dir is not None:
             _write_word_stage_1_translations_artifact(debug_job_dir, stage_1_artifact_rows)
             _write_word_final_translations_artifact(
                 debug_job_dir,
-                item_ids=item_ids,
-                translations=translated_cache,
-                provenance=final_provenance,
-                extra_rows=fixed_header_footer_final_rows,
+                rows=final_artifact_rows,
             )
 
         writeback_rows: list[dict[str, Any]] = []
@@ -2460,6 +2661,15 @@ class EnhancedWordTranslator:
 
         if debug_job_dir is not None:
             _write_word_writeback_map_artifact(debug_job_dir, writeback_rows, discarded_items=discarded_items)
+            _write_word_translation_lifecycle_artifact(
+                debug_job_dir,
+                stage_1_rows=stage_1_artifact_rows,
+                final_rows=final_artifact_rows,
+                writeback_rows=writeback_rows,
+                discarded_items=discarded_items,
+                glossary_hit_collector=glossary_hit_collector,
+                tm_artifact_collector=tm_artifact_collector,
+            )
             glossary.write_required_glossary_hits_artifact(
                 debug_job_dir,
                 glossary_hit_collector,

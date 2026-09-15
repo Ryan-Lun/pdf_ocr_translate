@@ -20,6 +20,7 @@ from app.services.word_translate import (
     EnhancedWordTranslator,
     _cleanup_word_run_artifacts,
     _repair_cjk_brackets_from_source,
+    _write_word_translation_lifecycle_artifact,
     build_word_system_prompt,
     build_word_system_prompt_with_source,
     enqueue_word_job_from_upload,
@@ -139,6 +140,60 @@ async def _consume_translation(
         pass
 
 
+def test_word_translation_lifecycle_records_discarded_item_reason(tmp_path):
+    _write_word_translation_lifecycle_artifact(
+        tmp_path,
+        stage_1_rows=[
+            {
+                "id": "item_0001",
+                "chunk_id": "chunk_0001",
+                "source_text": "來源文字",
+                "stage_1_translation": "Stage 1 draft.",
+            }
+        ],
+        final_rows=[
+            {
+                "id": "item_0001",
+                "source_text": "來源文字",
+                "final_translation": "Stage 1 draft.",
+                "final_source": "stage_2_fallback_to_stage_1",
+                "fallback_reason": "post_edit_error:TimeoutError",
+                "post_process_actions": [],
+            }
+        ],
+        writeback_rows=[],
+        discarded_items=[
+            {
+                "id": "item_0001",
+                "source_text": "來源文字",
+                "drop_reason": "not_written",
+                "final_source": "stage_2_fallback_to_stage_1",
+            }
+        ],
+        glossary_hit_collector=[],
+        tm_artifact_collector=None,
+    )
+
+    lifecycle_artifact = json.loads((tmp_path / "word_translation_lifecycle.json").read_text(encoding="utf-8"))
+    assert lifecycle_artifact["items"][0]["id"] == "item_0001"
+    assert lifecycle_artifact["items"][0]["stage_2"] == {
+        "result": None,
+        "used_fallback": True,
+        "fallback_reason": "post_edit_error:TimeoutError",
+    }
+    assert lifecycle_artifact["discarded_items"] == [
+        {
+            "id": "item_0001",
+            "source_text": "來源文字",
+            "drop_reason": "not_written",
+            "final_source": "stage_2_fallback_to_stage_1",
+            "has_stage_1_translation": True,
+            "has_final_translation": True,
+            "writeback_ids": [],
+        }
+    ]
+
+
 def test_cleanup_word_run_artifacts_removes_stale_debug_and_output(tmp_path):
     output_path = tmp_path / "output" / "output.docx"
     source_path = tmp_path / "source.docx"
@@ -148,6 +203,7 @@ def test_cleanup_word_run_artifacts_removes_stale_debug_and_output(tmp_path):
         "word_stage_1_translations.json",
         "word_final_translations.json",
         "word_writeback_map.json",
+        "word_translation_lifecycle.json",
         "glossary_hits.json",
         "tm_matches.json",
         "tm_references.json",
@@ -155,6 +211,7 @@ def test_cleanup_word_run_artifacts_removes_stale_debug_and_output(tmp_path):
         "output/word_stage_1_translations.json",
         "output/word_final_translations.json",
         "output/word_writeback_map.json",
+        "output/word_translation_lifecycle.json",
         "output/glossary_hits.json",
         "output/tm_matches.json",
         "output/tm_references.json",
@@ -172,6 +229,7 @@ def test_cleanup_word_run_artifacts_removes_stale_debug_and_output(tmp_path):
     assert not output_path.exists()
     assert not (tmp_path / "word_stage_2_post_edit.json").exists()
     assert not (tmp_path / "word_stage_1_translations.json").exists()
+    assert not (tmp_path / "word_translation_lifecycle.json").exists()
     assert not (tmp_path / "output" / "word_stage_2_post_edit.json").exists()
     assert not (tmp_path / "output" / "word_stage_1_translations.json").exists()
     assert not (tmp_path / "realtime_debug").exists()
@@ -932,6 +990,7 @@ def test_word_translation_writes_final_and_writeback_artifacts(tmp_path, monkeyp
     stage_1_artifact = json.loads((tmp_path / "word_stage_1_translations.json").read_text(encoding="utf-8"))
     final_artifact = json.loads((tmp_path / "word_final_translations.json").read_text(encoding="utf-8"))
     writeback_artifact = json.loads((tmp_path / "word_writeback_map.json").read_text(encoding="utf-8"))
+    lifecycle_artifact = json.loads((tmp_path / "word_translation_lifecycle.json").read_text(encoding="utf-8"))
     assert stage_1_artifact == {
         "items": [
             {
@@ -972,7 +1031,34 @@ def test_word_translation_writes_final_and_writeback_artifacts(tmp_path, monkeyp
     assert not (tmp_path / "output" / "word_stage_1_translations.json").exists()
     assert not (tmp_path / "output" / "word_final_translations.json").exists()
     assert not (tmp_path / "output" / "word_writeback_map.json").exists()
+    assert not (tmp_path / "output" / "word_translation_lifecycle.json").exists()
     assert writeback_artifact["discarded_items"] == []
+    assert lifecycle_artifact["discarded_items"] == []
+    assert lifecycle_artifact["items"] == [
+        {
+            "id": "item_0001",
+            "source_text": "來源文字",
+            "stage_1_translation": "Stage 1 draft.",
+            "stage_1_chunk_id": "chunk_0001",
+            "stage_2": {
+                "result": "Stage 2 final.",
+                "used_fallback": False,
+                "fallback_reason": None,
+            },
+            "final_translation": "Stage 2 final.",
+            "final_source": "stage_2",
+            "fallback_reason": None,
+            "post_process_actions": [],
+            "writeback_ids": ["writeback_0001"],
+            "writebacks": writeback_artifact["items"],
+            "glossary": {"required_terms": []},
+            "translation_memory": {
+                "exact_match": None,
+                "references": [],
+                "has_references": False,
+            },
+        }
+    ]
     assert [paragraph.text for paragraph in docx.Document(output_path).paragraphs] == [
         "來源文字",
         writeback_artifact["items"][0]["applied_translation"],
@@ -1013,6 +1099,7 @@ def test_word_final_artifact_records_stage_2_disabled_repair_provenance(tmp_path
     )
 
     final_artifact = json.loads((tmp_path / "word_final_translations.json").read_text(encoding="utf-8"))
+    lifecycle_artifact = json.loads((tmp_path / "word_translation_lifecycle.json").read_text(encoding="utf-8"))
     assert final_artifact["items"] == [
         {
             "id": "item_0001",
@@ -1074,6 +1161,7 @@ def test_word_final_artifact_records_tm_exact_provenance(app, tmp_path, monkeypa
     )
 
     final_artifact = json.loads((tmp_path / "word_final_translations.json").read_text(encoding="utf-8"))
+    lifecycle_artifact = json.loads((tmp_path / "word_translation_lifecycle.json").read_text(encoding="utf-8"))
     assert final_artifact["items"] == [
         {
             "id": "item_0001",
@@ -1085,6 +1173,8 @@ def test_word_final_artifact_records_tm_exact_provenance(app, tmp_path, monkeypa
         }
     ]
     assert json.loads((tmp_path / "word_stage_1_translations.json").read_text(encoding="utf-8")) == {"items": []}
+    assert lifecycle_artifact["items"][0]["translation_memory"]["exact_match"]["target_text"] == "Confirm the equipment."
+    assert lifecycle_artifact["items"][0]["final_source"] == "tm_exact"
 
 
 def test_word_writeback_map_records_repeated_source_text_writebacks(tmp_path, monkeypatch):
@@ -1128,6 +1218,13 @@ def test_word_writeback_map_records_repeated_source_text_writebacks(tmp_path, mo
         "Repeated translation.",
     ]
     assert writeback_artifact["discarded_items"] == []
+    lifecycle_artifact = json.loads((tmp_path / "word_translation_lifecycle.json").read_text(encoding="utf-8"))
+    assert lifecycle_artifact["items"][0]["id"] == "item_0001"
+    assert lifecycle_artifact["items"][0]["writeback_ids"] == [
+        "writeback_0001",
+        "writeback_0002",
+    ]
+    assert lifecycle_artifact["discarded_items"] == []
 
 
 def test_word_translation_stage_2_fallback_keeps_stage_1_output(tmp_path, monkeypatch):
@@ -1987,6 +2084,7 @@ def test_word_translation_bilingual_below_uses_fixed_header_footer_terms_without
     ]
     final_artifact = json.loads((tmp_path / "word_final_translations.json").read_text(encoding="utf-8"))
     writeback_artifact = json.loads((tmp_path / "word_writeback_map.json").read_text(encoding="utf-8"))
+    lifecycle_artifact = json.loads((tmp_path / "word_translation_lifecycle.json").read_text(encoding="utf-8"))
     assert final_artifact["items"] == [
         {
             "id": "fixed_header_footer_0001",
@@ -2019,7 +2117,13 @@ def test_word_translation_bilingual_below_uses_fixed_header_footer_terms_without
         "fixed_header_footer",
     ]
     assert writeback_artifact["discarded_items"] == []
+    assert lifecycle_artifact["items"][0]["final_source"] == "fixed_header_footer"
+    assert lifecycle_artifact["items"][0]["writeback_ids"] == ["writeback_0001"]
+    assert lifecycle_artifact["items"][1]["final_source"] == "fixed_header_footer"
+    assert lifecycle_artifact["items"][1]["writeback_ids"] == ["writeback_0002"]
+    assert lifecycle_artifact["discarded_items"] == []
     assert not (tmp_path / "output" / "word_writeback_map.json").exists()
+    assert not (tmp_path / "output" / "word_translation_lifecycle.json").exists()
     assert calls == []
 
 
@@ -3527,6 +3631,13 @@ def test_word_translation_preserves_decimal_prefix_before_required_glossary(tmp_
             "count": 1,
             "locations": ["item_0002"],
         },
+    ]
+    lifecycle_artifact = json.loads((tmp_path / "word_translation_lifecycle.json").read_text(encoding="utf-8"))
+    assert lifecycle_artifact["items"][0]["glossary"]["required_terms"] == [
+        {"source_term": "雷射雕刻", "approved_term": "Laser Marking"}
+    ]
+    assert lifecycle_artifact["items"][1]["glossary"]["required_terms"] == [
+        {"source_term": "外觀", "approved_term": "Appearance"}
     ]
 
 
