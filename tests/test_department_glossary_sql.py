@@ -471,6 +471,51 @@ def test_selected_department_glossary_can_fallback_to_default_for_legacy_paths(a
     assert selected.entry_count == 1
 
 
+
+
+def test_execution_department_glossary_preserves_validation_type_for_word_flow(app):
+    _clear_department_glossary()
+    library = glossary.get_or_create_department_glossary_library(
+        code="quality-assurance",
+        name="品保部",
+        department_code="QA",
+    )
+    glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="腐蝕",
+        target_term="corrosion",
+        validation_type=glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+    )
+
+    entries, context = glossary.load_execution_department_glossary(
+        library.library_id,
+        source_lang="zh",
+        target_lang="en",
+    )
+    application = glossary.apply_required_glossary_terms(
+        "避免在有腐蝕性氣體的環境中使用。",
+        entries,
+        source_lang="zh",
+        target_lang="en",
+    )
+
+    assert context["entry_count"] == 1
+    assert context["entries"] == [
+        {
+            "source_term": "腐蝕",
+            "target_term": "corrosion",
+            "validation_type": glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+        }
+    ]
+    assert [term.target for term in application.required_terms] == []
+    assert [term.target for term in application.lexical_terms] == ["corrosion"]
+    assert glossary.evaluate_glossary_validation(
+        "Avoid using the instrument in environments with corrosive gases.",
+        application,
+    ).soft_misses[0].target == "corrosion"
+
 def test_combined_glossary_rejects_invalid_translation_glossary_source(app, monkeypatch):
     _clear_department_glossary()
     monkeypatch.setattr(glossary.state, "TRANSLATION_GLOSSARY_SOURCE", "ssql")

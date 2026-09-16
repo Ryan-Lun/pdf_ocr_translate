@@ -73,6 +73,23 @@ def test_glossary_entries_reverse_for_english_to_chinese():
     assert glossary.restore_protected_glossary_terms(protected) == "批號"
 
 
+def test_glossary_pairs_accept_department_glossary_entries():
+    entries = [
+        glossary.DepartmentGlossaryEntry(
+            entry_id=1,
+            library_id=2,
+            source_lang="zh",
+            target_lang="en",
+            source_term="腐蝕",
+            target_term="corrosion",
+            status=glossary.STATUS_ACTIVE,
+            validation_type=glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+        )
+    ]
+
+    assert glossary.glossary_pairs_for_translation(entries) == [("腐蝕", "corrosion")]
+
+
 def test_restore_protected_glossary_terms_tolerates_extra_brackets():
     text = "The purpose is [[[[GLOSSARY_TERM_0001::artificial hip joint]]] replacement."
 

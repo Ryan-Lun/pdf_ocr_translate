@@ -40,6 +40,8 @@ def _item(
     draft: str = "Confirm whether the dimensions of the first semi-finished product conform to the process specification.",
     required_terms: tuple[RequiredGlossaryTerm, ...] = (),
     protected_texts: tuple[str, ...] = (),
+    lexical_terms: tuple[RequiredGlossaryTerm, ...] = (),
+    reference_terms: tuple[RequiredGlossaryTerm, ...] = (),
 ) -> translation_post_edit.PostEditItem:
     return translation_post_edit.PostEditItem(
         id=item_id,
@@ -47,6 +49,8 @@ def _item(
         draft_text=draft,
         required_terms=required_terms,
         protected_texts=protected_texts,
+        lexical_terms=lexical_terms,
+        reference_terms=reference_terms,
     )
 
 
@@ -927,3 +931,51 @@ def test_stage_2_settings_are_exposed_to_flask_config():
     assert isinstance(BaseConfig.TRANSLATION_POST_EDIT_TEMPERATURE, float)
     assert isinstance(BaseConfig.TRANSLATION_POST_EDIT_MAX_TOKENS, int)
 
+
+
+def test_stage_2_artifact_serializes_typed_glossary_validation(tmp_path):
+    item = _item(
+        item_id="seg-1",
+        source="確認紀錄與外觀。",
+        draft="Check the documentation and Appearance.",
+        lexical_terms=(RequiredGlossaryTerm("0001", "紀錄", "record"),),
+        required_terms=(RequiredGlossaryTerm("0002", "外觀", "Appearance"),),
+        reference_terms=(RequiredGlossaryTerm("ref_0001", "外觀", "Appearance"),),
+    )
+    result = translation_post_edit.PostEditBatchResult(
+        enabled=True,
+        items=(
+            translation_post_edit.PostEditResultItem(
+                "seg-1",
+                "Check the records and Appearance.",
+                stage_2_text="Check the records and Appearance.",
+            ),
+        ),
+    )
+
+    artifact_path = translation_post_edit.write_post_edit_artifact(
+        tmp_path,
+        [item],
+        result,
+        filename="word_stage_2_post_edit.json",
+    )
+
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert artifact["items"][0]["glossary_validation"] == {
+        "strict_missing": [],
+        "soft_matches": [
+            {
+                "source_term": "紀錄",
+                "approved_term": "record",
+                "matched_text": "records",
+                "match_type": "plural",
+            }
+        ],
+        "soft_misses": [],
+        "reference_only_hits": [
+            {
+                "source_term": "外觀",
+                "approved_term": "Appearance",
+            }
+        ],
+    }

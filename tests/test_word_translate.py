@@ -120,6 +120,7 @@ async def _consume_translation(
     header_footer_font_size_pt: float | None = None,
     excluded_table_indices: tuple[int, ...] = (),
     header_footer_fixed_terms: tuple[tuple[str, str], ...] = (),
+    department_glossary_library_id: object = None,
 ) -> None:
     async for _progress, _unused_quality in translator.process_translation(
         source_path=source_path,
@@ -136,6 +137,7 @@ async def _consume_translation(
         header_footer_font_size_pt=header_footer_font_size_pt,
         excluded_table_indices=excluded_table_indices,
         header_footer_fixed_terms=header_footer_fixed_terms,
+        department_glossary_library_id=department_glossary_library_id,
     ):
         pass
 
@@ -754,6 +756,86 @@ def test_word_translation_stage_2_disabled_does_not_call_post_edit(tmp_path, mon
     assert [paragraph.text for paragraph in translated_doc.paragraphs] == ["Stage 1 draft."]
 
 
+
+
+def test_word_translation_stage_2_does_not_fallback_for_lexical_required_soft_miss(app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    library = glossary.get_or_create_department_glossary_library(
+        code="quality-assurance",
+        name="品保部",
+        department_code="QA",
+    )
+    glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="腐蝕",
+        target_term="corrosion",
+        validation_type=glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Avoid using the instrument in environments with heavy dust or corrosionic gases."]),
+    )
+
+    async def fake_post_edit(items, **kwargs):
+        item_tuple = tuple(items)
+        assert item_tuple[0].required_terms == ()
+        assert item_tuple[0].lexical_terms[0].target == "corrosion"
+        return translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(
+                translation_post_edit.PostEditResultItem(
+                    item_tuple[0].id,
+                    "Avoid using the instrument in environments with heavy dust or corrosive gases.",
+                    stage_2_text="Avoid using the instrument in environments with heavy dust or corrosive gases.",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.services.word_translate.translation_post_edit.post_edit_texts_batch",
+        fake_post_edit,
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("避免在粉塵嚴重和有腐蝕性氣體的環境中使用。")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            debug_job_dir=tmp_path,
+            department_glossary_library_id=library.library_id,
+        )
+    )
+
+    final_artifact = json.loads((tmp_path / "word_final_translations.json").read_text(encoding="utf-8"))
+    stage_2_artifact = json.loads((tmp_path / "word_stage_2_post_edit.json").read_text(encoding="utf-8"))
+    lifecycle_artifact = json.loads((tmp_path / "word_translation_lifecycle.json").read_text(encoding="utf-8"))
+    assert final_artifact["items"][0]["final_source"] == "stage_2"
+    assert final_artifact["items"][0]["final_translation"].endswith("corrosive gases.")
+    assert stage_2_artifact["items"][0]["used_fallback"] is False
+    assert stage_2_artifact["items"][0]["glossary_validation"]["soft_misses"] == [
+        {
+            "source_term": "腐蝕",
+            "approved_term": "corrosion",
+        }
+    ]
+    assert lifecycle_artifact["items"][0]["glossary_validation"]["soft_misses"] == [
+        {
+            "source_term": "腐蝕",
+            "approved_term": "corrosion",
+        }
+    ]
+
 def test_word_translation_stage_2_revises_llm_batch_output(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
     monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
@@ -892,6 +974,75 @@ def test_word_translation_stage_2_artifact_records_accepted_glossary_variants(tm
     ]
     assert artifact["items"][0]["validation_warnings"] == []
 
+
+
+
+def test_word_translation_stage_2_artifact_keeps_all_chunks(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    monkeypatch.setattr(
+        "app.services.word_translate.glossary.load_combined_glossary",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _client_returning_translations(["Stage 1 draft."]),
+    )
+
+    async def fake_post_edit(items, **kwargs):
+        item_tuple = tuple(items)
+        return translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=tuple(
+                translation_post_edit.PostEditResultItem(
+                    item.id,
+                    f"Stage 2 final for {item.id}.",
+                    stage_2_text=f"Stage 2 final for {item.id}.",
+                )
+                for item in item_tuple
+            ),
+            raw_response=json.dumps(
+                {item.id: f"Stage 2 final for {item.id}." for item in item_tuple},
+                ensure_ascii=False,
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.services.word_translate.translation_post_edit.post_edit_texts_batch",
+        fake_post_edit,
+    )
+
+    source_path = tmp_path / "source.docx"
+    output_path = tmp_path / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("來源一")
+    source_doc.add_paragraph("來源二")
+    source_doc.add_paragraph("來源三")
+    source_doc.save(source_path)
+
+    translator = EnhancedWordTranslator()
+    translator.batch_size = 1
+    asyncio.run(
+        _consume_translation(
+            translator,
+            source_path,
+            output_path,
+            source_language="zh",
+            debug_job_dir=tmp_path,
+        )
+    )
+
+    artifact = json.loads((tmp_path / "word_stage_2_post_edit.json").read_text(encoding="utf-8"))
+    assert [item["id"] for item in artifact["items"]] == [
+        "item_0001",
+        "item_0002",
+        "item_0003",
+    ]
+    assert [item["final_text"] for item in artifact["items"]] == [
+        "Stage 2 final for item_0001.",
+        "Stage 2 final for item_0002.",
+        "Stage 2 final for item_0003.",
+    ]
 
 def test_word_translation_stage_2_revises_bilingual_below_llm_output(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "TRANSLATION_MEMORY_ENABLED", False)
@@ -1059,6 +1210,12 @@ def test_word_translation_writes_final_and_writeback_artifacts(tmp_path, monkeyp
             "writeback_ids": ["writeback_0001"],
             "writebacks": writeback_artifact["items"],
             "glossary": {"required_terms": []},
+            "glossary_validation": {
+                "strict_missing": [],
+                "soft_matches": [],
+                "soft_misses": [],
+                "reference_only_hits": [],
+            },
             "translation_memory": {
                 "exact_match": None,
                 "references": [],
@@ -4339,3 +4496,206 @@ def test_word_translate_batch_uses_required_glossary_term_wrapper(monkeypatch):
     assert items[0]["text"] == '<term id="0001">Appearance</term>形狀'
     assert items[1]["text"] == '<term id="0001">Manufacturing Process</term>'
     assert "[[[GLOSSARY_TERM_" not in payload
+
+
+def test_word_translate_lexical_required_soft_match_does_not_retry(monkeypatch):
+    client, requests = _client_returning_translations_with_requests([
+        "The records are complete.",
+    ])
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: client,
+    )
+    warnings: list[str] = []
+    collector: list[tuple[str, glossary.GlossaryValidationOutcome]] = []
+    translator = EnhancedWordTranslator(post_edit_enabled=False)
+    translator.max_retries = 2
+
+    result = asyncio.run(
+        translator.translate_texts_batch(
+            ["紀錄完整。"],
+            "zh",
+            "en",
+            [],
+            glossary_entries=[
+                ("紀錄", "record", glossary.VALIDATION_TYPE_LEXICAL_REQUIRED),
+            ],
+            item_ids={"紀錄完整。": "item_0001"},
+            warning_callback=warnings.append,
+            glossary_validation_collector=collector,
+        )
+    )
+
+    assert result == {"紀錄完整。": "The records are complete."}
+    assert len(requests) == 1
+    assert warnings == []
+    assert collector[0][0] == "item_0001"
+    outcome = collector[0][1]
+    assert outcome.strict_missing == ()
+    assert outcome.soft_misses == ()
+    assert [(match.source, match.target, match.match_type) for match in outcome.soft_matches] == [
+        ("紀錄", "record", "plural")
+    ]
+
+
+def test_word_translate_lexical_required_soft_miss_warns_without_retry(monkeypatch):
+    client, requests = _client_returning_translations_with_requests([
+        "The documentation is complete.",
+    ])
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: client,
+    )
+    warnings: list[str] = []
+    collector: list[tuple[str, glossary.GlossaryValidationOutcome]] = []
+    translator = EnhancedWordTranslator(post_edit_enabled=False)
+    translator.max_retries = 2
+
+    result = asyncio.run(
+        translator.translate_texts_batch(
+            ["紀錄完整。"],
+            "zh",
+            "en",
+            [],
+            glossary_entries=[
+                ("紀錄", "record", glossary.VALIDATION_TYPE_LEXICAL_REQUIRED),
+            ],
+            item_ids={"紀錄完整。": "item_0001"},
+            warning_callback=warnings.append,
+            glossary_validation_collector=collector,
+        )
+    )
+
+    assert result == {"紀錄完整。": "The documentation is complete."}
+    assert len(requests) == 1
+    assert any("source=紀錄 approved=record" in warning for warning in warnings)
+    outcome = collector[0][1]
+    assert outcome.strict_missing == ()
+    assert outcome.soft_matches == ()
+    assert [(miss.source, miss.target) for miss in outcome.soft_misses] == [("紀錄", "record")]
+
+
+def test_word_translate_reference_only_glossary_does_not_wrap_or_require_terms(monkeypatch):
+    requests: list[dict] = []
+
+    class _ReferenceOnlyCompletions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            payload = kwargs["messages"][-1]["content"]
+            if "<SOURCE_ITEMS_JSON>\n" in payload:
+                raw_items = payload.split("<SOURCE_ITEMS_JSON>\n", 1)[1].split(
+                    "\n</SOURCE_ITEMS_JSON>",
+                    1,
+                )[0]
+                items = json.loads(raw_items)
+                content = json.dumps({items[0]["id"]: "Appearance shape"}, ensure_ascii=False)
+            else:
+                content = "Appearance shape"
+            message = type("Message", (), {"content": content})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _ReferenceOnlyChat:
+        completions = _ReferenceOnlyCompletions()
+
+    class _ReferenceOnlyClient:
+        chat = _ReferenceOnlyChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _ReferenceOnlyClient(),
+    )
+    collector: list[tuple[str, glossary.GlossaryValidationOutcome]] = []
+    translator = EnhancedWordTranslator(post_edit_enabled=False)
+
+    result = asyncio.run(
+        translator.translate_texts_batch(
+            ["外觀形狀"],
+            "zh",
+            "en",
+            [],
+            glossary_entries=[
+                ("外觀", "Appearance", glossary.VALIDATION_TYPE_REFERENCE_ONLY),
+            ],
+            item_ids={"外觀形狀": "item_0001"},
+            glossary_validation_collector=collector,
+        )
+    )
+
+    assert result == {"外觀形狀": "Appearance shape"}
+    payload = requests[0]["messages"][-1]["content"]
+    assert "外觀形狀" in payload
+    assert "<term" not in payload
+    system_prompt = requests[0]["messages"][0]["content"]
+    assert "Optional Reference Terminology" in system_prompt
+    assert "外觀 -> Appearance" in system_prompt
+    assert "Required glossary terms use this format" not in system_prompt
+    assert collector[0][1].reference_only_hits[0].target == "Appearance"
+
+
+def test_word_translation_lifecycle_records_glossary_validation(tmp_path):
+    outcome = glossary.GlossaryValidationOutcome(
+        strict_missing=("standardization",),
+        soft_matches=(
+            glossary.GlossarySoftMatch(
+                source="紀錄",
+                target="record",
+                matched_text="records",
+                match_type="plural",
+            ),
+        ),
+        soft_misses=(glossary.GlossarySoftMiss(source="定義", target="definition"),),
+        reference_only_hits=(glossary.RequiredGlossaryTerm("ref_0001", "外觀", "Appearance"),),
+    )
+
+    _write_word_translation_lifecycle_artifact(
+        tmp_path,
+        stage_1_rows=[
+            {
+                "id": "item_0001",
+                "chunk_id": "chunk_0001",
+                "source_text": "來源文字",
+                "stage_1_translation": "Stage 1 draft.",
+            }
+        ],
+        final_rows=[
+            {
+                "id": "item_0001",
+                "source_text": "來源文字",
+                "final_translation": "Stage 2 final.",
+                "final_source": "stage_2",
+                "fallback_reason": None,
+                "post_process_actions": [],
+            }
+        ],
+        writeback_rows=[],
+        discarded_items=[],
+        glossary_hit_collector=[],
+        glossary_validation_collector=[("item_0001", outcome)],
+        tm_artifact_collector=None,
+    )
+
+    lifecycle_artifact = json.loads((tmp_path / "word_translation_lifecycle.json").read_text(encoding="utf-8"))
+    assert lifecycle_artifact["items"][0]["glossary_validation"] == {
+        "strict_missing": ["standardization"],
+        "soft_matches": [
+            {
+                "source_term": "紀錄",
+                "approved_term": "record",
+                "matched_text": "records",
+                "match_type": "plural",
+            }
+        ],
+        "soft_misses": [
+            {
+                "source_term": "定義",
+                "approved_term": "definition",
+            }
+        ],
+        "reference_only_hits": [
+            {
+                "source_term": "外觀",
+                "approved_term": "Appearance",
+            }
+        ],
+    }

@@ -238,9 +238,40 @@ class RequiredGlossaryTerm:
 
 
 @dataclass(frozen=True)
+class TranslationGlossaryEntry:
+    source: str
+    target: str
+    validation_type: str = VALIDATION_TYPE_STRICT_REQUIRED
+
+
+@dataclass(frozen=True)
+class GlossarySoftMatch:
+    source: str
+    target: str
+    matched_text: str
+    match_type: str
+
+
+@dataclass(frozen=True)
+class GlossarySoftMiss:
+    source: str
+    target: str
+
+
+@dataclass(frozen=True)
+class GlossaryValidationOutcome:
+    strict_missing: tuple[str, ...] = ()
+    soft_matches: tuple[GlossarySoftMatch, ...] = ()
+    soft_misses: tuple[GlossarySoftMiss, ...] = ()
+    reference_only_hits: tuple[RequiredGlossaryTerm, ...] = ()
+
+
+@dataclass(frozen=True)
 class GlossaryApplication:
     text: str
     required_terms: tuple[RequiredGlossaryTerm, ...]
+    lexical_terms: tuple[RequiredGlossaryTerm, ...] = ()
+    reference_terms: tuple[RequiredGlossaryTerm, ...] = ()
 
 
 RequiredTermContext: TypeAlias = (
@@ -2027,7 +2058,7 @@ def current_department_glossary_context(
     *,
     source_lang: str = "zh",
     target_lang: str = "en",
-    glossary_entries: list[tuple[str, str]] | None = None,
+    glossary_entries: Iterable[object] | None = None,
 ) -> dict[str, object]:
     source = _translation_glossary_source()
     entries = list(glossary_entries) if glossary_entries is not None else load_glossary_entries(
@@ -2035,10 +2066,18 @@ def current_department_glossary_context(
         source_lang=source_lang,
         target_lang=target_lang,
     )
-    entry_snapshot = [
-        {"source_term": source_term, "target_term": target_term}
-        for source_term, target_term in entries
-    ]
+    entry_snapshot = []
+    for raw_entry in entries:
+        entry = _entry_to_translation_glossary_entry(raw_entry)
+        if entry is None:
+            continue
+        entry_snapshot.append(
+            {
+                "source_term": entry.source,
+                "target_term": entry.target,
+                "validation_type": entry.validation_type,
+            }
+        )
     context: dict[str, object] = {
         "source": source,
         "library_id": None,
@@ -2048,7 +2087,7 @@ def current_department_glossary_context(
         "entry_count": len(entries),
         "entries": entry_snapshot,
     }
-    if source == "json":
+    if source == "json" or (library_id is None and glossary_entries is not None):
         return context
 
     try:
@@ -2093,10 +2132,10 @@ def load_execution_department_glossary(
     source_lang: str = "zh",
     target_lang: str = "en",
     allow_default_fallback: bool = True,
-) -> tuple[list[tuple[str, str]], dict[str, object]]:
+) -> tuple[list[object], dict[str, object]]:
     lookup_source_lang = department_glossary_lookup_source_lang(source_lang)
-    if library_id is None or not str(library_id).strip():
-        entries = load_combined_glossary()
+    if _translation_glossary_source() == "json" or library_id is None or not str(library_id).strip():
+        entries = list(load_combined_glossary())
         context = current_department_glossary_context(
             glossary_entries=entries,
             source_lang=lookup_source_lang,
@@ -2113,8 +2152,9 @@ def load_execution_department_glossary(
         )
     except DepartmentGlossarySelectionError as exc:
         raise RuntimeError(exc.user_message) from exc
-    entries = load_combined_glossary(
+    entries = list_department_glossary_entries(
         selected.library_id,
+        active_only=True,
         source_lang=lookup_source_lang,
         target_lang=target_lang,
     )
@@ -2124,7 +2164,7 @@ def load_execution_department_glossary(
         source_lang=lookup_source_lang,
         target_lang=target_lang,
     )
-    return entries, context
+    return list(entries), context
 
 
 def department_glossary_context_artifact_enabled() -> bool:
@@ -2219,7 +2259,7 @@ def _uses_reverse_glossary_direction(source_lang: str, target_lang: str) -> bool
 
 
 def glossary_pairs_for_translation(
-    entries: list[tuple[str, str]] | None = None,
+    entries: Iterable[object] | None = None,
     *,
     source_lang: str = "auto",
     target_lang: str = "en",
@@ -2230,9 +2270,12 @@ def glossary_pairs_for_translation(
         return []
     reverse = _uses_reverse_glossary_direction(source_lang, target_lang)
     pairs: list[tuple[str, str]] = []
-    for cn, en in entries:
-        src = en if reverse else cn
-        dst = cn if reverse else en
+    for entry in entries:
+        glossary_entry = _entry_to_translation_glossary_entry(entry)
+        if glossary_entry is None:
+            continue
+        src = glossary_entry.target if reverse else glossary_entry.source
+        dst = glossary_entry.source if reverse else glossary_entry.target
         src = str(src or "").strip()
         dst = str(dst or "").strip()
         if src and dst:
@@ -2700,44 +2743,261 @@ def apply_glossary(
     return out
 
 
+def _entry_to_translation_glossary_entry(entry: object) -> TranslationGlossaryEntry | None:
+    if isinstance(entry, TranslationGlossaryEntry):
+        source = entry.source
+        target = entry.target
+        validation_type = entry.validation_type
+    elif isinstance(entry, DepartmentGlossaryEntry):
+        source = entry.source_term
+        target = entry.target_term
+        validation_type = entry.validation_type
+    elif isinstance(entry, Mapping):
+        source = entry.get("source_term") or entry.get("cn") or entry.get("source")
+        target = entry.get("target_term") or entry.get("en") or entry.get("target")
+        validation_type = entry.get("validation_type")
+    elif isinstance(entry, (tuple, list)) and len(entry) >= 2:
+        source = entry[0]
+        target = entry[1]
+        validation_type = entry[2] if len(entry) >= 3 else VALIDATION_TYPE_STRICT_REQUIRED
+    else:
+        return None
+    source_text = str(source or "").strip()
+    target_text = str(target or "").strip()
+    if not source_text or not target_text:
+        return None
+    return TranslationGlossaryEntry(
+        source=source_text,
+        target=target_text,
+        validation_type=_clean_department_glossary_validation_type(
+            str(validation_type or VALIDATION_TYPE_STRICT_REQUIRED)
+        ),
+    )
+
+
+def typed_glossary_entries_for_translation(
+    entries: Iterable[object] | None = None,
+    *,
+    source_lang: str = "auto",
+    target_lang: str = "en",
+) -> list[TranslationGlossaryEntry]:
+    if entries is None:
+        entries = load_glossary_entries()
+    reverse = _uses_reverse_glossary_direction(source_lang, target_lang)
+    typed_entries: list[TranslationGlossaryEntry] = []
+    for raw_entry in entries or ():
+        entry = _entry_to_translation_glossary_entry(raw_entry)
+        if entry is None:
+            continue
+        source = entry.target if reverse else entry.source
+        target = entry.source if reverse else entry.target
+        typed_entries.append(
+            TranslationGlossaryEntry(
+                source=source,
+                target=target,
+                validation_type=entry.validation_type,
+            )
+        )
+    typed_entries.sort(key=lambda item: len(item.source), reverse=True)
+    return typed_entries
+
+
+def load_typed_glossary_entries(
+    library_id: int | None = None,
+    *,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+) -> list[TranslationGlossaryEntry]:
+    if _translation_glossary_source() == "json":
+        return typed_glossary_entries_for_translation(
+            _load_json_glossary_entries(),
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+    entries = list_department_glossary_entries(
+        get_or_create_default_department_glossary().library_id if library_id is None else int(library_id),
+        active_only=True,
+        source_lang=department_glossary_lookup_source_lang(source_lang),
+        target_lang=target_lang,
+    )
+    return typed_glossary_entries_for_translation(
+        entries,
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+
+
+def optional_reference_terms_prompt(
+    entries: Iterable[object] | None,
+    *,
+    source_lang: str = "auto",
+    target_lang: str = "en",
+) -> str:
+    typed_entries = [
+        entry
+        for entry in typed_glossary_entries_for_translation(
+            entries,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+        if entry.validation_type == VALIDATION_TYPE_REFERENCE_ONLY
+    ]
+    if not typed_entries:
+        return ""
+    lines = "\n".join(
+        f"* {entry.source} -> {entry.target}"
+        for entry in typed_entries
+    )
+    return (
+        "\n\n# Optional Reference Terminology\n\n"
+        "The following glossary entries are optional reference terminology. "
+        "Use them only when they naturally fit the current source text. "
+        "They are not required terms and must not override source meaning.\n\n"
+        f"{lines}\n"
+    )
+
+
+def _plural_variants_for_term(normalized_target: str) -> tuple[str, ...]:
+    words = normalized_target.split(" ")
+    if not words:
+        return ()
+    last = words[-1]
+    variants = {last}
+    if last.endswith("ies") and len(last) > 3:
+        variants.add(last[:-3] + "y")
+    if last.endswith("es") and len(last) > 2:
+        variants.add(last[:-2])
+    if last.endswith("s") and len(last) > 1:
+        variants.add(last[:-1])
+    if re.search(r"(?:s|x|z|ch|sh)$", last):
+        variants.add(last + "es")
+    elif last.endswith("y") and len(last) > 1 and last[-2] not in "aeiou":
+        variants.add(last[:-1] + "ies")
+    else:
+        variants.add(last + "s")
+    variants.discard(last)
+    return tuple(" ".join([*words[:-1], variant]) for variant in sorted(variants) if variant)
+
+
+def _contains_normalized_required_term(normalized_text: str, normalized_term: str) -> bool:
+    if not normalized_term:
+        return False
+    pattern = re.escape(normalized_term).replace(r"\ ", r"\s+")
+    return re.search(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", normalized_text) is not None
+
+
+def _soft_glossary_match(text: str, target: str) -> GlossarySoftMatch | None:
+    normalized_text = _normalize_required_glossary_match_text(text)
+    normalized_target = _normalize_required_glossary_match_text(target)
+    if not normalized_target:
+        return None
+    if _contains_normalized_required_term(normalized_text, normalized_target):
+        return GlossarySoftMatch("", target, target, "exact")
+    for variant in _plural_variants_for_term(normalized_target):
+        if variant and _contains_normalized_required_term(normalized_text, variant):
+            return GlossarySoftMatch("", target, variant, "plural")
+    # Reuse the curated Stage 2 variant allow-list for first-phase lexical validation.
+    try:
+        from . import translation_post_edit
+
+        if translation_post_edit.required_glossary_term_match_count(
+            text,
+            target,
+            allow_variants=True,
+        ) > 0:
+            return GlossarySoftMatch("", target, target, "curated_variant")
+    except Exception:
+        return None
+    return None
+
+
+def evaluate_glossary_validation(
+    translated_text: str,
+    application: GlossaryApplication,
+) -> GlossaryValidationOutcome:
+    strict_missing = tuple(find_missing_required_glossary_terms(translated_text, application.required_terms))
+    soft_matches: list[GlossarySoftMatch] = []
+    soft_misses: list[GlossarySoftMiss] = []
+    for term in application.lexical_terms:
+        match = _soft_glossary_match(translated_text, term.target)
+        if match is None:
+            soft_misses.append(GlossarySoftMiss(term.source, term.target))
+            continue
+        soft_matches.append(
+            GlossarySoftMatch(
+                source=term.source,
+                target=term.target,
+                matched_text=match.matched_text,
+                match_type=match.match_type,
+            )
+        )
+    return GlossaryValidationOutcome(
+        strict_missing=strict_missing,
+        soft_matches=tuple(soft_matches),
+        soft_misses=tuple(soft_misses),
+        reference_only_hits=application.reference_terms,
+    )
+
+
 def apply_required_glossary_terms(
     text: str,
-    entries: list[tuple[str, str]] | None = None,
+    entries: Iterable[object] | None = None,
     *,
     source_lang: str = "auto",
     target_lang: str = "en",
 ) -> GlossaryApplication:
     if not text:
         return GlossaryApplication(text=text, required_terms=tuple())
-    pairs = glossary_pairs_for_translation(
+    typed_entries = typed_glossary_entries_for_translation(
         entries,
         source_lang=source_lang,
         target_lang=target_lang,
     )
-    if not pairs:
+    if not typed_entries:
         return GlossaryApplication(text=text, required_terms=tuple())
+
+    replacement_entries = [
+        entry
+        for entry in typed_entries
+        if entry.validation_type in {
+            VALIDATION_TYPE_STRICT_REQUIRED,
+            VALIDATION_TYPE_LEXICAL_REQUIRED,
+        }
+    ]
+    reference_entries = [
+        entry
+        for entry in typed_entries
+        if entry.validation_type == VALIDATION_TYPE_REFERENCE_ONLY
+    ]
 
     out_parts: list[str] = []
     hits: list[tuple[str, str]] = []
     required_terms: list[RequiredGlossaryTerm] = []
+    lexical_terms: list[RequiredGlossaryTerm] = []
     i = 0
     term_index = 1
     while i < len(text):
         matched = False
-        for src, dst in pairs:
-            match_length = source_term_match_length(text, src, i)
+        for entry in replacement_entries:
+            match_length = source_term_match_length(text, entry.source, i)
             if match_length is not None:
                 term_id = f"{term_index:04d}"
-                required_terms.append(
-                    RequiredGlossaryTerm(id=term_id, source=src, target=dst)
+                term = RequiredGlossaryTerm(
+                    id=term_id,
+                    source=entry.source,
+                    target=entry.target,
                 )
+                if entry.validation_type == VALIDATION_TYPE_STRICT_REQUIRED:
+                    required_terms.append(term)
+                else:
+                    lexical_terms.append(term)
                 protected = (
                     f'<term id="{term_id}">'
-                    f"{_escape_required_term_target(dst)}"
+                    f"{_escape_required_term_target(entry.target)}"
                     "</term>"
                 )
                 out_parts.append(protected)
-                hits.append((src, dst))
+                hits.append((entry.source, entry.target))
                 i += match_length
                 term_index += 1
                 matched = True
@@ -2747,6 +3007,25 @@ def apply_required_glossary_terms(
         out_parts.append(text[i])
         i += 1
 
+    reference_terms: list[RequiredGlossaryTerm] = []
+    reference_index = 1
+    for entry in reference_entries:
+        cursor = 0
+        while cursor < len(text):
+            match_length = source_term_match_length(text, entry.source, cursor)
+            if match_length is None:
+                cursor += 1
+                continue
+            reference_terms.append(
+                RequiredGlossaryTerm(
+                    id=f"ref_{reference_index:04d}",
+                    source=entry.source,
+                    target=entry.target,
+                )
+            )
+            reference_index += 1
+            break
+
     if hits:
         preview = ", ".join([f"{src}->{dst}" for src, dst in hits[:6]])
         more = f" (+{len(hits) - 6})" if len(hits) > 6 else ""
@@ -2754,6 +3033,8 @@ def apply_required_glossary_terms(
     return GlossaryApplication(
         text="".join(out_parts),
         required_terms=tuple(required_terms),
+        lexical_terms=tuple(lexical_terms),
+        reference_terms=tuple(reference_terms),
     )
 
 

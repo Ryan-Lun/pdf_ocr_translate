@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import openai_config, state
+from . import glossary as glossary_service
 from .glossary import RequiredGlossaryTerm
 
 
@@ -128,6 +129,8 @@ class PostEditItem:
     draft_text: str
     required_terms: tuple[RequiredGlossaryTerm, ...] = ()
     protected_texts: tuple[str, ...] = ()
+    lexical_terms: tuple[RequiredGlossaryTerm, ...] = ()
+    reference_terms: tuple[RequiredGlossaryTerm, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -683,6 +686,37 @@ def _ordered_protected_texts(item: PostEditItem) -> tuple[str, ...]:
     return tuple(value for _position, _index, value in positioned)
 
 
+def _serialize_post_edit_glossary_validation(
+    outcome: glossary_service.GlossaryValidationOutcome,
+) -> dict[str, Any]:
+    return {
+        "strict_missing": list(outcome.strict_missing),
+        "soft_matches": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+                "matched_text": item.matched_text,
+                "match_type": item.match_type,
+            }
+            for item in outcome.soft_matches
+        ],
+        "soft_misses": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+            }
+            for item in outcome.soft_misses
+        ],
+        "reference_only_hits": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+            }
+            for item in outcome.reference_only_hits
+        ],
+    }
+
+
 def write_post_edit_artifact(
     job_dir: Path,
     items: Iterable[PostEditItem],
@@ -743,6 +777,16 @@ def _build_artifact_item(
         "fallback_reason": result_item.fallback_reason,
         "validation_warnings": list(result_item.validation_warnings),
     }
+    if item is not None and (item.lexical_terms or item.reference_terms):
+        glossary_application = glossary_service.GlossaryApplication(
+            text=item.source_text,
+            required_terms=item.required_terms,
+            lexical_terms=item.lexical_terms,
+            reference_terms=item.reference_terms,
+        )
+        artifact_item["glossary_validation"] = _serialize_post_edit_glossary_validation(
+            glossary_service.evaluate_glossary_validation(result_item.text, glossary_application)
+        )
     if result_item.accepted_glossary_variants:
         artifact_item["accepted_glossary_variants"] = [
             {

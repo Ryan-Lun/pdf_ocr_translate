@@ -212,6 +212,41 @@ def _write_word_final_translations_artifact(
     )
 
 
+def _write_combined_word_stage_2_artifact(
+    job_dir: Path,
+    collector: Iterable[tuple[tuple[translation_post_edit.PostEditItem, ...], translation_post_edit.PostEditBatchResult]],
+) -> None:
+    item_by_id: dict[str, translation_post_edit.PostEditItem] = {}
+    result_by_id: dict[str, translation_post_edit.PostEditResultItem] = {}
+    raw_responses: list[str] = []
+    enabled = False
+    for items, result in collector:
+        enabled = enabled or result.enabled
+        for item in items:
+            item_by_id[item.id] = item
+        for result_item in result.items:
+            result_by_id[result_item.id] = result_item
+        if result.raw_response:
+            raw_responses.append(result.raw_response)
+    if not result_by_id:
+        return
+    ordered_ids = sorted(result_by_id)
+    raw_response = ""
+    if raw_responses:
+        raw_response = json.dumps(raw_responses, ensure_ascii=False)
+    translation_post_edit.write_post_edit_artifact(
+        job_dir,
+        [item_by_id[item_id] for item_id in ordered_ids if item_id in item_by_id],
+        translation_post_edit.PostEditBatchResult(
+            enabled=enabled,
+            items=tuple(result_by_id[item_id] for item_id in ordered_ids),
+            raw_response=raw_response,
+        ),
+        filename="word_stage_2_post_edit.json",
+        merge_existing=False,
+    )
+
+
 def _write_word_writeback_map_artifact(
     job_dir: Path,
     rows: list[dict[str, Any]],
@@ -271,6 +306,56 @@ def _build_word_lifecycle_glossary_summary(
     return glossary_by_id
 
 
+def _serialize_glossary_validation_outcome(
+    outcome: glossary.GlossaryValidationOutcome | None,
+) -> dict[str, Any]:
+    if outcome is None:
+        return {
+            "strict_missing": [],
+            "soft_matches": [],
+            "soft_misses": [],
+            "reference_only_hits": [],
+        }
+    return {
+        "strict_missing": list(outcome.strict_missing),
+        "soft_matches": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+                "matched_text": item.matched_text,
+                "match_type": item.match_type,
+            }
+            for item in outcome.soft_matches
+        ],
+        "soft_misses": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+            }
+            for item in outcome.soft_misses
+        ],
+        "reference_only_hits": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+            }
+            for item in outcome.reference_only_hits
+        ],
+    }
+
+
+def _build_word_lifecycle_glossary_validation_summary(
+    glossary_validation_collector: Iterable[tuple[str, glossary.GlossaryValidationOutcome]],
+) -> dict[str, dict[str, Any]]:
+    validation_by_id: dict[str, dict[str, Any]] = {}
+    for item_id, outcome in glossary_validation_collector:
+        item_key = str(item_id or "")
+        if not item_key:
+            continue
+        validation_by_id[item_key] = _serialize_glossary_validation_outcome(outcome)
+    return validation_by_id
+
+
 def _build_word_lifecycle_tm_summary(
     tm_artifact_collector: translation_memory.TranslationMemoryArtifactCollector | None,
 ) -> dict[str, dict[str, Any]]:
@@ -325,7 +410,8 @@ def _write_word_translation_lifecycle_artifact(
     writeback_rows: list[dict[str, Any]],
     discarded_items: list[dict[str, Any]],
     glossary_hit_collector: Iterable[tuple[str, glossary.RequiredTermContext]],
-    tm_artifact_collector: translation_memory.TranslationMemoryArtifactCollector | None,
+    glossary_validation_collector: Iterable[tuple[str, glossary.GlossaryValidationOutcome]] = (),
+    tm_artifact_collector: translation_memory.TranslationMemoryArtifactCollector | None = None,
 ) -> None:
     stage_1_by_id = {str(row.get("id") or ""): row for row in stage_1_rows}
     final_by_id = {str(row.get("id") or ""): row for row in final_rows}
@@ -336,6 +422,7 @@ def _write_word_translation_lifecycle_artifact(
             writebacks_by_id.setdefault(item_id, []).append(row)
 
     glossary_by_id = _build_word_lifecycle_glossary_summary(glossary_hit_collector)
+    glossary_validation_by_id = _build_word_lifecycle_glossary_validation_summary(glossary_validation_collector)
     tm_by_id = _build_word_lifecycle_tm_summary(tm_artifact_collector)
     item_ids = sorted(
         {
@@ -343,6 +430,7 @@ def _write_word_translation_lifecycle_artifact(
             *final_by_id.keys(),
             *writebacks_by_id.keys(),
             *glossary_by_id.keys(),
+            *glossary_validation_by_id.keys(),
             *tm_by_id.keys(),
         }
         - {""}
@@ -380,6 +468,10 @@ def _write_word_translation_lifecycle_artifact(
                 "glossary": {
                     "required_terms": glossary_by_id.get(item_id, []),
                 },
+                "glossary_validation": glossary_validation_by_id.get(
+                    item_id,
+                    _serialize_glossary_validation_outcome(None),
+                ),
                 "translation_memory": tm_by_id.get(
                     item_id,
                     {
@@ -1295,7 +1387,7 @@ class EnhancedWordTranslator:
         target_lang: str,
         user_terms: list[str],
         system_prompt_adjustment: str | None,
-        glossary_entries: list[tuple[str, str]] | None,
+        glossary_entries: list[object] | None,
     ) -> str:
         system_prompt = build_word_system_prompt_with_source(source_lang, target_lang)
         custom_prompt = str(system_prompt_adjustment or "").strip()
@@ -1307,8 +1399,27 @@ class EnhancedWordTranslator:
             terms_list_str = ", ".join(f'"{term}"' for term in user_terms)
             system_prompt += USER_TERMS_INSTRUCTION.format(terms_list_str=terms_list_str)
         system_prompt += MASK_INSTRUCTION
-        if glossary_entries:
+        typed_glossary_entries = glossary.typed_glossary_entries_for_translation(
+            glossary_entries,
+            source_lang=source_lang,
+            target_lang=target_lang,
+        ) if glossary_entries else []
+        has_required_glossary_entries = any(
+            entry.validation_type
+            in {
+                glossary.VALIDATION_TYPE_STRICT_REQUIRED,
+                glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+            }
+            for entry in typed_glossary_entries
+        )
+        if has_required_glossary_entries:
             system_prompt += GLOSSARY_PROTECTION_INSTRUCTION
+        if glossary_entries:
+            system_prompt += glossary.optional_reference_terms_prompt(
+                glossary_entries,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
         return system_prompt
 
     def _build_missing_required_terms_prompt(self, missing_terms: list[str]) -> str:
@@ -1342,6 +1453,28 @@ class EnhancedWordTranslator:
             )
             <= 0
         ]
+
+    def _record_glossary_validation(
+        self,
+        *,
+        item_id: str,
+        translated_text: str,
+        glossary_application: glossary.GlossaryApplication | None,
+        glossary_validation_collector: list[tuple[str, glossary.GlossaryValidationOutcome]] | None,
+        warning_callback: Callable[[str], None] | None,
+    ) -> None:
+        if glossary_application is None:
+            return
+        outcome = glossary.evaluate_glossary_validation(translated_text, glossary_application)
+        if glossary_validation_collector is not None:
+            glossary_validation_collector.append((item_id, outcome))
+        if warning_callback is None:
+            return
+        for miss in outcome.soft_misses:
+            warning_callback(
+                "Word Glossary lexical term was not found in final translation; "
+                f"source={miss.source} approved={miss.target}"
+            )
 
     def _chunk_translation_texts(self, texts: list[str]) -> list[list[str]]:
         batches: list[list[str]] = []
@@ -1782,7 +1915,7 @@ class EnhancedWordTranslator:
         target_lang: str,
         user_terms: list[str],
         system_prompt_adjustment: str | None = None,
-        glossary_entries: list[tuple[str, str]] | None = None,
+        glossary_entries: list[object] | None = None,
         debug_job_dir: Path | None = None,
         debug_custom_id: str | None = None,
         cancel_event: threading.Event | None = None,
@@ -1798,7 +1931,7 @@ class EnhancedWordTranslator:
                 masked_text, token_map = self._mask_text(text, user_terms)
                 glossary_application = glossary.apply_required_glossary_terms(
                     masked_text,
-                    glossary_entries,
+                    glossary_entries or [],
                     source_lang=source_lang,
                     target_lang=target_lang,
                 )
@@ -1938,6 +2071,7 @@ class EnhancedWordTranslator:
         warning_callback: Callable[[str], None] | None = None,
         debug_job_dir: Path | None = None,
         final_provenance: dict[str, dict[str, Any]] | None = None,
+        post_edit_artifact_collector: list[tuple[tuple[translation_post_edit.PostEditItem, ...], translation_post_edit.PostEditBatchResult]] | None = None,
     ) -> dict[str, str]:
         if not translations:
             return translations
@@ -1985,6 +2119,12 @@ class EnhancedWordTranslator:
                     required_terms=tuple(glossary_application.required_terms)
                     if glossary_application is not None
                     else tuple(),
+                    lexical_terms=tuple(glossary_application.lexical_terms)
+                    if glossary_application is not None
+                    else tuple(),
+                    reference_terms=tuple(glossary_application.reference_terms)
+                    if glossary_application is not None
+                    else tuple(),
                     protected_texts=_merge_exact_protected_texts(
                         user_terms,
                         translation_post_edit.collect_exact_protected_texts(text, draft_text),
@@ -2018,14 +2158,17 @@ class EnhancedWordTranslator:
             logger.warning("Word Stage 2 post-edit failed, using Stage 1 drafts error=%s", exc)
             if warning_callback is not None:
                 warning_callback(f"Word Stage 2 後編輯失敗，沿用 Stage 1 譯文：{exc}")
-            if debug_job_dir is not None:
+            fallback_result = translation_post_edit.build_fallback_result(
+                post_edit_items,
+                reason=f"post_edit_error:{exc.__class__.__name__}",
+            )
+            if post_edit_artifact_collector is not None:
+                post_edit_artifact_collector.append((tuple(post_edit_items), fallback_result))
+            elif debug_job_dir is not None:
                 translation_post_edit.write_post_edit_artifact(
                     debug_job_dir,
                     post_edit_items,
-                    translation_post_edit.build_fallback_result(
-                        post_edit_items,
-                        reason=f"post_edit_error:{exc.__class__.__name__}",
-                    ),
+                    fallback_result,
                     filename="word_stage_2_post_edit.json",
                     merge_existing=False,
                 )
@@ -2042,7 +2185,9 @@ class EnhancedWordTranslator:
                     }
             return repaired
 
-        if debug_job_dir is not None:
+        if post_edit_artifact_collector is not None:
+            post_edit_artifact_collector.append((tuple(post_edit_items), post_edit_result))
+        elif debug_job_dir is not None:
             translation_post_edit.write_post_edit_artifact(
                 debug_job_dir,
                 post_edit_items,
@@ -2084,13 +2229,15 @@ class EnhancedWordTranslator:
         target_lang: str,
         user_terms: list[str],
         system_prompt_adjustment: str | None = None,
-        glossary_entries: list[tuple[str, str]] | None = None,
+        glossary_entries: list[object] | None = None,
         debug_job_dir: Path | None = None,
         debug_custom_id: str | None = None,
         item_ids: dict[str, str] | None = None,
         cancel_event: threading.Event | None = None,
         warning_callback: Callable[[str], None] | None = None,
         glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
+        glossary_validation_collector: list[tuple[str, glossary.GlossaryValidationOutcome]] | None = None,
+        post_edit_artifact_collector: list[tuple[tuple[translation_post_edit.PostEditItem, ...], translation_post_edit.PostEditBatchResult]] | None = None,
         translation_memory_references: dict[str, list[translation_memory.TranslationMemoryMatch]] | None = None,
         stage_1_artifact_rows: list[dict[str, Any]] | None = None,
         final_provenance: dict[str, dict[str, Any]] | None = None,
@@ -2103,7 +2250,7 @@ class EnhancedWordTranslator:
             masked_text, _token_map = self._mask_text(text, user_terms)
             glossary_application = glossary.apply_required_glossary_terms(
                 masked_text,
-                glossary_entries,
+                glossary_entries or [],
                 source_lang=source_lang,
                 target_lang=target_lang,
             )
@@ -2135,7 +2282,7 @@ class EnhancedWordTranslator:
                         "stage_1_translation": translated_text,
                     }
                 )
-            return await self.post_edit_word_translations(
+            final_results = await self.post_edit_word_translations(
                 {text: translated_text},
                 item_ids={text: item_id},
                 glossary_applications={item_id: glossary_application},
@@ -2145,7 +2292,16 @@ class EnhancedWordTranslator:
                 warning_callback=warning_callback,
                 debug_job_dir=debug_job_dir,
                 final_provenance=final_provenance,
+                post_edit_artifact_collector=post_edit_artifact_collector,
             )
+            self._record_glossary_validation(
+                item_id=item_id,
+                translated_text=final_results.get(text, translated_text),
+                glossary_application=glossary_application,
+                glossary_validation_collector=glossary_validation_collector,
+                warning_callback=warning_callback,
+            )
+            return final_results
 
         item_ids = item_ids or {
             text: f"item_{index:04d}"
@@ -2158,7 +2314,7 @@ class EnhancedWordTranslator:
             masked_text, token_map = self._mask_text(text, user_terms)
             glossary_application = glossary.apply_required_glossary_terms(
                 masked_text,
-                glossary_entries,
+                glossary_entries or [],
                 source_lang=source_lang,
                 target_lang=target_lang,
             )
@@ -2297,7 +2453,17 @@ class EnhancedWordTranslator:
                 warning_callback=warning_callback,
                 debug_job_dir=debug_job_dir,
                 final_provenance=final_provenance,
+                post_edit_artifact_collector=post_edit_artifact_collector,
             )
+            for text, translated_text in results.items():
+                item_id = item_ids.get(text, "")
+                self._record_glossary_validation(
+                    item_id=item_id,
+                    translated_text=translated_text,
+                    glossary_application=glossary_applications.get(item_id),
+                    glossary_validation_collector=glossary_validation_collector,
+                    warning_callback=warning_callback,
+                )
             parsed_translations = {item_ids[text]: results[text] for text in results if text in item_ids}
             if debug_job_dir is not None and debug_custom_id:
                 translation_debug.record_parsed(
@@ -2347,7 +2513,7 @@ class EnhancedWordTranslator:
                             "stage_1_translation": translated_text,
                         }
                     )
-            return await self.post_edit_word_translations(
+            final_results = await self.post_edit_word_translations(
                 results,
                 item_ids=item_ids,
                 glossary_applications=glossary_applications,
@@ -2357,7 +2523,18 @@ class EnhancedWordTranslator:
                 warning_callback=warning_callback,
                 debug_job_dir=debug_job_dir,
                 final_provenance=final_provenance,
+                post_edit_artifact_collector=post_edit_artifact_collector,
             )
+            for text, translated_text in final_results.items():
+                item_id = item_ids.get(text, "")
+                self._record_glossary_validation(
+                    item_id=item_id,
+                    translated_text=translated_text,
+                    glossary_application=glossary_applications.get(item_id),
+                    glossary_validation_collector=glossary_validation_collector,
+                    warning_callback=warning_callback,
+                )
+            return final_results
 
     async def process_translation(
         self,
@@ -2482,6 +2659,9 @@ class EnhancedWordTranslator:
             paragraph_id = id(paragraph._p)
             if paragraph_id in fixed_header_footer_translations and paragraph_id not in fixed_header_footer_item_ids:
                 fixed_header_footer_item_ids[paragraph_id] = f"fixed_header_footer_{len(fixed_header_footer_item_ids) + 1:04d}"
+        glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] = []
+        glossary_validation_collector: list[tuple[str, glossary.GlossaryValidationOutcome]] = []
+        post_edit_artifact_collector: list[tuple[tuple[translation_post_edit.PostEditItem, ...], translation_post_edit.PostEditBatchResult]] = []
         texts_for_llm: list[str] = []
         for text in unique_texts:
             tm_result = _retrieve_word_translation_memory(
@@ -2501,6 +2681,21 @@ class EnhancedWordTranslator:
                     "fallback_reason": None,
                     "post_process_actions": _translation_repair_actions(text, tm_translation, translated_text),
                 }
+                masked_text, _token_map = self._mask_text(text, user_terms)
+                glossary_application = glossary.apply_required_glossary_terms(
+                    masked_text,
+                    glossary_entries or [],
+                    source_lang=source_language,
+                    target_lang=target_language,
+                )
+                glossary_hit_collector.append((item_ids[text], glossary_application))
+                self._record_glossary_validation(
+                    item_id=item_ids[text],
+                    translated_text=translated_text,
+                    glossary_application=glossary_application,
+                    glossary_validation_collector=glossary_validation_collector,
+                    warning_callback=warning_callback,
+                )
                 translation_memory.add_artifact_match(
                     tm_artifact_collector,
                     segment_id=item_ids[text],
@@ -2540,7 +2735,6 @@ class EnhancedWordTranslator:
                 for index, batch_texts in enumerate(translation_batches, start=1)
             ],
         )
-        glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] = []
         semaphore = asyncio.Semaphore(self.concurrency_limit)
         request_delay = 60.0 / self.rpm_limit
         logger.info("Enhanced word translation segments=%s target_lang=%s", len(unique_texts), target_language)
@@ -2562,6 +2756,8 @@ class EnhancedWordTranslator:
                     cancel_event=cancel_event,
                     warning_callback=warning_callback,
                     glossary_hit_collector=glossary_hit_collector,
+                    glossary_validation_collector=glossary_validation_collector,
+                    post_edit_artifact_collector=post_edit_artifact_collector,
                     translation_memory_references=tm_reference_map,
                     stage_1_artifact_rows=stage_1_artifact_rows,
                     final_provenance=final_provenance,
@@ -2614,6 +2810,7 @@ class EnhancedWordTranslator:
         )
 
         if debug_job_dir is not None:
+            _write_combined_word_stage_2_artifact(debug_job_dir, post_edit_artifact_collector)
             _write_word_stage_1_translations_artifact(debug_job_dir, stage_1_artifact_rows)
             _write_word_final_translations_artifact(
                 debug_job_dir,
@@ -2724,6 +2921,7 @@ class EnhancedWordTranslator:
                 writeback_rows=writeback_rows,
                 discarded_items=discarded_items,
                 glossary_hit_collector=glossary_hit_collector,
+                glossary_validation_collector=glossary_validation_collector,
                 tm_artifact_collector=tm_artifact_collector,
             )
             glossary.write_required_glossary_hits_artifact(
