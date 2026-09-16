@@ -1,0 +1,3 @@
+# Department Glossary Validation is typed
+
+Department Glossary entries will use an approved validation type instead of treating every glossary hit as the same exact required term. We chose `strict_required`, `lexical_required`, and `reference_only` so official terminology can still hard fail, general lexical terms can produce reviewable soft matches or misses without interrupting jobs, and reference terms can guide prompts without constraining syntax. The classification is stored as human-approved glossary governance in the database; AI may help prepare review data outside the system, but runtime translation must use only the approved stored type.

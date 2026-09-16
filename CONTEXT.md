@@ -32,6 +32,30 @@ _Avoid_: Hint, synonym, protected content
 A controlled inflection of a Required Glossary Term that may be accepted only during Stage 2 post-edit validation when grammatically necessary, without changing the approved lexical family. It is not a synonym, replacement term, or relaxation for Exact Protected Content.
 _Avoid_: Synonym, free rewrite, glossary override
 
+**Glossary Validation Type**:
+The approved validation policy assigned to a Department Glossary entry, deciding whether that entry is enforced as strict terminology, checked as lexical terminology, or shown only as reference terminology. It is part of glossary governance, not a model-generated runtime guess.
+_Avoid_: AI classification, prompt hint, glossary priority
+
+**Strict Required Glossary Term**:
+A Required Glossary Term whose approved target-language term must be present under the existing hard validation behavior. It is used for official titles, organization names, product families, and other terms where omission should remain a blocking glossary failure.
+_Avoid_: Soft term, lexical hint, reference term
+
+**Lexical Required Glossary Term**:
+A Required Glossary Term whose approved lexical choice must be preserved, while deterministic case and inflection matches may be accepted without blocking the translation job. It is not permission to replace the term with a synonym or change the technical meaning.
+_Avoid_: Synonym, reference-only term, exact protected content
+
+**Reference-Only Glossary Term**:
+A Department Glossary entry shown to the translator as preferred terminology but not wrapped as a Required Glossary Term and not validated as required output. It remains part of the Effective Glossary for traceability.
+_Avoid_: Required term, soft failure, ignored glossary entry
+
+**Glossary Soft Match**:
+A non-blocking validation result where a Lexical Required Glossary Term did not appear exactly but was matched by an allowed deterministic case or inflection rule. It must be recorded for review rather than treated as a missing required term.
+_Avoid_: Accepted synonym, exact match, hard pass
+
+**Glossary Soft Miss**:
+A non-blocking validation result where a Lexical Required Glossary Term did not appear exactly and no allowed deterministic soft match was found. It is a review signal, not a job-stopping failure.
+_Avoid_: Missing required glossary term, hard failure, system error
+
 **Department Glossary**:
 A glossary library scoped to a department's approved terminology, selected so terms from different departments are not mixed in the same translation job.
 _Avoid_: System glossary, global glossary, personal glossary
