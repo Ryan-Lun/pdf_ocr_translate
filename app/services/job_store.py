@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, select, text
+from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from . import state
@@ -244,6 +245,12 @@ class DepartmentGlossaryEntryRecord(Base):
     target_lang: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     source_term: Mapped[str] = mapped_column(String(500), nullable=False)
     target_term: Mapped[str] = mapped_column(Text, nullable=False)
+    validation_type: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="strict_required",
+        server_default="strict_required",
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", index=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -365,19 +372,38 @@ def _ensure_compatible_columns() -> None:
     inspector = inspect(_engine)
     schema = inspection_schema(_engine)
     table_names = {name.lower() for name in inspector.get_table_names(schema=schema)}
+
+    def existing_columns(table_name: str) -> set[str]:
+        try:
+            return {
+                col["name"].lower()
+                for col in inspector.get_columns(table_name, schema=schema)
+            }
+        except NoSuchTableError:
+            return set()
+
     with _engine.begin() as conn:
         if "jobs" in table_names:
-            job_columns = {col["name"].lower() for col in inspector.get_columns("jobs", schema=schema)}
-            if "owner_work_id" not in job_columns:
+            job_columns = existing_columns("jobs")
+            if job_columns and "owner_work_id" not in job_columns:
                 conn.execute(text(f"ALTER TABLE {qualified_table_name('jobs', _engine)} ADD owner_work_id NVARCHAR(100) NULL;"))
         if "document_templates" in table_names:
-            template_columns = {col["name"].lower() for col in inspector.get_columns("document_templates", schema=schema)}
-            if "owner_work_id" not in template_columns:
+            template_columns = existing_columns("document_templates")
+            if template_columns and "owner_work_id" not in template_columns:
                 conn.execute(text(f"ALTER TABLE {qualified_table_name('document_templates', _engine)} ADD owner_work_id NVARCHAR(100) NULL;"))
         if "translation_memory_entries" in table_names:
-            tm_columns = {col["name"].lower() for col in inspector.get_columns("translation_memory_entries", schema=schema)}
-            if "source_hash" not in tm_columns:
+            tm_columns = existing_columns("translation_memory_entries")
+            if tm_columns and "source_hash" not in tm_columns:
                 conn.execute(text(f"ALTER TABLE {qualified_table_name('translation_memory_entries', _engine)} ADD source_hash VARCHAR(64) NULL;"))
+        if "department_glossary_entries" in table_names:
+            glossary_columns = existing_columns("department_glossary_entries")
+            if glossary_columns and "validation_type" not in glossary_columns:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE {qualified_table_name('department_glossary_entries', _engine)} "
+                        "ADD validation_type VARCHAR(30) NOT NULL DEFAULT ('strict_required');"
+                    )
+                )
 
 
 def _assert_required_tables() -> None:

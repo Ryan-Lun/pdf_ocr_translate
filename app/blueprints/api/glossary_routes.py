@@ -221,6 +221,9 @@ def glossary_library_entries_upsert(library_id: int):
             target_lang="en",
             source_term=cn,
             target_term=en,
+            validation_type=payload.get("validation_type")
+            if "validation_type" in payload
+            else None,
         )
         entries = glossary.list_department_glossary_entries(
             selected.library_id,
@@ -266,6 +269,9 @@ def glossary_library_entries_update(library_id: int, entry_id: int):
             library_id=selected.library_id,
             source_term=cn,
             target_term=en,
+            validation_type=payload.get("validation_type")
+            if "validation_type" in payload
+            else None,
         )
         response_payload = glossary.build_glossary_management_payload(library_id=selected.library_id)
     except glossary.DepartmentGlossarySelectionError as exc:

@@ -790,7 +790,11 @@ def test_selected_department_library_entry_update_can_rename_source_term_without
 
     resp = client.patch(
         f"/api/glossary/libraries/{library.library_id}/entries/{entry_id}",
-        json={"cn": "產品外觀", "en": "Product Appearance"},
+        json={
+            "cn": "產品外觀",
+            "en": "Product Appearance",
+            "validation_type": glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+        },
     )
 
     assert resp.status_code == 200
@@ -802,6 +806,7 @@ def test_selected_department_library_entry_update_can_rename_source_term_without
         "source_lang": "zh",
         "target_lang": "en",
         "status": "active",
+        "validation_type": glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
         "priority": 0,
         "notes": None,
     }

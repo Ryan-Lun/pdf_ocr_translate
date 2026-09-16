@@ -97,6 +97,7 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "target_lang",
         "source_term",
         "target_term",
+        "validation_type",
         "status",
         "priority",
         "notes",

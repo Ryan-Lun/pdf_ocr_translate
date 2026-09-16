@@ -190,6 +190,7 @@ BEGIN
         target_lang varchar(20) NOT NULL,
         source_term nvarchar(500) NOT NULL,
         target_term nvarchar(max) NOT NULL,
+        validation_type varchar(30) NOT NULL CONSTRAINT DF_department_glossary_entries_validation_type DEFAULT ('strict_required'),
         status varchar(20) NOT NULL,
         priority int NOT NULL,
         notes nvarchar(max) NULL,
@@ -338,6 +339,10 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_libraries_active_default' AND object_id = OBJECT_ID(N'translation.department_glossary_libraries'))
     CREATE INDEX IX_department_glossary_libraries_active_default ON translation.department_glossary_libraries (is_active, is_default);
+GO
+
+IF COL_LENGTH(N'translation.department_glossary_entries', N'validation_type') IS NULL
+    ALTER TABLE translation.department_glossary_entries ADD validation_type varchar(30) NOT NULL CONSTRAINT DF_department_glossary_entries_validation_type DEFAULT ('strict_required');
 GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_department_glossary_entries_library_id' AND object_id = OBJECT_ID(N'translation.department_glossary_entries'))

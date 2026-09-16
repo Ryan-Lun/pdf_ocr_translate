@@ -52,6 +52,16 @@ _SYSTEM_GLOSSARY_CACHE: tuple[
 
 STATUS_ACTIVE = "active"
 STATUS_DISABLED = "disabled"
+VALIDATION_TYPE_STRICT_REQUIRED = "strict_required"
+VALIDATION_TYPE_LEXICAL_REQUIRED = "lexical_required"
+VALIDATION_TYPE_REFERENCE_ONLY = "reference_only"
+VALIDATION_TYPES = frozenset(
+    {
+        VALIDATION_TYPE_STRICT_REQUIRED,
+        VALIDATION_TYPE_LEXICAL_REQUIRED,
+        VALIDATION_TYPE_REFERENCE_ONLY,
+    }
+)
 DEFAULT_DEPARTMENT_GLOSSARY_CODE = "regulatory-document-control"
 DEFAULT_DEPARTMENT_GLOSSARY_NAME = "法規文管部"
 
@@ -109,6 +119,7 @@ class DepartmentGlossaryEntry:
     source_term: str
     target_term: str
     status: str
+    validation_type: str = VALIDATION_TYPE_STRICT_REQUIRED
     priority: int = 0
     notes: str | None = None
     created_by_work_id: str | None = None
@@ -262,6 +273,13 @@ def _clean_department_glossary_status(value: str) -> str:
     return status
 
 
+def _clean_department_glossary_validation_type(value: str | None) -> str:
+    validation_type = str(value or VALIDATION_TYPE_STRICT_REQUIRED).strip().lower()
+    if validation_type not in VALIDATION_TYPES:
+        raise ValueError(f"Unsupported Department Glossary validation_type: {value}")
+    return validation_type
+
+
 def _library_from_record(record: job_store.DepartmentGlossaryLibraryRecord) -> DepartmentGlossaryLibrary:
     return DepartmentGlossaryLibrary(
         library_id=int(record.id),
@@ -282,6 +300,9 @@ def _entry_from_record(record: job_store.DepartmentGlossaryEntryRecord) -> Depar
         source_term=record.source_term,
         target_term=record.target_term,
         status=record.status,
+        validation_type=_clean_department_glossary_validation_type(
+            getattr(record, "validation_type", None)
+        ),
         priority=int(record.priority or 0),
         notes=record.notes,
         created_by_work_id=record.created_by_work_id,
@@ -337,6 +358,7 @@ def _entry_audit_payload(record: job_store.DepartmentGlossaryEntryRecord | Depar
             "source_term": record.source_term,
             "target_term": record.target_term,
             "status": record.status,
+            "validation_type": record.validation_type,
             "priority": record.priority,
             "notes": record.notes,
             "created_by_work_id": record.created_by_work_id,
@@ -350,6 +372,9 @@ def _entry_audit_payload(record: job_store.DepartmentGlossaryEntryRecord | Depar
         "source_term": record.source_term,
         "target_term": record.target_term,
         "status": record.status,
+        "validation_type": _clean_department_glossary_validation_type(
+            getattr(record, "validation_type", None)
+        ),
         "priority": int(record.priority or 0),
         "notes": record.notes,
         "created_by_work_id": record.created_by_work_id,
@@ -836,6 +861,7 @@ def upsert_department_glossary_entry(
     source_term: str,
     target_term: str,
     status: str = STATUS_ACTIVE,
+    validation_type: str | None = None,
     priority: int = 0,
     notes: str | None = None,
     created_by_work_id: str | None = None,
@@ -848,6 +874,11 @@ def upsert_department_glossary_entry(
     if not cleaned_source_term or not cleaned_target_term:
         raise ValueError("Department Glossary source and target terms are required.")
     cleaned_status = _clean_department_glossary_status(status)
+    cleaned_validation_type = (
+        _clean_department_glossary_validation_type(validation_type)
+        if validation_type is not None
+        else None
+    )
     normalized_source_lang = _normalize_glossary_lang(source_lang)
     normalized_target_lang = _normalize_glossary_lang(target_lang)
     now = job_store.utcnow()
@@ -871,6 +902,7 @@ def upsert_department_glossary_entry(
                 target_lang=normalized_target_lang,
                 source_term=cleaned_source_term,
                 target_term=cleaned_target_term,
+                validation_type=cleaned_validation_type or VALIDATION_TYPE_STRICT_REQUIRED,
                 status=cleaned_status,
                 priority=int(priority or 0),
                 notes=str(notes).strip() if notes is not None and str(notes).strip() else None,
@@ -894,6 +926,8 @@ def upsert_department_glossary_entry(
             return int(record.id)
         before = _entry_audit_payload(record)
         record.target_term = cleaned_target_term
+        if cleaned_validation_type is not None:
+            record.validation_type = cleaned_validation_type
         record.priority = int(priority or 0)
         record.notes = str(notes).strip() if notes is not None and str(notes).strip() else None
         record.updated_by_work_id = (
@@ -922,12 +956,18 @@ def update_department_glossary_entry(
     library_id: int,
     source_term: str,
     target_term: str,
+    validation_type: str | None = None,
     updated_by_work_id: str | None = None,
 ) -> DepartmentGlossaryEntry:
     cleaned_source_term = str(source_term or "").strip()
     cleaned_target_term = str(target_term or "").strip()
     if not cleaned_source_term or not cleaned_target_term:
         raise ValueError("Department Glossary source and target terms are required.")
+    cleaned_validation_type = (
+        _clean_department_glossary_validation_type(validation_type)
+        if validation_type is not None
+        else None
+    )
     with job_store.session_scope() as session:
         record = session.get(job_store.DepartmentGlossaryEntryRecord, int(entry_id))
         if record is None or int(record.library_id) != int(library_id):
@@ -947,6 +987,8 @@ def update_department_glossary_entry(
         now = job_store.utcnow()
         record.source_term = cleaned_source_term
         record.target_term = cleaned_target_term
+        if cleaned_validation_type is not None:
+            record.validation_type = cleaned_validation_type
         record.updated_by_work_id = str(updated_by_work_id or "").strip() or record.updated_by_work_id
         record.updated_at = now
         session.flush()
@@ -1158,6 +1200,7 @@ def _department_entry_to_payload(entry: DepartmentGlossaryEntry) -> dict[str, st
         "source_lang": entry.source_lang,
         "target_lang": entry.target_lang,
         "status": entry.status,
+        "validation_type": entry.validation_type,
         "priority": entry.priority,
         "notes": entry.notes,
     }
@@ -1365,6 +1408,7 @@ def import_department_glossary_json(
                 source_term=source_term,
                 target_term=target_term,
                 status=STATUS_ACTIVE,
+                validation_type=VALIDATION_TYPE_STRICT_REQUIRED,
             )
             continue
 
@@ -1418,6 +1462,7 @@ def import_department_glossary_json(
             source_term=source_term,
             target_term=target_term,
             status=STATUS_ACTIVE,
+            validation_type=existing.validation_type,
         )
 
     return _import_summary_from_details(

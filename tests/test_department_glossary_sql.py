@@ -66,6 +66,75 @@ def test_department_glossary_lists_only_active_entries_for_translation(app):
     ]
 
 
+def test_department_glossary_entry_validation_type_defaults_updates_and_validates(app):
+    _clear_department_glossary()
+    library = glossary.get_or_create_default_department_glossary()
+
+    entry_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="文件變更記錄",
+        target_term="Document Change Records",
+    )
+
+    entry = glossary.list_department_glossary_entries(library.library_id, active_only=True)[0]
+    assert entry.entry_id == entry_id
+    assert entry.validation_type == glossary.VALIDATION_TYPE_STRICT_REQUIRED
+    payload = glossary.department_glossary_entry_to_payload(entry)
+    assert payload["validation_type"] == glossary.VALIDATION_TYPE_STRICT_REQUIRED
+
+    updated = glossary.update_department_glossary_entry(
+        entry_id,
+        library_id=library.library_id,
+        source_term="文件變更記錄",
+        target_term="Document Change Record",
+        validation_type=glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+        updated_by_work_id="NE025",
+    )
+
+    assert updated.validation_type == glossary.VALIDATION_TYPE_LEXICAL_REQUIRED
+    assert updated.target_term == "Document Change Record"
+    assert glossary.department_glossary_entry_to_payload(updated)["validation_type"] == (
+        glossary.VALIDATION_TYPE_LEXICAL_REQUIRED
+    )
+
+    updated_again = glossary.update_department_glossary_entry(
+        entry_id,
+        library_id=library.library_id,
+        source_term="文件變更記錄",
+        target_term="Document Change Records",
+        updated_by_work_id="NE025",
+    )
+    assert updated_again.validation_type == glossary.VALIDATION_TYPE_LEXICAL_REQUIRED
+    with job_store.session_scope() as session:
+        audits = (
+            session.query(job_store.GlossaryAuditEventRecord)
+            .filter_by(target_type="entry", target_id=entry_id, action="update")
+            .order_by(job_store.GlossaryAuditEventRecord.id.asc())
+            .all()
+        )
+        assert any(
+            '"validation_type": "strict_required"' in str(audit.before_json)
+            and '"validation_type": "lexical_required"' in str(audit.after_json)
+            for audit in audits
+        )
+
+    try:
+        glossary.upsert_department_glossary_entry(
+            library_id=library.library_id,
+            source_lang="zh",
+            target_lang="en",
+            source_term="外觀",
+            target_term="Appearance",
+            validation_type="soft",
+        )
+    except ValueError as exc:
+        assert "Unsupported Department Glossary validation_type" in str(exc)
+    else:
+        raise AssertionError("invalid validation_type must be rejected")
+
+
 def test_department_glossary_upsert_keeps_one_active_entry_per_term(app):
     _clear_department_glossary()
     library = glossary.get_or_create_default_department_glossary()
@@ -424,15 +493,22 @@ def test_department_glossary_schema_migration_and_sql_init_stay_aligned(monkeypa
     assert "IX_department_glossary_libraries_code" in init_sql
     assert "IX_department_glossary_entries_lookup" in init_sql
     assert "IX_department_glossary_entries_term" in init_sql
+    assert "validation_type varchar(30) NOT NULL" in init_sql
+    assert "DF_department_glossary_entries_validation_type" in init_sql
     assert "IX_glossary_audit_events_target" in init_sql
     assert "UQ_department_glossary_entries_term_status" in init_sql
     assert "FK_department_glossary_entries_libraries" in init_sql
 
     migration = (ROOT / "migrations" / "versions" / "0005_add_department_glossary.py").read_text(encoding="utf-8")
     audit_migration = (ROOT / "migrations" / "versions" / "0006_add_glossary_audit_events.py").read_text(encoding="utf-8")
+    validation_type_migration = (
+        ROOT / "migrations" / "versions" / "0007_add_department_glossary_validation_type.py"
+    ).read_text(encoding="utf-8")
     assert "DepartmentGlossaryLibraryRecord.__table__" in migration
     assert "DepartmentGlossaryEntryRecord.__table__" in migration
     assert "GlossaryAuditEventRecord.__table__" in audit_migration
+    assert "validation_type" in validation_type_migration
+    assert "strict_required" in validation_type_migration
     assert "table.create" in migration
     assert "index.create" in migration
     assert "index.create" in audit_migration
