@@ -1441,6 +1441,15 @@ button.primary:hover {
   flex-wrap: wrap;
 }
 
+.glossary-library-toolbar-buttons {
+  display: flex;
+  align-items: end;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  justify-self: end;
+  flex-wrap: wrap;
+}
+
 .glossary-toolbar-buttons button {
   min-height: 2.45rem;
 }
@@ -1521,6 +1530,14 @@ button.primary:hover {
   padding-right: 0.35rem;
 }
 
+.glossary-library-selector {
+  min-width: 0;
+}
+
+.glossary-library-selector select {
+  width: auto;
+}
+
 .glossary-row {
   width: 100%;
   text-align: left;
@@ -1579,7 +1596,7 @@ button.primary:hover {
 }
 
 .glossary-panel-header h2 {
-  margin: 0.25rem 0 0;
+  margin: 0 0 0.5rem;
   font-size: 1.35rem;
 }
 
@@ -3273,10 +3290,9 @@ body.editor .thumbs {
 
 .glossary-library-admin-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
-  gap: 18px;
-  align-items: start;
-  margin-top: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 18px;
 }
 
 .glossary-library-panel {
@@ -3284,6 +3300,21 @@ body.editor .thumbs {
   border-radius: 8px;
   padding: 16px;
   background: #fff;
+}
+
+.glossary-library-form-grid {
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(160px, 0.8fr) auto;
+  align-items: end;
+}
+
+.glossary-library-panel .glossary-panel-actions {
+  justify-content: flex-start;
+  margin-top: 12px;
+}
+
+.glossary-library-panel .glossary-panel-actions button {
+  width: auto;
+  min-width: 140px;
 }
 
 .glossary-library-admin-row .glossary-row__translation {
@@ -3295,5 +3326,13 @@ body.editor .thumbs {
 @media (max-width: 860px) {
   .glossary-library-admin-layout {
     grid-template-columns: 1fr;
+  }
+
+  .glossary-library-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .glossary-library-panel .glossary-panel-actions button {
+    width: 100%;
   }
 }

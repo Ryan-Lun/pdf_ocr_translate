@@ -31,7 +31,7 @@
         <div class="jobs-header">
           <div>
             <h2>部門詞彙庫</h2>
-            <span>管理各部門可選用的詞彙庫；停用後不會出現在新任務選單，但歷史任務仍可追溯。</span>
+            <span>管理各部門可選用的詞彙庫，停用後不會出現在個工作區選單，但歷史任務仍可追溯。</span>
           </div>
           <div class="glossary-toolbar-actions">
             <button id="libraryNewBtn" class="primary" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>新增詞彙庫</button>
@@ -41,15 +41,18 @@
         </div>
         <div id="libraryStatus" class="hint glossary-status"></div>
         <div class="glossary-library-admin-layout">
-          <div id="libraryList" class="jobs-list glossary-library-list"></div>
-          <aside class="glossary-library-panel">
+          <label class="glossary-library-selector">
+            <span>選擇部門詞彙庫</span>
+            <select id="libraryList"></select>
+          </label>
+          <div class="glossary-library-panel">
             <div class="glossary-panel-header">
               <div>
                 <h2 id="libraryDetailTitle">新增詞彙庫</h2>
               </div>
               <span id="libraryDetailBadge" class="job-badge">new</span>
             </div>
-            <div class="glossary-form-stack">
+            <div class="glossary-form-grid glossary-library-form-grid">
               <label>
                 <span>系統代碼</span>
                 <input id="libraryCode" type="text" placeholder="系統自動產生" disabled />
@@ -62,13 +65,13 @@
                 <span>部門代碼</span>
                 <input id="libraryDepartmentCode" type="text" placeholder="例如：QA"{% if not glossary_can_write %} disabled aria-disabled="true"{% endif %} />
               </label>
+              <div class="glossary-library-toolbar-buttons">
+                <button id="saveLibraryBtn" class="primary" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>儲存詞彙庫</button>
+                <button id="activateLibraryBtn" class="primary" type="button" data-write-control hidden{% if not glossary_can_write %} disabled aria-disabled="true"{% endif %}>啟用詞彙庫</button>
+                <button id="disableLibraryBtn" class="danger" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>停用詞彙庫</button>
+              </div>
             </div>
-            <div class="button-row glossary-panel-actions">
-              <button id="saveLibraryBtn" class="primary" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>儲存詞彙庫</button>
-              <button id="activateLibraryBtn" class="primary" type="button" data-write-control hidden{% if not glossary_can_write %} disabled aria-disabled="true"{% endif %}>啟用詞彙庫</button>
-              <button id="disableLibraryBtn" class="danger" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>停用詞彙庫</button>
-            </div>
-          </aside>
+          </div>
         </div>
       </section>
 

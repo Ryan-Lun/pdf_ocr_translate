@@ -375,64 +375,47 @@ function renderLibraryList() {
   if (!libraryListEl) return;
   libraryListEl.innerHTML = "";
   const libraries = Array.isArray(glossaryState.libraries) ? glossaryState.libraries : [];
+  libraryListEl.disabled = !libraries.length;
+
   if (!libraries.length) {
-    const empty = document.createElement("div");
-    empty.className = "hint";
-    empty.textContent = "目前沒有部門詞彙庫";
-    libraryListEl.appendChild(empty);
+    const emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = "目前沒有部門詞彙庫";
+    libraryListEl.appendChild(emptyOption);
     return;
   }
+
+  if (glossaryState.libraryMode === "new" || !glossaryState.selectedLibraryId) {
+    const newOption = document.createElement("option");
+    newOption.value = "";
+    newOption.textContent = "新增詞彙庫";
+    libraryListEl.appendChild(newOption);
+  }
+
   libraries.forEach((library) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "glossary-row glossary-library-admin-row";
-    if (Number(library.id) === Number(glossaryState.selectedLibraryId)) {
-      button.classList.add("is-selected");
-    }
-
-    const header = document.createElement("div");
-    header.className = "glossary-row__header";
-
-    const title = document.createElement("div");
-    title.className = "glossary-row__title";
-    title.textContent = library.name || "未命名詞彙庫";
-
-    const meta = document.createElement("div");
-    meta.className = "glossary-row__meta";
-
-    const statusBadge = document.createElement("span");
-    statusBadge.className = `job-badge ${library.is_active ? "job-badge--form" : ""}`;
-    statusBadge.textContent = library.is_active ? "active" : "inactive";
-    meta.appendChild(statusBadge);
-
-    if (library.is_default) {
-      const defaultBadge = document.createElement("span");
-      defaultBadge.className = "job-badge";
-      defaultBadge.textContent = "default";
-      meta.appendChild(defaultBadge);
-    }
-
-    header.appendChild(title);
-    header.appendChild(meta);
-    button.appendChild(header);
-
-    const detail = document.createElement("div");
-    detail.className = "glossary-row__translation";
-    detail.textContent = `${library.department_code || "-"} / ${library.code || "-"}`;
-    button.appendChild(detail);
-
-    button.addEventListener("click", () => {
-      glossaryState.selectedLibraryId = library.id;
-      glossaryState.libraryMode = "edit";
-      glossaryState.selectedCn = null;
-      glossaryState.selectedEntryId = null;
-      glossaryState.mode = "new";
-      glossaryState.pendingSystemImport = null;
-      resetImportPreviewLimits();
-      loadGlossaryLibrary(library.id);
-    });
-    libraryListEl.appendChild(button);
+    const option = document.createElement("option");
+    option.value = String(library.id);
+    const status = library.is_active ? "active" : "inactive";
+    const defaultLabel = library.is_default ? " / default" : "";
+    option.textContent = (library.name || "未命名詞彙庫") + " - " + (library.department_code || "-") + " (" + status + defaultLabel + ")";
+    option.selected = Number(library.id) === Number(glossaryState.selectedLibraryId);
+    libraryListEl.appendChild(option);
   });
+}
+
+function selectLibrary(libraryId) {
+  if (!libraryId) {
+    startNewLibrary();
+    return;
+  }
+  glossaryState.selectedLibraryId = libraryId;
+  glossaryState.libraryMode = "edit";
+  glossaryState.selectedCn = null;
+  glossaryState.selectedEntryId = null;
+  glossaryState.mode = "new";
+  glossaryState.pendingSystemImport = null;
+  resetImportPreviewLimits();
+  loadGlossaryLibrary(libraryId);
 }
 
 function renderLibraryPanel() {
@@ -797,14 +780,15 @@ async function loadGlossaryLibrary(libraryId = glossaryState.selectedLibraryId) 
 }
 
 
-function startNewGlossaryEntry() {
+function startNewGlossaryEntry(options = {}) {
+  const shouldFocus = options.focus !== false;
   if (!requireGlossaryWrite()) return;
   glossaryState.selectedCn = null;
   glossaryState.selectedEntryId = null;
   glossaryState.mode = "new";
   renderGlossaryList();
   renderDetailPanel();
-  detailCnEl?.focus();
+  if (shouldFocus) detailCnEl?.focus();
 }
 
 function startOverrideEntry() {
@@ -987,6 +971,7 @@ saveGlossaryBtn?.addEventListener("click", saveCurrentGlossary);
 deleteGlossaryBtn?.addEventListener("click", deleteCurrentGlossary);
 overrideGlossaryBtn?.addEventListener("click", startOverrideEntry);
 libraryNewBtn?.addEventListener("click", startNewLibrary);
+libraryListEl?.addEventListener("change", () => selectLibrary(libraryListEl.value));
 saveLibraryBtn?.addEventListener("click", saveCurrentLibrary);
 activateLibraryBtn?.addEventListener("click", activateCurrentLibrary);
 disableLibraryBtn?.addEventListener("click", disableCurrentLibrary);
@@ -995,5 +980,5 @@ applySystemGlossaryBtn?.addEventListener("click", applySystemGlossaryImport);
 detailCnEl?.addEventListener("input", syncGlossaryActionState);
 detailEnEl?.addEventListener("input", syncGlossaryActionState);
 
-startNewGlossaryEntry();
+startNewGlossaryEntry({ focus: false });
 loadGlossaryLibrary();
