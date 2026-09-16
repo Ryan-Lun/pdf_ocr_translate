@@ -35,6 +35,8 @@
           </div>
           <div class="glossary-toolbar-actions">
             <button id="libraryNewBtn" class="primary" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>新增詞彙庫</button>
+            <button id="exportSystemGlossaryBtn" class="ghost" type="button">匯出 Excel</button>
+            <button id="exportGlossaryJsonBtn" class="ghost" type="button">匯出 JSON</button>
           </div>
         </div>
         <div id="libraryStatus" class="hint glossary-status"></div>
@@ -105,18 +107,15 @@
               <option value="inactive">停用詞彙</option>
             </select>
           </label>
-          <label class="glossary-inline-toggle glossary-inline-toggle--toolbar">
+          <div class="glossary-toolbar-buttons">
+            <button id="glossaryNewBtn" class="primary" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>新增詞彙</button>
+            <button id="glossaryRefreshBtn" class="ghost" type="button"><i class="bi bi-arrow-clockwise"></i></button>
+          </div>
+          <label class="checkbox-row glossary-toolbar-toggle">
             <input id="includeInactiveEntries" type="checkbox" />
             <span>顯示停用詞彙</span>
           </label>
-          <div class="glossary-toolbar-actions">
-            <button id="glossaryNewBtn" class="primary" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>新增詞彙</button>
-            <button id="exportSystemGlossaryBtn" class="ghost" type="button">匯出 Excel</button>
-            <button id="exportGlossaryJsonBtn" class="ghost" type="button">匯出 JSON</button>
-            <button id="glossaryRefreshBtn" class="ghost" type="button"><i class="bi bi-arrow-clockwise"></i></button>
-          </div>
         </div>
-
         <div id="glossaryStatus" class="hint glossary-status">載入中...</div>
 
         <div class="glossary-layout">
