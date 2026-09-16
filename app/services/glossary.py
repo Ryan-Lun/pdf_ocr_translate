@@ -35,6 +35,9 @@ _REQUIRED_TERM_PATTERN = re.compile(
     r"<term\s+id=[\"\'](\d{4})[\"\']>(.*?)</term>",
     re.DOTALL,
 )
+_ASCII_WORD_RE = re.compile(r"[A-Za-z0-9]")
+_ASCII_TERM_TRAILING_RE = re.compile(r"[A-Za-z0-9\]\)%.]$")
+_ASCII_TERM_LEADING_RE = re.compile(r"^[A-Za-z0-9\[\(]")
 _SPREADSHEET_NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 _GLOSSARY_CACHE_LOCK = threading.Lock()
 _GLOBAL_GLOSSARY_CACHE: tuple[Path, float | None, list[dict[str, str]]] | None = None
@@ -2428,10 +2431,47 @@ def restore_protected_glossary_terms(
         wrapped_target = _unescape_required_term_target(match.group(2))
         return term_targets.get(term_id, wrapped_target)
 
-    restored = _REQUIRED_TERM_PATTERN.sub(restore_required_term, text)
+    restored_parts: list[str] = []
+    previous_required_term: str | None = None
+    previous_end = 0
+    for match in _REQUIRED_TERM_PATTERN.finditer(text):
+        between = text[previous_end : match.start()]
+        restored_term = restore_required_term(match)
+        if (
+            between == ""
+            and previous_required_term is not None
+            and _required_glossary_terms_need_separator(
+                previous_required_term,
+                restored_term,
+            )
+        ):
+            restored_parts.append(" ")
+        restored_parts.append(between)
+        restored_parts.append(restored_term)
+        previous_required_term = restored_term
+        previous_end = match.end()
+
+    if restored_parts:
+        restored_parts.append(text[previous_end:])
+        restored = "".join(restored_parts)
+    else:
+        restored = text
     if _PROTECTED_TERM_PREFIX in restored:
         restored = _PROTECTED_TERM_PATTERN.sub(lambda match: match.group(1), restored)
     return restored
+
+
+def _required_glossary_terms_need_separator(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left[-1].isspace() or right[0].isspace():
+        return False
+    if not (_ASCII_WORD_RE.search(left) and _ASCII_WORD_RE.search(right)):
+        return False
+    return bool(
+        _ASCII_TERM_TRAILING_RE.search(left)
+        and _ASCII_TERM_LEADING_RE.search(right)
+    )
 
 
 def required_term_targets_from_text(text: str) -> dict[str, str]:

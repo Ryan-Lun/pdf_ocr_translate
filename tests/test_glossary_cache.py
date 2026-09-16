@@ -153,6 +153,34 @@ def test_restore_required_glossary_terms_uses_approved_target_from_context():
     )
 
 
+def test_restore_adjacent_required_glossary_terms_separates_ascii_targets():
+    text = (
+        '<term id="0001">Documents</term>'
+        '<term id="0002">Change</term>'
+        '<term id="0003">Records</term>'
+    )
+    required_terms = (
+        glossary.RequiredGlossaryTerm("0001", "文件", "Documents"),
+        glossary.RequiredGlossaryTerm("0002", "變更", "Change"),
+        glossary.RequiredGlossaryTerm("0003", "記錄", "Records"),
+    )
+
+    assert (
+        glossary.restore_protected_glossary_terms(text, required_terms)
+        == "Documents Change Records"
+    )
+
+
+def test_restore_adjacent_required_glossary_terms_preserves_cjk_targets():
+    text = '<term id="0001">文件</term><term id="0002">記錄</term>'
+    required_terms = (
+        glossary.RequiredGlossaryTerm("0001", "Documents", "文件"),
+        glossary.RequiredGlossaryTerm("0002", "Records", "記錄"),
+    )
+
+    assert glossary.restore_protected_glossary_terms(text, required_terms) == "文件記錄"
+
+
 def test_find_missing_required_glossary_terms_only_checks_matched_terms():
     result = glossary.apply_required_glossary_terms(
         "外觀",

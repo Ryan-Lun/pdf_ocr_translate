@@ -243,6 +243,13 @@ def test_repair_cjk_brackets_from_source_restores_model_ascii_brackets():
     ) == "Please complete 【Project Plan Q-2010】."
 
 
+def test_repair_cjk_brackets_from_source_restores_omitted_brackets_from_protected_source():
+    assert _repair_cjk_brackets_from_source(
+        '依據【<term id="0001">Quality requirement for product packaging</term>UQS-3024】檢查。',
+        "Inspect in accordance with Quality requirement for product packaging UQS-3024.",
+    ) == "Inspect in accordance with 【Quality requirement for product packaging UQS-3024】."
+
+
 def test_repair_cjk_brackets_from_source_does_not_touch_unrelated_ascii_brackets():
     assert _repair_cjk_brackets_from_source(
         "請填寫專案計劃書。",
@@ -3794,6 +3801,70 @@ def test_word_translate_batch_repairs_cjk_brackets_when_stage_2_disabled(monkeyp
     )
 
     assert result["請填寫【專案計劃書 Q-2010】。"] == "Please complete 【Project Plan Q-2010】."
+
+
+def test_word_translate_batch_repairs_omitted_cjk_brackets_around_glossary_term(monkeypatch):
+    class _BatchCompletions:
+        async def create(self, **kwargs):
+            payload = kwargs["messages"][-1]["content"]
+            raw_items = payload.split("<SOURCE_ITEMS_JSON>\n", 1)[1].split(
+                "\n</SOURCE_ITEMS_JSON>",
+                1,
+            )[0]
+            items = json.loads(raw_items)
+            message = type(
+                "Message",
+                (),
+                {
+                    "content": json.dumps(
+                        {
+                            items[0]["id"]: (
+                                "After sealing, <term id=\"0002\">Implement</term>"
+                                "<term id=\"0003\">appearance</term> inspection "
+                                "in accordance with <term id=\"0001\">"
+                                "Quality requirement for product packaging</term> UQS-3024."
+                            ),
+                            items[1]["id"]: "Note.",
+                        },
+                        ensure_ascii=False,
+                    )
+                },
+            )()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    class _BatchChat:
+        completions = _BatchCompletions()
+
+    class _BatchClient:
+        chat = _BatchChat()
+
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: _BatchClient(),
+    )
+
+    source = "壓合後依據【產品包裝品質要求UQS-3024】執行外觀檢查。"
+    translator = EnhancedWordTranslator(post_edit_enabled=False)
+
+    result = asyncio.run(
+        translator.translate_texts_batch(
+            [source, "備註"],
+            "zh",
+            "en",
+            [],
+            glossary_entries=[
+                ("產品包裝品質要求", "Quality requirement for product packaging"),
+                ("執行", "Implement"),
+                ("外觀", "appearance"),
+            ],
+        )
+    )
+
+    assert result[source] == (
+        "After sealing, Implement appearance inspection in accordance with "
+        "【Quality requirement for product packaging UQS-3024】."
+    )
 
 
 def test_word_translation_blank_response_still_retries_and_fails(monkeypatch):

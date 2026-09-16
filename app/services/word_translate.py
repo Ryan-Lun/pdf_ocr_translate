@@ -49,6 +49,8 @@ _WORD_STALE_ARTIFACTS = (
     "tm_references.json",
 )
 _CJK_TEXT_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]")
+_CJK_BRACKET_SPAN_RE = re.compile(r"【([^】]+)】")
+_DOCUMENT_CODE_RE = re.compile(r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b")
 
 
 class WordTranslationCancelled(Exception):
@@ -64,16 +66,64 @@ def _repair_cjk_brackets_from_source(source: str, translation: str) -> str:
         return translation
     if "【" in translation or "】" in translation:
         return translation
-    if source.count("【") != translation.count("["):
-        return translation
-    if source.count("】") != translation.count("]"):
-        return translation
+    if (
+        source.count("【") == translation.count("[")
+        and source.count("】") == translation.count("]")
+    ):
+        repaired = translation
+        if source.count("【"):
+            repaired = repaired.replace("[", "【")
+        if source.count("】"):
+            repaired = repaired.replace("]", "】")
+        return repaired
+    return _repair_missing_cjk_brackets_from_source(source, translation)
+
+
+def _repair_missing_cjk_brackets_from_source(source: str, translation: str) -> str:
     repaired = translation
-    if source.count("【"):
-        repaired = repaired.replace("[", "【")
-    if source.count("】"):
-        repaired = repaired.replace("]", "】")
+    for match in _CJK_BRACKET_SPAN_RE.finditer(source):
+        inner = glossary.restore_protected_glossary_terms(match.group(1)).strip()
+        if not inner:
+            continue
+        pattern = _cjk_bracket_inner_pattern(inner)
+        found = pattern.search(repaired)
+        if found is None:
+            continue
+        start, end = found.span()
+        if start > 0 and repaired[start - 1] in "【[":
+            continue
+        if end < len(repaired) and repaired[end : end + 1] in "】]":
+            continue
+        repaired = f"{repaired[:start]}【{repaired[start:end]}】{repaired[end:]}"
     return repaired
+
+
+def _cjk_bracket_inner_pattern(inner: str) -> re.Pattern[str]:
+    parts: list[str] = []
+    cursor = 0
+    for match in _DOCUMENT_CODE_RE.finditer(inner):
+        prefix = inner[cursor : match.start()]
+        parts.append(_literal_text_pattern(prefix))
+        if prefix and not prefix[-1].isspace():
+            parts.append(r"\s*")
+        parts.append(re.escape(match.group(0)))
+        cursor = match.end()
+    parts.append(_literal_text_pattern(inner[cursor:]))
+    return re.compile("".join(parts))
+
+
+def _literal_text_pattern(value: str) -> str:
+    parts: list[str] = []
+    in_space = False
+    for char in value:
+        if char.isspace():
+            if not in_space:
+                parts.append(r"\s+")
+                in_space = True
+            continue
+        parts.append(re.escape(char))
+        in_space = False
+    return "".join(parts)
 
 
 def _repair_cjk_bracket_translations(translations: dict[str, str]) -> dict[str, str]:
@@ -1818,6 +1868,8 @@ class EnhancedWordTranslator:
                     translated_text,
                     token_map,
                 )
+                translated_text = _repair_cjk_brackets_from_source(protected_text, translated_text)
+                translated_text = _repair_cjk_brackets_from_source(text, translated_text)
                 missing_required_terms = self._missing_required_glossary_terms(
                     translated_text,
                     glossary_application,
@@ -2010,7 +2062,8 @@ class EnhancedWordTranslator:
                     result_item.id,
                     result_item.fallback_reason,
                 )
-            final_text = _repair_cjk_brackets_from_source(text, result_item.text)
+            final_text = _repair_cjk_brackets_from_source(translations.get(text, ""), result_item.text)
+            final_text = _repair_cjk_brackets_from_source(text, final_text)
             revised[text] = final_text
             if final_provenance is not None:
                 final_provenance[text] = {
@@ -2214,6 +2267,8 @@ class EnhancedWordTranslator:
                         **translate_kwargs,
                     )
                 stage_1_before_repair = translated_text
+                protected_source = glossary_application.text if glossary_application is not None else text
+                translated_text = _repair_cjk_brackets_from_source(protected_source, translated_text)
                 translated_text = _repair_cjk_brackets_from_source(text, translated_text)
                 if final_provenance is not None:
                     repair_actions = _translation_repair_actions(text, stage_1_before_repair, translated_text)
