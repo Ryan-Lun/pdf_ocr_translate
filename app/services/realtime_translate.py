@@ -496,10 +496,20 @@ async def _translate_item(
     request_delay: float,
     max_retries: int = 3,
     warning_callback: Callable[[str], None] | None = None,
+    key_map: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     retry_count = max(1, int(max_retries))
     custom_id, system_prompt, user_text = _extract_batch_item_payload(item)
-    required_terms = batch.glossary.required_term_targets_from_text(user_text)
+    required_terms = batch._glossary_application_from_key_meta(
+        (key_map or {}).get(custom_id),
+        text=user_text,
+    )
+    if not (
+        required_terms.required_terms
+        or required_terms.lexical_terms
+        or required_terms.reference_terms
+    ):
+        required_terms = batch.glossary.required_term_targets_from_text(user_text)
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_text},
@@ -578,6 +588,7 @@ async def _translate_chunk(
     request_delay: float,
     max_retries: int = 3,
     warning_callback: Callable[[str], None] | None = None,
+    key_map: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, str]:
     retry_count = max(1, int(max_retries))
     if not items:
@@ -586,10 +597,17 @@ async def _translate_chunk(
     system_prompt = _merge_chunk_system_prompt(items)
     prompt = _build_chunk_prompt(system_prompt=system_prompt)
     payload = _serialize_translation_chunk(items)
-    required_terms_by_id = {
-        custom_id: batch.glossary.required_term_targets_from_text(_extract_batch_item_payload(item)[2])
-        for custom_id, item in zip(expected_ids, items)
-    }
+    required_terms_by_id: dict[str, batch.glossary.RequiredTermContext] = {}
+    for custom_id, item in zip(expected_ids, items):
+        _, _, user_text = _extract_batch_item_payload(item)
+        application = batch._glossary_application_from_key_meta(
+            (key_map or {}).get(custom_id),
+            text=user_text,
+        )
+        if application.required_terms or application.lexical_terms or application.reference_terms:
+            required_terms_by_id[custom_id] = application
+        else:
+            required_terms_by_id[custom_id] = batch.glossary.required_term_targets_from_text(user_text)
     _record_chunk_request(
         job_dir=job_dir,
         chunk_label=chunk_label,
@@ -669,6 +687,7 @@ async def _translate_chunk_with_fallback(
     model_name: str,
     request_delay: float,
     warning_callback: Callable[[str], None] | None = None,
+    key_map: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, str]:
     if not items:
         return {}
@@ -681,6 +700,7 @@ async def _translate_chunk_with_fallback(
             model_name=model_name,
             request_delay=request_delay,
             warning_callback=warning_callback,
+            key_map=key_map,
         )
         return {custom_id: text} if custom_id and text else {}
     return await _translate_chunk(
@@ -691,6 +711,7 @@ async def _translate_chunk_with_fallback(
         model_name=model_name,
         request_delay=request_delay,
         warning_callback=warning_callback,
+        key_map=key_map,
     )
 
 
@@ -782,6 +803,7 @@ def run_realtime_translate_job(
                         model_name=plan["model_name"],
                         request_delay=request_delay,
                         warning_callback=record_warning,
+                        key_map=plan["key_map"],
                     )
                     return index, chunk_translations
 

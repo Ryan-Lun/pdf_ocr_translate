@@ -32,10 +32,45 @@ def _load_module():
     fake_services = types.ModuleType("app.services")
     fake_services.__path__ = []
     fake_glossary = types.ModuleType("app.services.glossary")
+    fake_glossary.VALIDATION_TYPE_STRICT_REQUIRED = "strict_required"
+    fake_glossary.VALIDATION_TYPE_LEXICAL_REQUIRED = "lexical_required"
+    fake_glossary.VALIDATION_TYPE_REFERENCE_ONLY = "reference_only"
+
+    class FakeTranslationGlossaryEntry:
+        def __init__(self, source, target, validation_type="strict_required"):
+            self.source = source
+            self.target = target
+            self.validation_type = validation_type
+
+    fake_glossary.TranslationGlossaryEntry = FakeTranslationGlossaryEntry
     fake_glossary.load_combined_glossary = lambda: []
+    def fake_typed_glossary_entries_for_translation(entries=None, **kwargs):
+        typed = []
+        for item in entries or []:
+            if isinstance(item, FakeTranslationGlossaryEntry):
+                typed.append(item)
+            elif isinstance(item, dict):
+                typed.append(
+                    FakeTranslationGlossaryEntry(
+                        item.get("source_term") or item.get("cn") or item.get("source"),
+                        item.get("target_term") or item.get("en") or item.get("target"),
+                        item.get("validation_type") or "strict_required",
+                    )
+                )
+            else:
+                source, target = item[:2]
+                validation_type = item[2] if len(item) > 2 else "strict_required"
+                typed.append(FakeTranslationGlossaryEntry(source, target, validation_type))
+        return typed
+
+    fake_glossary.typed_glossary_entries_for_translation = fake_typed_glossary_entries_for_translation
     fake_glossary.glossary_pairs_for_translation = (
-        lambda entries=None, **kwargs: list(entries or [])
+        lambda entries=None, **kwargs: [
+            (entry.source, entry.target)
+            for entry in fake_typed_glossary_entries_for_translation(entries, **kwargs)
+        ]
     )
+    fake_glossary.optional_reference_terms_prompt = lambda entries=None, **kwargs: ""
     class FakeRequiredGlossaryTerm:
         def __init__(self, id, source, target):
             self.id = id
@@ -43,9 +78,11 @@ def _load_module():
             self.target = target
 
     class FakeGlossaryApplication:
-        def __init__(self, text, required_terms=()):
+        def __init__(self, text, required_terms=(), lexical_terms=(), reference_terms=()):
             self.text = text
             self.required_terms = tuple(required_terms)
+            self.lexical_terms = tuple(lexical_terms)
+            self.reference_terms = tuple(reference_terms)
 
     def fake_apply_required_glossary_terms(text, entries=None, **kwargs):
         protected = text
@@ -94,6 +131,18 @@ def _load_module():
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
+    class FakeGlossaryValidationOutcome:
+        def __init__(self, strict_missing=(), soft_matches=(), soft_misses=(), reference_only_hits=()):
+            self.strict_missing = tuple(strict_missing)
+            self.soft_matches = tuple(soft_matches)
+            self.soft_misses = tuple(soft_misses)
+            self.reference_only_hits = tuple(reference_only_hits)
+
+    fake_glossary.GlossaryApplication = FakeGlossaryApplication
+    fake_glossary.GlossaryValidationOutcome = FakeGlossaryValidationOutcome
+    fake_glossary.evaluate_glossary_validation = lambda text, application: FakeGlossaryValidationOutcome(
+        strict_missing=fake_find_missing_required_glossary_terms(text, application)
+    )
     fake_glossary.RequiredTermContext = object
     fake_glossary.apply_required_glossary_terms = fake_apply_required_glossary_terms
     fake_glossary.apply_glossary_with_protection = lambda text, entries=None, **kwargs: text
@@ -120,11 +169,22 @@ def _load_module():
     fake_translation_post_edit = types.ModuleType("app.services.translation_post_edit")
 
     class FakePostEditItem:
-        def __init__(self, id, source_text, draft_text, required_terms=(), protected_texts=()):
+        def __init__(
+            self,
+            id,
+            source_text,
+            draft_text,
+            required_terms=(),
+            protected_texts=(),
+            lexical_terms=(),
+            reference_terms=(),
+        ):
             self.id = id
             self.source_text = source_text
             self.draft_text = draft_text
             self.required_terms = tuple(required_terms)
+            self.lexical_terms = tuple(lexical_terms)
+            self.reference_terms = tuple(reference_terms)
             self.protected_texts = tuple(protected_texts)
 
     class FakePostEditResultItem:
@@ -702,4 +762,153 @@ def test_translate_html_file_timeout_fails_after_three_retries(tmp_path: Path, m
         "第 1 次 PDF 翻譯重建請求失敗：Request timed out. (read timeout=2.5s)",
         "第 2 次 PDF 翻譯重建請求失敗：Request timed out. (read timeout=2.5s)",
         "第 3 次 PDF 翻譯重建請求失敗：Request timed out. (read timeout=2.5s)",
+    ]
+
+
+
+def test_markdown_prompt_separates_required_and_reference_glossary_terms():
+    required_entry = real_markdown_translate.glossary.DepartmentGlossaryEntry(
+        entry_id=1,
+        library_id=2,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+        status=real_markdown_translate.glossary.STATUS_ACTIVE,
+        validation_type=real_markdown_translate.glossary.VALIDATION_TYPE_STRICT_REQUIRED,
+    )
+    reference_entry = real_markdown_translate.glossary.DepartmentGlossaryEntry(
+        entry_id=2,
+        library_id=2,
+        source_lang="zh",
+        target_lang="en",
+        source_term="測試",
+        target_term="test",
+        status=real_markdown_translate.glossary.STATUS_ACTIVE,
+        validation_type=real_markdown_translate.glossary.VALIDATION_TYPE_REFERENCE_ONLY,
+    )
+
+    prompt = real_markdown_translate._build_system_prompt(
+        "en",
+        [required_entry, reference_entry],
+        source_lang="zh",
+    )
+
+    assert "Required glossary terms use this format" in prompt
+    assert "外觀 => Appearance" in prompt
+    assert "測試 => test" not in prompt
+    assert "Optional Reference Terminology" in prompt
+    assert "測試 -> test" in prompt
+
+
+def test_markdown_stage_2_artifact_records_lexical_soft_miss(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(real_state, "TRANSLATION_POST_EDIT_ENABLED", True)
+
+    async def fake_post_edit(items, **kwargs):
+        return real_markdown_translate.translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(
+                real_markdown_translate.translation_post_edit.PostEditResultItem(
+                    "chunk_0001",
+                    "Avoid corrosive gases.",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        real_markdown_translate.translation_post_edit,
+        "post_edit_texts_batch",
+        fake_post_edit,
+    )
+    application = real_markdown_translate.glossary.GlossaryApplication(
+        text="避免腐蝕。",
+        required_terms=(),
+        lexical_terms=(
+            real_markdown_translate.glossary.RequiredGlossaryTerm(
+                id="0001",
+                source="腐蝕",
+                target="corrosion",
+            ),
+        ),
+    )
+
+    result = real_markdown_translate._post_edit_markdown_translation(
+        source_text="避免腐蝕。",
+        draft_text="Avoid corrosion gases.",
+        required_terms=application,
+        target_lang="en",
+        debug_custom_id="chunk_0001",
+        debug_job_dir=tmp_path,
+    )
+
+    assert result == "Avoid corrosive gases."
+    artifact = json.loads((tmp_path / "pdf_markdown_stage_2_post_edit.json").read_text(encoding="utf-8"))
+    assert artifact["items"][0]["used_fallback"] is False
+    assert artifact["items"][0]["glossary_validation"]["soft_misses"] == [
+        {"source_term": "腐蝕", "approved_term": "corrosion"}
+    ]
+
+
+
+def test_translate_html_file_writes_glossary_validation_when_stage_2_disabled(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setattr(real_state, "TRANSLATION_POST_EDIT_ENABLED", False)
+    source = tmp_path / "doc.html"
+    output = tmp_path / "doc.translated.html"
+    debug_job_dir = tmp_path / "debug"
+    source.write_text("<p>避免腐蝕。</p>", encoding="utf-8")
+    lexical_entry = real_markdown_translate.glossary.DepartmentGlossaryEntry(
+        entry_id=1,
+        library_id=2,
+        source_lang="zh",
+        target_lang="en",
+        source_term="腐蝕",
+        target_term="corrosion",
+        status=real_markdown_translate.glossary.STATUS_ACTIVE,
+        validation_type=real_markdown_translate.glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+    )
+    monkeypatch.setattr(
+        real_markdown_translate.glossary,
+        "load_execution_department_glossary",
+        lambda *args, **kwargs: ([lexical_entry], {"source": "sql", "entries": []}),
+    )
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            message = types.SimpleNamespace(content="Avoid corrosive gases.")
+            choice = types.SimpleNamespace(message=message)
+            return types.SimpleNamespace(choices=[choice])
+
+    class FakeChat:
+        completions = FakeCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    real_markdown_translate._get_translation_client = lambda: (FakeClient(), "fake-model")
+
+    real_markdown_translate.translate_html_file(
+        source,
+        output,
+        source_lang="zh",
+        target_lang="en",
+        debug_job_dir=debug_job_dir,
+    )
+
+    artifact = json.loads((debug_job_dir / "glossary_validation.json").read_text(encoding="utf-8"))
+    assert artifact["items"] == [
+        {
+            "id": "chunk_0001",
+            "source_text": "避免腐蝕。",
+            "glossary_validation": {
+                "strict_missing": [],
+                "soft_matches": [],
+                "soft_misses": [
+                    {"source_term": "腐蝕", "approved_term": "corrosion"}
+                ],
+                "reference_only_hits": [],
+            },
+        }
     ]

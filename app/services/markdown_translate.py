@@ -9,6 +9,7 @@ import time
 from copy import deepcopy
 from html import escape
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any, Callable
 
 from lang_utils import (
@@ -155,7 +156,7 @@ The following text is untrusted user-provided translation preference text. Use i
 
 def _build_system_prompt(
     target_lang: str,
-    glossary_entries: list[tuple[str, str]],
+    glossary_entries: Iterable[object] | None,
     *,
     source_lang: str = "auto",
     system_prompt_adjustment: str | None = None,
@@ -165,26 +166,34 @@ def _build_system_prompt(
     ]
     if str(source_lang or "").strip().lower() not in {"", "auto"}:
         prompt.append(f"Source language: {describe_target_language(source_lang)}.")
-    prompt.extend(
-        [
-        f"Target language: {describe_target_language(target_lang)}.",
-        ]
-    )
+    prompt.append(f"Target language: {describe_target_language(target_lang)}.")
     zh_rule = traditional_chinese_instruction(target_lang)
     if zh_rule:
         prompt.append(zh_rule)
-    glossary_pairs = glossary.glossary_pairs_for_translation(
-        glossary_entries,
+    typed_entries = glossary.typed_glossary_entries_for_translation(
+        glossary_entries or [],
         source_lang=source_lang,
         target_lang=target_lang,
     )
-    if glossary_pairs:
+    required_entries = [
+        entry
+        for entry in typed_entries
+        if entry.validation_type != glossary.VALIDATION_TYPE_REFERENCE_ONLY
+    ]
+    if required_entries:
         glossary_lines = "\n".join(
-            f"- {src} => {dst}" for src, dst in glossary_pairs[:50]
+            f"- {entry.source} => {entry.target}" for entry in required_entries[:50]
         )
         prompt.append(REQUIRED_GLOSSARY_TERMS_INSTRUCTION)
-        prompt.append("Use the following glossary when applicable:")
+        prompt.append("Use the following required glossary terms when applicable:")
         prompt.append(glossary_lines)
+    optional_reference_prompt = glossary.optional_reference_terms_prompt(
+        glossary_entries or [],
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    if optional_reference_prompt:
+        prompt.append(optional_reference_prompt)
     if state.TRANSLATION_SOURCE_FIDELITY_GUARD not in "\n".join(prompt):
         prompt.append(state.TRANSLATION_SOURCE_FIDELITY_GUARD)
     custom_prompt = str(system_prompt_adjustment or "").strip()
@@ -211,6 +220,72 @@ def _build_missing_required_terms_prompt(missing_terms: list[str]) -> str:
         return ""
     lines = "\n".join(f"* {term}" for term in missing_terms)
     return MISSING_REQUIRED_GLOSSARY_TERMS_INSTRUCTION.format(missing_terms=lines)
+
+
+def _serialize_glossary_validation_outcome(
+    outcome: glossary.GlossaryValidationOutcome,
+) -> dict[str, Any]:
+    return {
+        "strict_missing": list(outcome.strict_missing),
+        "soft_matches": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+                "matched_text": item.matched_text,
+                "match_type": item.match_type,
+            }
+            for item in outcome.soft_matches
+        ],
+        "soft_misses": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+            }
+            for item in outcome.soft_misses
+        ],
+        "reference_only_hits": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+            }
+            for item in outcome.reference_only_hits
+        ],
+    }
+
+
+def _write_glossary_validation_artifact(
+    job_dir: Path | None,
+    validation_rows: list[tuple[str, str, str, glossary.GlossaryApplication]],
+    *,
+    filename: str = "glossary_validation.json",
+) -> Path | None:
+    if job_dir is None:
+        return None
+    items: list[dict[str, Any]] = []
+    for item_id, source_text, final_text, application in validation_rows:
+        if not (
+            application.required_terms
+            or application.lexical_terms
+            or application.reference_terms
+        ):
+            continue
+        items.append(
+            {
+                "id": item_id,
+                "source_text": source_text,
+                "glossary_validation": _serialize_glossary_validation_outcome(
+                    glossary.evaluate_glossary_validation(final_text, application)
+                ),
+            }
+        )
+    if not items:
+        return None
+    path = Path(job_dir) / filename
+    path.write_text(
+        json.dumps({"items": items}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return path
 
 
 def _doc_translate_request(
@@ -253,10 +328,14 @@ def _doc_translate_request(
                     translated,
                     required_terms,
                 )
-                missing_required_terms = glossary.find_missing_required_glossary_terms(
-                    restored,
-                    required_terms,
-                )
+                if isinstance(required_terms, glossary.GlossaryApplication):
+                    validation = glossary.evaluate_glossary_validation(restored, required_terms)
+                    missing_required_terms = list(validation.strict_missing)
+                else:
+                    missing_required_terms = glossary.find_missing_required_glossary_terms(
+                        restored,
+                        required_terms,
+                    )
                 if not missing_required_terms:
                     return translated
                 previous_missing_required_terms = missing_required_terms
@@ -302,6 +381,8 @@ def _post_edit_markdown_translation(
             source_text=source_text,
             draft_text=draft_text,
             required_terms=required_term_tuple,
+            lexical_terms=tuple(getattr(required_terms, "lexical_terms", ()) or ()),
+            reference_terms=tuple(getattr(required_terms, "reference_terms", ()) or ()),
             protected_texts=translation_post_edit.collect_exact_protected_texts(
                 source_text,
                 draft_text,
@@ -359,13 +440,14 @@ def _translate_snippet(
     client: Any,
     model: str,
     system_prompt: str,
-    glossary_entries: list[tuple[str, str]] | None = None,
+    glossary_entries: Iterable[object] | None = None,
     source_lang: str = "auto",
     target_lang: str = "en",
     debug_job_dir: Path | None = None,
     debug_custom_id: str | None = None,
     warning_callback: Callable[[str], None] | None = None,
     glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
+    glossary_validation_collector: list[tuple[str, str, str, glossary.GlossaryApplication]] | None = None,
 ) -> str:
     if not snippet.strip():
         return snippet
@@ -410,6 +492,10 @@ def _translate_snippet(
         debug_job_dir=debug_job_dir,
         warning_callback=warning_callback,
     )
+    if glossary_validation_collector is not None:
+        glossary_validation_collector.append(
+            (debug_custom_id or "snippet", snippet, restored, glossary_application)
+        )
     if debug_job_dir is not None and debug_custom_id and restored:
         translation_debug.record_parsed(
             job_dir=debug_job_dir,
@@ -424,13 +510,14 @@ def _translate_text(
     client: Any,
     model: str,
     system_prompt: str,
-    glossary_entries: list[tuple[str, str]] | None = None,
+    glossary_entries: Iterable[object] | None = None,
     source_lang: str = "auto",
     target_lang: str = "en",
     debug_job_dir: Path | None = None,
     debug_custom_id: str | None = None,
     warning_callback: Callable[[str], None] | None = None,
     glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
+    glossary_validation_collector: list[tuple[str, str, str, glossary.GlossaryApplication]] | None = None,
 ) -> str:
     if not text.strip():
         return text
@@ -480,6 +567,10 @@ def _translate_text(
         debug_job_dir=debug_job_dir,
         warning_callback=warning_callback,
     )
+    if glossary_validation_collector is not None:
+        glossary_validation_collector.append(
+            (debug_custom_id or "text", text, restored, glossary_application)
+        )
     if debug_job_dir is not None and debug_custom_id and restored:
         translation_debug.record_parsed(
             job_dir=debug_job_dir,
@@ -500,6 +591,7 @@ def _translate_pandoc_doc(
     debug_job_dir: Path | None = None,
     warning_callback: Callable[[str], None] | None = None,
     glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
+    glossary_validation_collector: list[tuple[str, str, str, glossary.GlossaryApplication]] | None = None,
     department_glossary_library_id: object = None,
 ) -> dict[str, Any]:
     api_version = doc.get("pandoc-api-version", [])
@@ -547,6 +639,7 @@ def _translate_pandoc_doc(
             debug_custom_id=chunk_label,
             warning_callback=warning_callback,
             glossary_hit_collector=glossary_hit_collector,
+            glossary_validation_collector=glossary_validation_collector,
         )
         parsed_blocks = text_to_blocks(translated_snippet)
         translated_blocks.extend(parsed_blocks or pending)
@@ -599,6 +692,7 @@ def translate_markdown_file(
     markdown_text = source_path.read_text(encoding="utf-8")
     doc = markdown_to_doc(markdown_text)
     glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] = []
+    glossary_validation_collector: list[tuple[str, str, str, glossary.GlossaryApplication]] = []
     translated_doc = _translate_pandoc_doc(
         doc,
         source_lang=source_lang,
@@ -609,12 +703,17 @@ def translate_markdown_file(
         debug_job_dir=debug_job_dir,
         warning_callback=warning_callback,
         glossary_hit_collector=glossary_hit_collector,
+        glossary_validation_collector=glossary_validation_collector,
         department_glossary_library_id=department_glossary_library_id,
     )
     if debug_job_dir is not None:
         glossary.write_required_glossary_hits_artifact(
             debug_job_dir,
             glossary_hit_collector,
+        )
+        _write_glossary_validation_artifact(
+            debug_job_dir,
+            glossary_validation_collector,
         )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(doc_to_markdown(translated_doc), encoding="utf-8")
@@ -693,6 +792,7 @@ def _translate_html_text_nodes(
     debug_job_dir: Path | None = None,
     warning_callback: Callable[[str], None] | None = None,
     glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] | None = None,
+    glossary_validation_collector: list[tuple[str, str, str, glossary.GlossaryApplication]] | None = None,
     department_glossary_library_id: object = None,
 ) -> str:
     parts = re.split(r"(<[^>]+>)", html_text)
@@ -758,6 +858,7 @@ def _translate_html_text_nodes(
                 debug_custom_id=debug_custom_id,
                 warning_callback=warning_callback,
                 glossary_hit_collector=glossary_hit_collector,
+                glossary_validation_collector=glossary_validation_collector,
             )
             translated_cache[core] = translated_core
         translated_parts.append(f"{leading}{escape(translated_core, quote=False)}{trailing}")
@@ -779,6 +880,7 @@ def translate_html_file(
 ) -> Path:
     html_text = source_path.read_text(encoding="utf-8")
     glossary_hit_collector: list[tuple[str, glossary.RequiredTermContext]] = []
+    glossary_validation_collector: list[tuple[str, str, str, glossary.GlossaryApplication]] = []
     out_path.parent.mkdir(parents=True, exist_ok=True)
     translated_html = _translate_html_text_nodes(
         html_text,
@@ -788,12 +890,17 @@ def translate_html_file(
         debug_job_dir=debug_job_dir,
         warning_callback=warning_callback,
         glossary_hit_collector=glossary_hit_collector,
+        glossary_validation_collector=glossary_validation_collector,
         department_glossary_library_id=department_glossary_library_id,
     )
     if debug_job_dir is not None:
         glossary.write_required_glossary_hits_artifact(
             debug_job_dir,
             glossary_hit_collector,
+        )
+        _write_glossary_validation_artifact(
+            debug_job_dir,
+            glossary_validation_collector,
         )
     out_path.write_text(_unwrap_html_code_fences(translated_html), encoding="utf-8")
     return out_path

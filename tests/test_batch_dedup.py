@@ -14,7 +14,7 @@ from app.services.batch import (
     resolve_batch_prompt,
     translate_texts_for_region,
 )
-from app.services import batch, job_store, state, translation_memory, translation_post_edit
+from app.services import batch, job_store, realtime_translate, state, translation_memory, translation_post_edit
 
 
 @pytest.fixture(autouse=True)
@@ -1759,6 +1759,51 @@ def test_translate_texts_for_region_adds_required_glossary_term_instructions(mon
     assert "[[[GLOSSARY_TERM_" not in captured["input"]
 
 
+def test_translate_texts_for_region_reference_only_is_optional_not_required(monkeypatch):
+    captured: dict[str, str] = {}
+    reference_entry = batch.glossary.DepartmentGlossaryEntry(
+        entry_id=1,
+        library_id=2,
+        source_lang="zh",
+        target_lang="en",
+        source_term="測試",
+        target_term="test",
+        status=batch.glossary.STATUS_ACTIVE,
+        validation_type=batch.glossary.VALIDATION_TYPE_REFERENCE_ONLY,
+    )
+
+    class FakeResponse:
+        output_text = "Testing conditions"
+
+    class FakeResponses:
+        @staticmethod
+        def create(*, model, instructions, input):
+            captured["instructions"] = instructions
+            captured["input"] = input
+            return FakeResponse()
+
+    class FakeClient:
+        responses = FakeResponses()
+
+    monkeypatch.setattr("app.services.batch.get_azure_client", lambda: FakeClient())
+
+    outputs = translate_texts_for_region(
+        ["測試條件"],
+        target_lang="en",
+        source_lang="zh",
+        model_name="fake-model",
+        system_prompt="translate",
+        glossary_entries=[reference_entry],
+    )
+
+    assert outputs == ["Testing conditions"]
+    assert "Required glossary terms use this format" not in captured["instructions"]
+    assert "Use the following terminology when applicable" not in captured["instructions"]
+    assert "Optional Reference Terminology" in captured["instructions"]
+    assert "測試 -> test" in captured["instructions"]
+    assert "<term" not in captured["input"]
+
+
 def test_translate_texts_for_region_reverses_glossary_for_chinese_target(monkeypatch):
     captured: dict[str, str] = {}
 
@@ -1895,6 +1940,116 @@ def test_build_translations_from_jsonl_text_restores_required_glossary_with_key_
     )
 
     assert translations == {"p0000-l0000": "The Appearance shape was checked."}
+
+
+def test_pdf_batch_typed_glossary_metadata_keeps_lexical_and_reference_separate():
+    lexical_entry = batch.glossary.DepartmentGlossaryEntry(
+        entry_id=1,
+        library_id=2,
+        source_lang="zh",
+        target_lang="en",
+        source_term="腐蝕",
+        target_term="corrosion",
+        status=batch.glossary.STATUS_ACTIVE,
+        validation_type=batch.glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+    )
+    reference_entry = batch.glossary.DepartmentGlossaryEntry(
+        entry_id=2,
+        library_id=2,
+        source_lang="zh",
+        target_lang="en",
+        source_term="測試",
+        target_term="test",
+        status=batch.glossary.STATUS_ACTIVE,
+        validation_type=batch.glossary.VALIDATION_TYPE_REFERENCE_ONLY,
+    )
+
+    items, _, key_map, _ = build_batch_items(
+        [
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["避免腐蝕。", "測試條件"],
+                "rec_polys": [],
+            }
+        ],
+        model_name="dummy-model",
+        system_prompt="translate",
+        glossary_entries=[lexical_entry, reference_entry],
+        source_lang="zh",
+        target_lang="en",
+        document_mode="scanned",
+    )
+
+    assert '<term id="0001">corrosion</term>' in items[0]["body"]["messages"][1]["content"]
+    assert "required_glossary_terms" not in key_map["p0000-l0000"]
+    assert key_map["p0000-l0000"]["lexical_glossary_terms"] == [
+        {"id": "0001", "source": "腐蝕", "target": "corrosion"}
+    ]
+    assert "<term" not in items[1]["body"]["messages"][1]["content"]
+    assert "required_glossary_terms" not in key_map["p0000-l0001"]
+    assert key_map["p0000-l0001"]["reference_glossary_terms"] == [
+        {"id": "ref_0001", "source": "測試", "target": "test"}
+    ]
+    assert "Optional Reference Terminology" in items[1]["body"]["messages"][0]["content"]
+
+
+def test_build_translations_from_jsonl_text_allows_lexical_soft_miss():
+    raw_text = json.dumps(
+        {
+            "custom_id": "p0000-l0000",
+            "response": {"body": {"output_text": "Avoid corrosive gases."}},
+        }
+    )
+
+    translations = build_translations_from_jsonl_text(
+        raw_text,
+        key_map={
+            "p0000-l0000": {
+                "lexical_glossary_terms": [
+                    {"id": "0001", "source": "腐蝕", "target": "corrosion"}
+                ],
+            }
+        },
+    )
+
+    assert translations == {"p0000-l0000": "Avoid corrosive gases."}
+
+
+def test_realtime_parse_allows_lexical_soft_miss_but_rejects_strict_missing():
+    lexical_application = batch.glossary.GlossaryApplication(
+        text="避免腐蝕。",
+        required_terms=(),
+        lexical_terms=(
+            batch.glossary.RequiredGlossaryTerm(
+                id="0001",
+                source="腐蝕",
+                target="corrosion",
+            ),
+        ),
+    )
+
+    assert realtime_translate._parse_translation_chunk_output(
+        "<<<p0000-l0000>>>\nAvoid corrosive gases.",
+        ["p0000-l0000"],
+        {"p0000-l0000": lexical_application},
+    ) == {"p0000-l0000": "Avoid corrosive gases."}
+
+    strict_application = batch.glossary.GlossaryApplication(
+        text="檢查外觀。",
+        required_terms=(
+            batch.glossary.RequiredGlossaryTerm(
+                id="0001",
+                source="外觀",
+                target="Appearance",
+            ),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="missing required glossary terms"):
+        realtime_translate._parse_translation_chunk_output(
+            "<<<p0000-l0001>>>\nCheck the look.",
+            ["p0000-l0001"],
+            {"p0000-l0001": strict_application},
+        )
 
 
 def test_build_translations_from_jsonl_text_rejects_missing_required_glossary_term():
@@ -2552,6 +2707,87 @@ def test_pdf_batch_stage_2_revises_llm_output_without_changing_mapping(monkeypat
     ]
     assert boxes[2]["tm_prefilled"] is True
 
+
+
+def test_pdf_batch_stage_2_artifact_records_lexical_soft_miss(monkeypatch, tmp_path):
+    monkeypatch.setattr(state, "TRANSLATION_POST_EDIT_ENABLED", True)
+    captured_edits: dict[str, object] = {}
+    _patch_finalize_side_effects(monkeypatch, captured_edits)
+    captured_items: list[translation_post_edit.PostEditItem] = []
+
+    async def fake_post_edit(items, **kwargs):
+        item_tuple = tuple(items)
+        captured_items.extend(item_tuple)
+        return translation_post_edit.PostEditBatchResult(
+            enabled=True,
+            items=(
+                translation_post_edit.PostEditResultItem(
+                    "p0000-l0000",
+                    "Avoid corrosive gases.",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app.services.batch.translation_post_edit.post_edit_texts_batch",
+        fake_post_edit,
+    )
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+
+    batch._finalize_batch_translate_job(
+        job_id="b" * 32,
+        job_dir=job_dir,
+        ocr_pages=[
+            {
+                "page_index_0based": 0,
+                "rec_texts": ["避免腐蝕。"],
+                "rec_polys": [_line_poly(0)],
+            }
+        ],
+        pp_pages=None,
+        document_mode="form",
+        target_lang="en",
+        source_lang="zh-tw",
+        key_map={
+            "p0000-l0000": {
+                "source_text": "避免腐蝕。",
+                "source_normalized": "避免腐蝕.",
+                "lexical_glossary_terms": [
+                    {"id": "0001", "source": "腐蝕", "target": "corrosion"}
+                ],
+            }
+        },
+        alias_map={},
+        prefilled={},
+        raw_text=_raw_batch_output({"p0000-l0000": "Avoid corrosion gases."}),
+        status_meta={},
+        batch_id="batch-1",
+    )
+
+    assert captured_items[0].required_terms == ()
+    assert captured_items[0].lexical_terms[0].target == "corrosion"
+    artifact = json.loads((job_dir / "pdf_batch_stage_2_post_edit.json").read_text(encoding="utf-8"))
+    assert artifact["items"][0]["used_fallback"] is False
+    assert artifact["items"][0]["glossary_validation"]["soft_misses"] == [
+        {"source_term": "腐蝕", "approved_term": "corrosion"}
+    ]
+    validation_artifact = json.loads((job_dir / "glossary_validation.json").read_text(encoding="utf-8"))
+    assert validation_artifact["items"] == [
+        {
+            "id": "p0000-l0000",
+            "source_text": "避免腐蝕。",
+            "glossary_validation": {
+                "strict_missing": [],
+                "soft_matches": [],
+                "soft_misses": [
+                    {"source_term": "腐蝕", "approved_term": "corrosion"}
+                ],
+                "reference_only_hits": [],
+            },
+        }
+    ]
+    assert captured_edits["payload"]["pages"][0]["boxes"][0]["text"] == "Avoid corrosive gases."
 
 
 def test_pdf_batch_stage_2_keeps_fuzzy_tm_as_stage_1_reference_only(monkeypatch, tmp_path):

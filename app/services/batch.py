@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 from lang_utils import (
@@ -111,13 +112,35 @@ def _write_required_glossary_hits_from_key_map(
     return glossary.write_required_glossary_hits_artifact(job_dir, hits_by_location)
 
 
-def _serialize_required_glossary_terms(
-    application: glossary.GlossaryApplication,
+def _serialize_glossary_terms(
+    terms: tuple[glossary.RequiredGlossaryTerm, ...],
 ) -> list[dict[str, str]]:
     return [
         {"id": term.id, "source": term.source, "target": term.target}
-        for term in application.required_terms
+        for term in terms
     ]
+
+
+def _serialize_required_glossary_terms(
+    application: glossary.GlossaryApplication,
+) -> list[dict[str, str]]:
+    return _serialize_glossary_terms(tuple(application.required_terms))
+
+
+def _serialize_glossary_application_metadata(
+    application: glossary.GlossaryApplication,
+) -> dict[str, list[dict[str, str]]]:
+    metadata: dict[str, list[dict[str, str]]] = {}
+    required_terms = _serialize_glossary_terms(tuple(application.required_terms))
+    lexical_terms = _serialize_glossary_terms(tuple(application.lexical_terms))
+    reference_terms = _serialize_glossary_terms(tuple(application.reference_terms))
+    if required_terms:
+        metadata["required_glossary_terms"] = required_terms
+    if lexical_terms:
+        metadata["lexical_glossary_terms"] = lexical_terms
+    if reference_terms:
+        metadata["reference_glossary_terms"] = reference_terms
+    return metadata
 
 
 def _deserialize_required_glossary_terms(value: Any) -> tuple[glossary.RequiredGlossaryTerm, ...]:
@@ -141,6 +164,113 @@ def _required_glossary_terms_from_key_meta(
     if not key_meta:
         return tuple()
     return _deserialize_required_glossary_terms(key_meta.get("required_glossary_terms"))
+
+
+def _glossary_application_from_key_meta(
+    key_meta: dict[str, Any] | None,
+    *,
+    text: str = "",
+) -> glossary.GlossaryApplication:
+    key_meta = key_meta or {}
+    return glossary.GlossaryApplication(
+        text=text,
+        required_terms=_deserialize_required_glossary_terms(
+            key_meta.get("required_glossary_terms")
+        ),
+        lexical_terms=_deserialize_required_glossary_terms(
+            key_meta.get("lexical_glossary_terms")
+        ),
+        reference_terms=_deserialize_required_glossary_terms(
+            key_meta.get("reference_glossary_terms")
+        ),
+    )
+
+
+def _optional_reference_terms_prompt_from_application(
+    application: glossary.GlossaryApplication,
+) -> str:
+    if not application.reference_terms:
+        return ""
+    lines = "\n".join(
+        f"* {term.source} -> {term.target}" for term in application.reference_terms
+    )
+    return (
+        "# Optional Reference Terminology\n\n"
+        "The following glossary entries are optional reference terminology. "
+        "Use them only when they naturally fit the current source text. "
+        "They are not required terms and must not override source meaning.\n\n"
+        f"{lines}"
+    )
+
+
+def _serialize_glossary_validation_outcome(
+    outcome: glossary.GlossaryValidationOutcome,
+) -> dict[str, Any]:
+    return {
+        "strict_missing": list(outcome.strict_missing),
+        "soft_matches": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+                "matched_text": item.matched_text,
+                "match_type": item.match_type,
+            }
+            for item in outcome.soft_matches
+        ],
+        "soft_misses": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+            }
+            for item in outcome.soft_misses
+        ],
+        "reference_only_hits": [
+            {
+                "source_term": item.source,
+                "approved_term": item.target,
+            }
+            for item in outcome.reference_only_hits
+        ],
+    }
+
+
+def _write_glossary_validation_artifact(
+    job_dir: Path,
+    translations: dict[str, str],
+    key_map: dict[str, dict[str, Any]],
+    *,
+    filename: str = "glossary_validation.json",
+) -> Path | None:
+    rows: list[dict[str, Any]] = []
+    for custom_id, translated_text in sorted(translations.items()):
+        key_meta = key_map.get(custom_id) or {}
+        application = _glossary_application_from_key_meta(
+            key_meta,
+            text=str(key_meta.get("source_text") or ""),
+        )
+        if not (
+            application.required_terms
+            or application.lexical_terms
+            or application.reference_terms
+        ):
+            continue
+        rows.append(
+            {
+                "id": custom_id,
+                "source_text": str(key_meta.get("source_text") or ""),
+                "glossary_validation": _serialize_glossary_validation_outcome(
+                    glossary.evaluate_glossary_validation(translated_text, application)
+                ),
+            }
+        )
+    if not rows:
+        return None
+    path = Path(job_dir) / filename
+    path.write_text(
+        json.dumps({"items": rows}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return path
 
 
 def _build_missing_required_terms_prompt(missing_terms: list[str]) -> str:
@@ -651,21 +781,25 @@ def get_azure_client():
 
 
 def _build_inline_glossary_instructions(
-    glossary_entries: list[tuple[str, str]] | None,
+    glossary_entries: Iterable[object] | None,
     *,
     source_lang: str = "auto",
     target_lang: str = "en",
 ) -> str:
-    pairs = glossary.glossary_pairs_for_translation(
-        glossary_entries,
-        source_lang=source_lang,
-        target_lang=target_lang,
-    )
-    if not pairs:
+    typed_entries = [
+        entry
+        for entry in glossary.typed_glossary_entries_for_translation(
+            glossary_entries or [],
+            source_lang=source_lang,
+            target_lang=target_lang,
+        )
+        if entry.validation_type != glossary.VALIDATION_TYPE_REFERENCE_ONLY
+    ]
+    if not typed_entries:
         return ""
     lines = ["Use the following terminology when applicable:"]
-    for src, dst in pairs[:50]:
-        lines.append(f"- {src} -> {dst}")
+    for entry in typed_entries[:50]:
+        lines.append(f"- {entry.source} -> {entry.target}")
     return "\n".join(lines)
 
 
@@ -676,7 +810,7 @@ def translate_texts_for_region(
     source_lang: str = "auto",
     model_name: str,
     system_prompt: str | None = None,
-    glossary_entries: list[tuple[str, str]] | None = None,
+    glossary_entries: Iterable[object] | None = None,
 ) -> list[str]:
     if not texts:
         return []
@@ -686,7 +820,21 @@ def translate_texts_for_region(
         source_lang=source_lang,
         target_lang=target_lang,
     )
-    protected_term_prompt = REQUIRED_GLOSSARY_TERMS_INSTRUCTION if glossary_entries else ""
+    typed_entries = glossary.typed_glossary_entries_for_translation(
+        glossary_entries or [],
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
+    has_required_terms = any(
+        entry.validation_type != glossary.VALIDATION_TYPE_REFERENCE_ONLY
+        for entry in typed_entries
+    )
+    protected_term_prompt = REQUIRED_GLOSSARY_TERMS_INSTRUCTION if has_required_terms else ""
+    optional_reference_prompt = glossary.optional_reference_terms_prompt(
+        glossary_entries or [],
+        source_lang=source_lang,
+        target_lang=target_lang,
+    )
 
     client = get_azure_client()
     final_prompt = "\n\n".join(
@@ -695,6 +843,7 @@ def translate_texts_for_region(
             resolve_batch_prompt(target_lang, system_prompt),
             glossary_prompt,
             protected_term_prompt,
+            optional_reference_prompt,
             "Return only the translated text for the current input.",
         )
         if part
@@ -739,10 +888,11 @@ def translate_texts_for_region(
                 glossary_application,
             )
             normalized_translated = normalize_text(translated)
-            missing_required_terms = glossary.find_missing_required_glossary_terms(
+            validation = glossary.evaluate_glossary_validation(
                 normalized_translated,
                 glossary_application,
             )
+            missing_required_terms = list(validation.strict_missing)
             if not missing_required_terms:
                 outputs.append(normalized_translated or source_text)
                 break
@@ -827,7 +977,7 @@ def build_batch_items(
     ocr_pages: list[dict[str, Any]],
     model_name: str,
     system_prompt: str,
-    glossary_entries: list[tuple[str, str]] | None = None,
+    glossary_entries: Iterable[object] | None = None,
     pp_pages: dict[int, dict[str, Any]] | None = None,
     target_lang: str = "en",
     source_lang: str = "auto",
@@ -955,9 +1105,7 @@ def build_batch_items(
             "source_text": canonical_source_text,
             "source_normalized": canonical_source_normalized,
         }
-        required_terms = _serialize_required_glossary_terms(glossary_application)
-        if required_terms:
-            key_meta["required_glossary_terms"] = required_terms
+        key_meta.update(_serialize_glossary_application_metadata(glossary_application))
         if tm_references:
             key_meta["translation_memory_references"] = (
                 _serialize_translation_memory_references(tm_references)
@@ -969,6 +1117,13 @@ def build_batch_items(
             if tm_references
             else system_prompt
         )
+        optional_reference_prompt = _optional_reference_terms_prompt_from_application(
+            glossary_application
+        )
+        if optional_reference_prompt:
+            item_system_prompt = "\n\n".join(
+                [str(item_system_prompt or "").strip(), optional_reference_prompt]
+            ).strip()
         items.append(
             {
                 "custom_id": custom_id,
@@ -1161,12 +1316,12 @@ def build_translations_from_jsonl_text(
         custom_id = item.get("custom_id", "")
         translated = extract_batch_translation(item)
         if translated:
-            required_terms = _required_glossary_terms_from_key_meta(
-                (key_map or {}).get(custom_id)
+            glossary_application = _glossary_application_from_key_meta(
+                (key_map or {}).get(custom_id),
             )
             translations[custom_id] = _restore_and_validate_required_glossary_terms(
                 translated,
-                required_terms,
+                glossary_application,
                 context_label=custom_id or "batch item",
             )
     if alias_map:
@@ -1206,12 +1361,15 @@ def _post_edit_batch_translations(
     for custom_id, draft_text in translations.items():
         key_meta = key_map.get(custom_id) or {}
         source_text = str(key_meta.get("source_text") or "")
+        glossary_application = _glossary_application_from_key_meta(key_meta)
         post_edit_items.append(
             translation_post_edit.PostEditItem(
                 id=custom_id,
                 source_text=source_text,
                 draft_text=draft_text,
-                required_terms=_required_glossary_terms_from_key_meta(key_meta),
+                required_terms=glossary_application.required_terms,
+                lexical_terms=glossary_application.lexical_terms,
+                reference_terms=glossary_application.reference_terms,
                 protected_texts=translation_post_edit.collect_exact_protected_texts(
                     source_text,
                     draft_text,
@@ -1521,6 +1679,7 @@ def finalize_translation_job(
         raw_text = build_jsonl_text_from_translations(translations)
         if raw_text:
             (job_dir / state.BATCH_OUTPUT_NAME).write_text(raw_text, encoding="utf-8")
+    _write_glossary_validation_artifact(job_dir, translations, key_map)
     edits_payload = build_edits_payload_from_translations(
         ocr_pages,
         translations,
