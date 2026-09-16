@@ -18,6 +18,7 @@ Glossary 仍只負責「來源詞 -> 指定譯詞」的 lexical choice。Transla
 | TM Reference cannot override Department Glossary terminology | `tests/test_translation_memory_regression.py`、`tests/test_sql_glossary_translation_facade.py`、`tests/test_batch_dedup.py` | Fuzzy/Semantic TM references 只能作為 prompt context，不能直接取代 Required Glossary Terms。 |
 | job glossary library traceability | `tests/test_glossary_job_traceability.py` | PDF、Word、PDF rebuild job payload/config 需保留 `department_glossary_library_id`、`department_glossary_library_code`、`department_glossary_entry_count`。 |
 | `glossary_hits.json` output | `tests/test_glossary_job_traceability.py`、`tests/test_word_translate.py`、`tests/test_markdown_translate_html.py`、`tests/test_batch_dedup.py` | 每個 job 的 glossary hit artifact 應可追溯實際命中的 source term、approved term、count 與 location。 |
+| Typed Glossary Validation | `tests/test_department_glossary_sql.py`、`tests/test_department_glossary_import_cli.py`、`tests/test_word_translate.py`、`tests/test_translation_post_edit.py`、`tests/test_batch_dedup.py`、`tests/test_markdown_translate_html.py`、`tests/test_typed_glossary_validation_docs.py` | `strict_required` 維持 hard validation；`lexical_required` 產生 soft match / soft miss 且不阻斷 job；`reference_only` 只做 prompt/reference trace，不應造成 missing required term。 |
 
 ## 建議測試命令
 
@@ -25,6 +26,12 @@ Glossary 仍只負責「來源詞 -> 指定譯詞」的 lexical choice。Transla
 
 ```bash
 PYTHONPATH=. .venv/bin/pytest tests/test_department_glossary_sql.py tests/test_department_glossary_import_cli.py tests/test_glossary_management.py tests/test_sql_glossary_translation_facade.py tests/test_translation_memory_regression.py tests/test_glossary_job_traceability.py tests/test_markdown_translate_html.py -q
+```
+
+Typed Glossary Validation release 前再加跑：
+
+```bash
+PYTHONPATH=. .venv/bin/pytest tests/test_department_glossary_sql.py tests/test_department_glossary_import_cli.py tests/test_glossary_management.py tests/test_sql_glossary_translation_facade.py tests/test_translation_memory_regression.py tests/test_glossary_job_traceability.py tests/test_markdown_translate_html.py tests/test_word_translate.py tests/test_translation_post_edit.py tests/test_typed_glossary_validation_docs.py -q
 ```
 
 release 前再跑 Full test suite：
@@ -65,6 +72,9 @@ TRANSLATION_GLOSSARY_SOURCE=sql
 13. 建立一筆 Translation Memory reference，其 target term 與 Department Glossary 不同，確認翻譯結果仍以 Department Glossary 指定譯詞為準。
 14. 檢查 `glossary_hits.json`、`tm_references.json`、`stage_2_post_edit.json` 是否能共同說明本次翻譯使用了哪些 glossary、哪些 TM reference，以及 Stage 2 是否 fallback。
 15. 確認 `GLOSSARY_CONTEXT_ARTIFACT_ENABLED=false` 時不會每個 job 都輸出 `glossary_context.json`；只有 debug 需要完整 snapshot 時才暫時開啟。
+16. 使用 `scripts/export_department_glossary_validation_review.py` 匯出 validation review CSV，確認欄位包含 `current_validation_type`、`reviewed_validation_type` 與 review notes。
+17. 使用 `scripts/apply_department_glossary_validation_review.py` 先 dry-run，再以 `--apply` 套用 reviewed CSV，確認 `strict_required`、`lexical_required`、`reference_only` 寫回 SQL。
+18. 各跑一份 Word、PDF batch / realtime 與 Markdown / PDF rebuild 測試，確認 `glossary_validation.json` 或 Stage 2 artifact 可看到 `strict_missing`、`soft_matches`、`soft_misses`、`reference_only_hits`。
 
 ## 驗收失敗條件
 
@@ -77,6 +87,8 @@ TRANSLATION_GLOSSARY_SOURCE=sql
 - API 移除舊欄位，造成舊前端或舊 consumer 無法讀取 glossary。
 - Job 缺少 `department_glossary_library_id` 或 `department_glossary_library_code`，導致無法追蹤本次翻譯用哪個 library。
 - `glossary_hits.json` 缺失，或內容無法對應到實際命中的 source/target term。
+- `strict_required` missing 沒有被視為 blocking failure，或 `lexical_required` soft miss 錯誤中斷 job。
+- `reference_only` 被包成 Required Glossary Term，導致不必要的 missing required glossary failure。
 - 不同部門 glossary 混用，導致非選定 department 的譯詞被套用。
 
 ## Release note 要求

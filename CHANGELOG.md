@@ -18,6 +18,30 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.8.0 - 2026-09-16
+
+### Added
+
+- 發布 Department Glossary typed validation 文件，正式說明 `strict_required`、`lexical_required`、`reference_only` 的用途、runtime 行為與 artifact 判讀方式。
+- 新增 validation review CSV 操作文件，涵蓋 `scripts/export_department_glossary_validation_review.py` 匯出、`scripts/apply_department_glossary_validation_review.py` dry-run 與 `--apply` 套用流程。
+- 補齊 Typed Glossary Validation release guide 與文件索引測試，讓系統說明文件、ADR 與 domain vocabulary cross-reference 可被回歸測試鎖住。
+
+### Changed
+
+- Department Glossary regression acceptance 文件新增 typed validation 驗收項目，涵蓋 DB default、CSV export/import、Word、PDF batch/realtime、Markdown runtime behavior 與 `glossary_validation.json` artifact。
+
+### Migration
+
+- 正式部署前需確認 SQL Server 已套用 `0007_add_department_glossary_validation_type.py` migration，或 `department_glossary_entries.validation_type` 已存在且 default 為 `strict_required`。
+- 若要分類既有詞彙，先匯出 review CSV，人工審核 `reviewed_validation_type` 後先 dry-run，再使用 `--apply` 寫回 SQL。
+
+### Validation
+
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_typed_glossary_validation_docs.py -q`，結果為 2 passed。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest tests/test_department_glossary_regression_acceptance.py::test_department_glossary_sql_first_regression_acceptance_guide_is_complete tests/test_app_version.py::test_app_version_comes_from_project_metadata tests/test_app_version.py::test_version_management_docs_and_changelog_exist -q`，結果為 3 passed。
+- 已執行 `git diff --check`，結果通過。
+- 已執行 `PYTHONPATH=. .venv/bin/pytest -q tests`，結果為 673 passed、16 failed。16 個失敗集中於既有 `tests/test_app.py` route/auth/signature/warning baseline、`tests/test_operations_cli.py` sqlite roles table baseline，以及既有 glossary entry tuple expectation / traceability baseline；未出現在 #106 新增 documentation/version tests。
+
 ## 0.7.1 - 2026-09-15
 
 ### Changed

@@ -28,6 +28,7 @@
 | `22-DepartmentGlossarySQLTransition.md` | 附錄 G. Department Glossary SQL Transition 操作指引 |
 | `23-DepartmentGlossaryRegressionAcceptance.md` | 附錄 H. Department Glossary 整體回歸測試與人工驗收案例 |
 | `24-WordLocalBatchRunner操作與驗收指引.md` | 附錄 I. Word Local Batch Runner 操作與驗收指引 |
+| `25-TypedGlossaryValidation操作與Release指引.md` | 附錄 J. Typed Glossary Validation 操作與 Release 指引 |
 
 ## 待補充項目
 
