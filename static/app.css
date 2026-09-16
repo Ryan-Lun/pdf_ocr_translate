@@ -1266,6 +1266,7 @@ button.primary:hover {
 
 .glossary-dashboard {
   display: grid;
+  padding-top: 1.35rem;
   gap: 1.4rem;
 }
 
@@ -3285,14 +3286,18 @@ body.editor .thumbs {
 }
 
 .glossary-library-manager {
-  margin-bottom: 18px;
+  padding-top: 1.35rem;
+}
+
+.glossary-library-manager #libraryStatus:empty {
+  display: none;
 }
 
 .glossary-library-admin-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
-  margin-top: 18px;
+  gap: 12px;
+  margin-top: 10px;
 }
 
 .glossary-library-panel {

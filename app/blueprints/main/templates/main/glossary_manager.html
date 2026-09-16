@@ -31,7 +31,7 @@
         <div class="jobs-header">
           <div>
             <h2>部門詞彙庫</h2>
-            <span>管理各部門可選用的詞彙庫，停用後不會出現在個工作區選單，但歷史任務仍可追溯。</span>
+            <span class="job-muted">管理各部門可選用的詞彙庫，停用後不會出現在各工作區選單，但歷史任務仍可追溯。</span>
           </div>
           <div class="glossary-toolbar-actions">
             <button id="libraryNewBtn" class="primary" type="button" data-write-control{% if not glossary_can_write %} hidden disabled aria-disabled="true"{% endif %}>新增詞彙庫</button>
@@ -42,7 +42,7 @@
         <div id="libraryStatus" class="hint glossary-status"></div>
         <div class="glossary-library-admin-layout">
           <label class="glossary-library-selector">
-            <span>選擇部門詞彙庫</span>
+            <!-- <span>選擇部門詞彙庫</span> -->
             <select id="libraryList"></select>
           </label>
           <div class="glossary-library-panel">
@@ -80,7 +80,7 @@
           <div class="jobs-header">
             <div>
               <h2>匯入目前詞彙庫</h2>
-              <span>匯入檔案格式為<code>.xlsx</code> 或 <code>.json</code>，欄位需包含 <code>cn</code> 中文詞彙和 <code>en</code> 英文詞彙兩個欄位；只會套用到目前選取的部門詞彙庫。</span>
+              <span class="job-meta">匯入檔案格式為<code>.xlsx</code> 或 <code>.json</code>，欄位需包含 <code>cn</code> 中文詞彙和 <code>en</code> 英文詞彙兩個欄位；只會套用到目前選取的部門詞彙庫。</span>
             </div>
           </div>
           <div class="glossary-import-grid">
