@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import re
@@ -141,6 +142,67 @@ IMPORT_REASON_MISSING_TARGET_TERM = "missing_target_term"
 IMPORT_REASON_ITEM_MUST_BE_OBJECT = "item_must_be_object"
 IMPORT_REASON_JSON_MUST_BE_LIST = "json_must_be_list"
 IMPORT_REASON_DUPLICATE_SOURCE_TERM = "duplicate_source_term"
+
+
+VALIDATION_REVIEW_CSV_COLUMNS = (
+    "entry_id",
+    "library_id",
+    "source_lang",
+    "target_lang",
+    "source_term",
+    "target_term",
+    "current_validation_type",
+    "suggested_validation_type",
+    "classification_reason",
+    "confidence",
+    "reviewed_validation_type",
+    "review_note",
+)
+
+
+@dataclass(frozen=True)
+class DepartmentGlossaryValidationReviewExportSummary:
+    library_id: int
+    library_code: str
+    output_path: Path
+    exported: int
+
+
+APPLY_REVIEW_ACTION_UPDATED = "updated"
+APPLY_REVIEW_ACTION_WOULD_UPDATE = "would_update"
+APPLY_REVIEW_ACTION_SKIPPED = "skipped"
+APPLY_REVIEW_ACTION_INVALID = "invalid"
+APPLY_REVIEW_ACTION_UNCHANGED = "unchanged"
+APPLY_REVIEW_REASON_REVIEWED_VALUE_BLANK = "reviewed_validation_type_blank"
+APPLY_REVIEW_REASON_VALIDATION_TYPE_UPDATED = "validation_type_updated"
+APPLY_REVIEW_REASON_VALIDATION_TYPE_UNCHANGED = "validation_type_unchanged"
+APPLY_REVIEW_REASON_INVALID_VALIDATION_TYPE = "invalid_validation_type"
+APPLY_REVIEW_REASON_ENTRY_ID_INVALID = "entry_id_invalid"
+APPLY_REVIEW_REASON_LIBRARY_ID_INVALID = "library_id_invalid"
+APPLY_REVIEW_REASON_ENTRY_NOT_FOUND = "entry_not_found"
+APPLY_REVIEW_REASON_ENTRY_IDENTITY_MISMATCH = "entry_identity_mismatch"
+
+
+@dataclass(frozen=True)
+class DepartmentGlossaryValidationReviewApplyDetail:
+    row_number: int
+    action: str
+    reason: str
+    entry_id: int | None = None
+    reviewed_validation_type: str = ""
+
+
+@dataclass(frozen=True)
+class DepartmentGlossaryValidationReviewApplySummary:
+    dry_run: bool
+    library_id: int
+    scanned: int = 0
+    would_update: int = 0
+    updated: int = 0
+    skipped: int = 0
+    invalid: int = 0
+    unchanged: int = 0
+    details: tuple[DepartmentGlossaryValidationReviewApplyDetail, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1223,6 +1285,283 @@ def department_glossary_library_to_payload(library: DepartmentGlossaryLibrary) -
 
 def department_glossary_entry_to_payload(entry: DepartmentGlossaryEntry) -> dict[str, str | int | None]:
     return _department_entry_to_payload(entry)
+
+
+def _resolve_department_glossary_export_library(
+    *,
+    library_id: int | None = None,
+    library_code: str | None = None,
+) -> SelectedDepartmentGlossary:
+    cleaned_code = str(library_code or "").strip()
+    has_library_id = library_id is not None
+    has_library_code = bool(cleaned_code)
+    if has_library_id == has_library_code:
+        raise DepartmentGlossarySelectionError(
+            "ambiguous_department_glossary",
+            "Specify exactly one of library_id or library_code.",
+        )
+    if has_library_id:
+        return resolve_selected_department_glossary(library_id, require_active=True)
+    library = _find_department_glossary_library_by_code(cleaned_code)
+    if library is None:
+        raise DepartmentGlossarySelectionError(
+            "department_glossary_not_found",
+            f"Department Glossary library_code not found: {cleaned_code}",
+        )
+    return resolve_selected_department_glossary(library.library_id, require_active=True)
+
+
+def export_department_glossary_validation_review_csv(
+    output_path: Path | str,
+    *,
+    library_id: int | None = None,
+    library_code: str | None = None,
+) -> DepartmentGlossaryValidationReviewExportSummary:
+    selected = _resolve_department_glossary_export_library(
+        library_id=library_id,
+        library_code=library_code,
+    )
+    entries = list_department_glossary_entries(
+        selected.library_id,
+        active_only=True,
+    )
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=VALIDATION_REVIEW_CSV_COLUMNS)
+        writer.writeheader()
+        for entry in entries:
+            writer.writerow(
+                {
+                    "entry_id": entry.entry_id,
+                    "library_id": entry.library_id,
+                    "source_lang": entry.source_lang,
+                    "target_lang": entry.target_lang,
+                    "source_term": entry.source_term,
+                    "target_term": entry.target_term,
+                    "current_validation_type": entry.validation_type,
+                    "suggested_validation_type": "",
+                    "classification_reason": "",
+                    "confidence": "",
+                    "reviewed_validation_type": "",
+                    "review_note": "",
+                }
+            )
+    return DepartmentGlossaryValidationReviewExportSummary(
+        library_id=selected.library_id,
+        library_code=selected.code,
+        output_path=path,
+        exported=len(entries),
+    )
+
+
+def _review_csv_int_value(row: dict[str, str], column: str) -> int | None:
+    try:
+        return int(str(row.get(column) or "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _review_csv_identity_matches(
+    row: dict[str, str],
+    *,
+    selected_library_id: int,
+    entry: DepartmentGlossaryEntry,
+) -> bool:
+    return (
+        _review_csv_int_value(row, "library_id") == selected_library_id
+        and entry.library_id == selected_library_id
+        and str(row.get("source_lang") or "").strip() == entry.source_lang
+        and str(row.get("target_lang") or "").strip() == entry.target_lang
+        and str(row.get("source_term") or "").strip() == entry.source_term
+        and str(row.get("target_term") or "").strip() == entry.target_term
+    )
+
+
+def _validation_review_apply_summary_from_details(
+    *,
+    dry_run: bool,
+    library_id: int,
+    scanned: int,
+    details: list[DepartmentGlossaryValidationReviewApplyDetail],
+) -> DepartmentGlossaryValidationReviewApplySummary:
+    counts = {
+        APPLY_REVIEW_ACTION_WOULD_UPDATE: 0,
+        APPLY_REVIEW_ACTION_UPDATED: 0,
+        APPLY_REVIEW_ACTION_SKIPPED: 0,
+        APPLY_REVIEW_ACTION_INVALID: 0,
+        APPLY_REVIEW_ACTION_UNCHANGED: 0,
+    }
+    for detail in details:
+        counts[detail.action] = counts.get(detail.action, 0) + 1
+    return DepartmentGlossaryValidationReviewApplySummary(
+        dry_run=dry_run,
+        library_id=library_id,
+        scanned=scanned,
+        would_update=counts[APPLY_REVIEW_ACTION_WOULD_UPDATE],
+        updated=counts[APPLY_REVIEW_ACTION_UPDATED],
+        skipped=counts[APPLY_REVIEW_ACTION_SKIPPED],
+        invalid=counts[APPLY_REVIEW_ACTION_INVALID],
+        unchanged=counts[APPLY_REVIEW_ACTION_UNCHANGED],
+        details=tuple(details),
+    )
+
+
+def apply_department_glossary_validation_review_csv(
+    csv_path: Path | str,
+    *,
+    library_id: int | None,
+    apply: bool = False,
+    updated_by_work_id: str | None = None,
+) -> DepartmentGlossaryValidationReviewApplySummary:
+    selected = resolve_selected_department_glossary(library_id, require_active=True)
+    path = Path(csv_path)
+    entries_by_id = {
+        entry.entry_id: entry
+        for entry in list_department_glossary_entries(selected.library_id, active_only=True)
+    }
+    details: list[DepartmentGlossaryValidationReviewApplyDetail] = []
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        missing_columns = [
+            column for column in VALIDATION_REVIEW_CSV_COLUMNS if column not in (reader.fieldnames or [])
+        ]
+        if missing_columns:
+            raise ValueError(f"Validation review CSV missing columns: {', '.join(missing_columns)}")
+        for row_number, row in enumerate(reader, start=2):
+            reviewed_validation_type = str(row.get("reviewed_validation_type") or "").strip()
+            if not reviewed_validation_type:
+                details.append(
+                    DepartmentGlossaryValidationReviewApplyDetail(
+                        row_number=row_number,
+                        action=APPLY_REVIEW_ACTION_SKIPPED,
+                        reason=APPLY_REVIEW_REASON_REVIEWED_VALUE_BLANK,
+                        entry_id=_review_csv_int_value(row, "entry_id"),
+                    )
+                )
+                continue
+            entry_id = _review_csv_int_value(row, "entry_id")
+            if entry_id is None:
+                details.append(
+                    DepartmentGlossaryValidationReviewApplyDetail(
+                        row_number=row_number,
+                        action=APPLY_REVIEW_ACTION_INVALID,
+                        reason=APPLY_REVIEW_REASON_ENTRY_ID_INVALID,
+                        reviewed_validation_type=reviewed_validation_type,
+                    )
+                )
+                continue
+            row_library_id = _review_csv_int_value(row, "library_id")
+            if row_library_id is None:
+                details.append(
+                    DepartmentGlossaryValidationReviewApplyDetail(
+                        row_number=row_number,
+                        action=APPLY_REVIEW_ACTION_INVALID,
+                        reason=APPLY_REVIEW_REASON_LIBRARY_ID_INVALID,
+                        entry_id=entry_id,
+                        reviewed_validation_type=reviewed_validation_type,
+                    )
+                )
+                continue
+            try:
+                cleaned_validation_type = _clean_department_glossary_validation_type(reviewed_validation_type)
+            except ValueError:
+                details.append(
+                    DepartmentGlossaryValidationReviewApplyDetail(
+                        row_number=row_number,
+                        action=APPLY_REVIEW_ACTION_INVALID,
+                        reason=APPLY_REVIEW_REASON_INVALID_VALIDATION_TYPE,
+                        entry_id=entry_id,
+                        reviewed_validation_type=reviewed_validation_type,
+                    )
+                )
+                continue
+            entry = entries_by_id.get(entry_id)
+            if entry is None:
+                details.append(
+                    DepartmentGlossaryValidationReviewApplyDetail(
+                        row_number=row_number,
+                        action=APPLY_REVIEW_ACTION_INVALID,
+                        reason=APPLY_REVIEW_REASON_ENTRY_NOT_FOUND,
+                        entry_id=entry_id,
+                        reviewed_validation_type=cleaned_validation_type,
+                    )
+                )
+                continue
+            if not _review_csv_identity_matches(
+                row,
+                selected_library_id=selected.library_id,
+                entry=entry,
+            ):
+                details.append(
+                    DepartmentGlossaryValidationReviewApplyDetail(
+                        row_number=row_number,
+                        action=APPLY_REVIEW_ACTION_INVALID,
+                        reason=APPLY_REVIEW_REASON_ENTRY_IDENTITY_MISMATCH,
+                        entry_id=entry_id,
+                        reviewed_validation_type=cleaned_validation_type,
+                    )
+                )
+                continue
+            if entry.validation_type == cleaned_validation_type:
+                details.append(
+                    DepartmentGlossaryValidationReviewApplyDetail(
+                        row_number=row_number,
+                        action=APPLY_REVIEW_ACTION_UNCHANGED,
+                        reason=APPLY_REVIEW_REASON_VALIDATION_TYPE_UNCHANGED,
+                        entry_id=entry_id,
+                        reviewed_validation_type=cleaned_validation_type,
+                    )
+                )
+                continue
+            if not apply:
+                details.append(
+                    DepartmentGlossaryValidationReviewApplyDetail(
+                        row_number=row_number,
+                        action=APPLY_REVIEW_ACTION_WOULD_UPDATE,
+                        reason=APPLY_REVIEW_REASON_VALIDATION_TYPE_UPDATED,
+                        entry_id=entry_id,
+                        reviewed_validation_type=cleaned_validation_type,
+                    )
+                )
+                continue
+            update_department_glossary_entry(
+                entry_id,
+                library_id=selected.library_id,
+                source_term=entry.source_term,
+                target_term=entry.target_term,
+                validation_type=cleaned_validation_type,
+                updated_by_work_id=updated_by_work_id,
+            )
+            entries_by_id[entry_id] = DepartmentGlossaryEntry(
+                entry_id=entry.entry_id,
+                library_id=entry.library_id,
+                source_lang=entry.source_lang,
+                target_lang=entry.target_lang,
+                source_term=entry.source_term,
+                target_term=entry.target_term,
+                status=entry.status,
+                validation_type=cleaned_validation_type,
+                priority=entry.priority,
+                notes=entry.notes,
+                created_by_work_id=entry.created_by_work_id,
+                updated_by_work_id=updated_by_work_id or entry.updated_by_work_id,
+            )
+            details.append(
+                DepartmentGlossaryValidationReviewApplyDetail(
+                    row_number=row_number,
+                    action=APPLY_REVIEW_ACTION_UPDATED,
+                    reason=APPLY_REVIEW_REASON_VALIDATION_TYPE_UPDATED,
+                    entry_id=entry_id,
+                    reviewed_validation_type=cleaned_validation_type,
+                )
+            )
+    return _validation_review_apply_summary_from_details(
+        dry_run=not apply,
+        library_id=selected.library_id,
+        scanned=len(details),
+        details=details,
+    )
 
 
 def load_department_glossary_items(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 from alembic import command
@@ -64,6 +65,101 @@ def test_department_glossary_lists_only_active_entries_for_translation(app):
     assert glossary.load_department_glossary_pairs(library.library_id) == [
         ("製程規範", "Process Specification")
     ]
+
+
+def test_department_glossary_validation_review_export_filters_active_entries_and_columns(app, tmp_path):
+    _clear_department_glossary()
+    library = glossary.get_or_create_department_glossary_library(
+        code="quality-assurance",
+        name="品保部",
+        department_code="品保部",
+    )
+    other_library = glossary.get_or_create_department_glossary_library(
+        code="regulatory-document-control",
+        name="法規文管部",
+        department_code="法規文管部",
+    )
+    active_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+        validation_type=glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+    )
+    glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="文件變更記錄",
+        target_term="Document Change Records",
+        status=glossary.STATUS_DISABLED,
+    )
+    glossary.upsert_department_glossary_entry(
+        library_id=other_library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="批號",
+        target_term="Lot No.",
+    )
+    output_path = tmp_path / "review.csv"
+
+    summary = glossary.export_department_glossary_validation_review_csv(
+        output_path,
+        library_id=library.library_id,
+    )
+
+    assert summary.library_id == library.library_id
+    assert summary.exported == 1
+    with output_path.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+
+    assert reader.fieldnames == list(glossary.VALIDATION_REVIEW_CSV_COLUMNS)
+    assert rows == [
+        {
+            "entry_id": str(active_id),
+            "library_id": str(library.library_id),
+            "source_lang": "zh",
+            "target_lang": "en",
+            "source_term": "外觀",
+            "target_term": "Appearance",
+            "current_validation_type": glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+            "suggested_validation_type": "",
+            "classification_reason": "",
+            "confidence": "",
+            "reviewed_validation_type": "",
+            "review_note": "",
+        }
+    ]
+
+
+def test_department_glossary_validation_review_export_rejects_ambiguous_and_missing_selection(app, tmp_path):
+    _clear_department_glossary()
+    library = glossary.get_or_create_department_glossary_library(
+        code="quality-assurance",
+        name="品保部",
+        department_code="品保部",
+    )
+
+    cases = [
+        ({}, "ambiguous_department_glossary"),
+        (
+            {"library_id": library.library_id, "library_code": library.code},
+            "ambiguous_department_glossary",
+        ),
+        ({"library_code": "missing-library"}, "department_glossary_not_found"),
+    ]
+    for kwargs, expected_code in cases:
+        try:
+            glossary.export_department_glossary_validation_review_csv(
+                tmp_path / f"{expected_code}.csv",
+                **kwargs,
+            )
+        except glossary.DepartmentGlossarySelectionError as exc:
+            assert exc.code == expected_code
+        else:
+            raise AssertionError(f"selection should be rejected: {kwargs}")
 
 
 def test_department_glossary_entry_validation_type_defaults_updates_and_validates(app):

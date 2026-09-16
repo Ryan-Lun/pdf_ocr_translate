@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 from pathlib import Path
@@ -210,3 +211,313 @@ def test_department_glossary_import_apply_records_cli_work_id_in_audit(app, tmp_
 
     assert ("create", "library") in created_targets
     assert ("create", "entry") in created_targets
+
+
+def _run_export_cli(
+    output_path,
+    *,
+    library_id: int | None = None,
+    library_code: str | None = None,
+    env: dict[str, str],
+):
+    command = [
+        sys.executable,
+        "scripts/export_department_glossary_validation_review.py",
+        str(output_path),
+    ]
+    if library_id is not None:
+        command.extend(["--library-id", str(library_id)])
+    if library_code is not None:
+        command.extend(["--library-code", library_code])
+    return subprocess.run(
+        command,
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _write_validation_review_csv(path: Path, rows: list[dict[str, object]]) -> None:
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=glossary.VALIDATION_REVIEW_CSV_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({column: row.get(column, "") for column in glossary.VALIDATION_REVIEW_CSV_COLUMNS})
+
+
+def _run_apply_review_cli(
+    csv_path,
+    *,
+    library_id: int | None = None,
+    apply: bool = False,
+    work_id: str | None = None,
+    env: dict[str, str],
+):
+    command = [
+        sys.executable,
+        "scripts/apply_department_glossary_validation_review.py",
+        str(csv_path),
+    ]
+    if library_id is not None:
+        command.extend(["--library-id", str(library_id)])
+    if apply:
+        command.append("--apply")
+    if work_id:
+        command.extend(["--work-id", work_id])
+    return subprocess.run(
+        command,
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_department_glossary_validation_review_export_cli_by_library_id_and_code(app, tmp_path):
+    _clear_department_glossary()
+    library = glossary.get_or_create_department_glossary_library(
+        code="quality-assurance",
+        name="品保部",
+        department_code="品保部",
+    )
+    entry_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+        validation_type=glossary.VALIDATION_TYPE_REFERENCE_ONLY,
+    )
+
+    by_id_path = tmp_path / "by-id.csv"
+    by_id = _run_export_cli(by_id_path, library_id=library.library_id, env=_cli_env())
+    by_code_path = tmp_path / "by-code.csv"
+    by_code = _run_export_cli(by_code_path, library_code=library.code, env=_cli_env())
+
+    assert by_id.returncode == 0, by_id.stderr
+    assert by_code.returncode == 0, by_code.stderr
+    assert f"library_id={library.library_id}" in by_id.stdout
+    assert "exported=1" in by_id.stdout
+    assert by_id_path.read_text(encoding="utf-8-sig") == by_code_path.read_text(encoding="utf-8-sig")
+    with by_id_path.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+    assert reader.fieldnames == list(glossary.VALIDATION_REVIEW_CSV_COLUMNS)
+    assert rows[0]["entry_id"] == str(entry_id)
+    assert rows[0]["current_validation_type"] == glossary.VALIDATION_TYPE_REFERENCE_ONLY
+    assert rows[0]["reviewed_validation_type"] == ""
+
+
+def test_department_glossary_validation_review_export_cli_rejects_inactive_library(app, tmp_path):
+    _clear_department_glossary()
+    library = glossary.get_or_create_department_glossary_library(
+        code="inactive-library",
+        name="停用部門",
+        department_code="OFF",
+    )
+    glossary.disable_department_glossary_library(library.library_id)
+
+    result = _run_export_cli(tmp_path / "review.csv", library_id=library.library_id, env=_cli_env())
+
+    assert result.returncode == 1
+    assert "department_glossary_validation_review_export_error" in result.stderr
+    assert "inactive" in result.stderr.lower()
+
+
+def test_department_glossary_validation_review_apply_cli_dry_run_does_not_write(app, tmp_path):
+    _clear_department_glossary()
+    library = glossary.get_or_create_department_glossary_library(
+        code="quality-assurance",
+        name="品保部",
+        department_code="品保部",
+    )
+    entry_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+        validation_type=glossary.VALIDATION_TYPE_STRICT_REQUIRED,
+    )
+    csv_path = tmp_path / "review.csv"
+    _write_validation_review_csv(
+        csv_path,
+        [
+            {
+                "entry_id": entry_id,
+                "library_id": library.library_id,
+                "source_lang": "zh",
+                "target_lang": "en",
+                "source_term": "外觀",
+                "target_term": "Appearance",
+                "current_validation_type": glossary.VALIDATION_TYPE_STRICT_REQUIRED,
+                "suggested_validation_type": glossary.VALIDATION_TYPE_REFERENCE_ONLY,
+                "reviewed_validation_type": glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+            }
+        ],
+    )
+
+    result = _run_apply_review_cli(csv_path, library_id=library.library_id, env=_cli_env())
+
+    assert result.returncode == 0, result.stderr
+    assert "dry_run=1" in result.stdout
+    assert "would_update=1" in result.stdout
+    assert "updated=0" in result.stdout
+    entry = glossary.list_department_glossary_entries(library.library_id, active_only=True)[0]
+    assert entry.validation_type == glossary.VALIDATION_TYPE_STRICT_REQUIRED
+
+
+def test_department_glossary_validation_review_apply_cli_updates_only_reviewed_values(app, tmp_path):
+    _clear_department_glossary()
+    library = glossary.get_or_create_department_glossary_library(
+        code="quality-assurance",
+        name="品保部",
+        department_code="品保部",
+    )
+    first_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+        validation_type=glossary.VALIDATION_TYPE_STRICT_REQUIRED,
+    )
+    second_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="紀錄",
+        target_term="Record",
+        validation_type=glossary.VALIDATION_TYPE_STRICT_REQUIRED,
+    )
+    csv_path = tmp_path / "review.csv"
+    _write_validation_review_csv(
+        csv_path,
+        [
+            {
+                "entry_id": first_id,
+                "library_id": library.library_id,
+                "source_lang": "zh",
+                "target_lang": "en",
+                "source_term": "外觀",
+                "target_term": "Appearance",
+                "current_validation_type": glossary.VALIDATION_TYPE_STRICT_REQUIRED,
+                "suggested_validation_type": glossary.VALIDATION_TYPE_REFERENCE_ONLY,
+                "reviewed_validation_type": glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+            },
+            {
+                "entry_id": second_id,
+                "library_id": library.library_id,
+                "source_lang": "zh",
+                "target_lang": "en",
+                "source_term": "紀錄",
+                "target_term": "Record",
+                "current_validation_type": glossary.VALIDATION_TYPE_STRICT_REQUIRED,
+                "suggested_validation_type": glossary.VALIDATION_TYPE_REFERENCE_ONLY,
+                "reviewed_validation_type": "",
+            },
+        ],
+    )
+
+    result = _run_apply_review_cli(
+        csv_path,
+        library_id=library.library_id,
+        apply=True,
+        work_id="CLI99",
+        env=_cli_env(),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "dry_run=0" in result.stdout
+    assert "updated=1" in result.stdout
+    assert "skipped=1" in result.stdout
+    entries = {entry.entry_id: entry for entry in glossary.list_department_glossary_entries(library.library_id)}
+    assert entries[first_id].validation_type == glossary.VALIDATION_TYPE_LEXICAL_REQUIRED
+    assert entries[second_id].validation_type == glossary.VALIDATION_TYPE_STRICT_REQUIRED
+    assert glossary.list_glossary_audit_events(actor_work_id="CLI99")
+
+
+def test_department_glossary_validation_review_apply_cli_reports_invalid_and_unchanged_rows(app, tmp_path):
+    _clear_department_glossary()
+    library = glossary.get_or_create_department_glossary_library(
+        code="quality-assurance",
+        name="品保部",
+        department_code="品保部",
+    )
+    entry_id = glossary.upsert_department_glossary_entry(
+        library_id=library.library_id,
+        source_lang="zh",
+        target_lang="en",
+        source_term="外觀",
+        target_term="Appearance",
+        validation_type=glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+    )
+    csv_path = tmp_path / "review.csv"
+    _write_validation_review_csv(
+        csv_path,
+        [
+            {
+                "entry_id": entry_id,
+                "library_id": library.library_id,
+                "source_lang": "zh",
+                "target_lang": "en",
+                "source_term": "外觀",
+                "target_term": "Appearance",
+                "current_validation_type": glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+                "reviewed_validation_type": glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+            },
+            {
+                "entry_id": entry_id,
+                "library_id": library.library_id,
+                "source_lang": "zh",
+                "target_lang": "en",
+                "source_term": "外觀",
+                "target_term": "Appearance",
+                "current_validation_type": glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+                "reviewed_validation_type": "not-a-type",
+            },
+            {
+                "entry_id": entry_id,
+                "library_id": library.library_id,
+                "source_lang": "zh",
+                "target_lang": "en",
+                "source_term": "外觀-舊資料",
+                "target_term": "Appearance",
+                "current_validation_type": glossary.VALIDATION_TYPE_LEXICAL_REQUIRED,
+                "reviewed_validation_type": glossary.VALIDATION_TYPE_REFERENCE_ONLY,
+            },
+        ],
+    )
+
+    result = _run_apply_review_cli(csv_path, library_id=library.library_id, apply=True, env=_cli_env())
+
+    assert result.returncode == 1
+    assert "scanned=3" in result.stdout
+    assert "unchanged=1" in result.stdout
+    assert "invalid=2" in result.stdout
+    assert "updated=0" in result.stdout
+    details = [
+        json.loads(line.split(" ", 1)[1])
+        for line in result.stdout.splitlines()
+        if line.startswith("department_glossary_validation_review_apply_detail ")
+    ]
+    assert {(detail["row"], detail["action"], detail["reason"]) for detail in details} >= {
+        (3, "invalid", "invalid_validation_type"),
+        (4, "invalid", "entry_identity_mismatch"),
+    }
+    entry = glossary.list_department_glossary_entries(library.library_id, active_only=True)[0]
+    assert entry.validation_type == glossary.VALIDATION_TYPE_LEXICAL_REQUIRED
+
+
+def test_department_glossary_validation_review_apply_cli_requires_library_id(app, tmp_path):
+    _clear_department_glossary()
+    csv_path = tmp_path / "review.csv"
+    _write_validation_review_csv(csv_path, [])
+
+    result = _run_apply_review_cli(csv_path, env=_cli_env())
+
+    assert result.returncode != 0
+    assert "--library-id" in result.stderr
