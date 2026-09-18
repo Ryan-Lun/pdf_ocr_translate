@@ -4024,6 +4024,27 @@ def test_word_translate_batch_repairs_omitted_cjk_brackets_around_glossary_term(
     )
 
 
+def test_word_translation_accepts_longer_english_for_numbered_chinese_source():
+    translator = EnhancedWordTranslator()
+
+    assert not translator.is_invalid_translation_response(
+        "二、量測時機：於早/中/夜班一上班時進行真圓度儀量測穩定性監控。",
+        (
+            "2. Measurement timing: Perform roundness measuring instrument stability "
+            "monitoring at the start of the early/medium/late shift."
+        ),
+        target_lang="en",
+    )
+
+
+def test_word_translation_accepts_numeric_year_codes_without_ascii_letters():
+    translator = EnhancedWordTranslator()
+
+    assert not translator.is_invalid_translation_response("2055年--55", "2055--55", target_lang="en")
+    assert not translator.is_invalid_translation_response("2099年--99", "2099--99", target_lang="en")
+    assert translator.is_invalid_translation_response("0011號發行", "0011", target_lang="en")
+
+
 def test_word_translation_blank_response_still_retries_and_fails(monkeypatch):
     class _BlankCompletions:
         async def create(self, **kwargs):

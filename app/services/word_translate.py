@@ -1548,17 +1548,19 @@ class EnhancedWordTranslator:
         lowered = translated.lower()
         if any(marker in lowered for marker in invalid_markers):
             return True
+        numeric_format_source = re.sub(r"[年月日]", "", source)
+        preserves_numeric_format = (
+            translated == numeric_format_source
+            and bool(re.search(r"\d", translated))
+            and not _CJK_TEXT_RE.search(numeric_format_source)
+        )
         if (
             normalize_lang_code(target_lang) == "en"
             and _CJK_TEXT_RE.search(source)
             and not re.search(r"[A-Za-z]", translated)
+            and not preserves_numeric_format
         ):
             return True
-        if "\n" not in source and len(source) <= 220:
-            expanded_too_much = len(translated) > max(len(source) * 3, len(source) + 80)
-            generated_list = bool(re.search(r"(^|\n)\s*(\d+\.|[-*])\s+", translated))
-            if expanded_too_much and generated_list:
-                return True
         return False
 
     def copy_run_style(self, source_run: Any, target_run: Any) -> None:
