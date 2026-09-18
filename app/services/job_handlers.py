@@ -6,7 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from . import batch, doc_workspace, jobs, pipeline, realtime_translate, state, word_translate
+from . import (
+    batch,
+    doc_workspace,
+    jobs,
+    pipeline,
+    realtime_translate,
+    state,
+    translation_providers,
+    word_translate,
+)
 
 
 class JobRecordView(Protocol):
@@ -107,6 +116,25 @@ class WordTranslateJobHandler:
 
     def handle(self, context: JobContext) -> None:
         payload = context.payload
+        try:
+            translation_provider = (
+                translation_providers.normalize_translation_provider(
+                    payload.get("translation_provider")
+                )
+            )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        if (
+            translation_provider
+            == translation_providers.LOCAL_TRANSLATION_PROVIDER
+        ):
+            raise RuntimeError(
+                "Local Translation Provider dispatch is not available."
+            )
+        translation_model = str(
+            payload.get("translation_model")
+            or state.WORD_TRANSLATE_MODEL
+        ).strip()
         source_name = str((jobs.load_job_meta(context.job_dir) or {}).get("source_filename") or "source.docx")
         source_path = context.job_dir / source_name
         processing_source_path = (
@@ -126,6 +154,8 @@ class WordTranslateJobHandler:
             system_prompt=str(payload.get("system_prompt") or ""),
             layout_mode=word_translate.normalize_word_layout_mode(payload.get("layout_mode")),
             translate_tables=word_translate.normalize_translate_tables(payload.get("translate_tables")),
+            translation_model=translation_model,
+            post_edit_model=state.TRANSLATION_POST_EDIT_MODEL,
         )
 
 

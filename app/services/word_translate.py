@@ -25,7 +25,18 @@ from docx.text.paragraph import Paragraph
 from lang_utils import describe_target_language, normalize_lang_code, traditional_chinese_instruction
 from werkzeug.utils import secure_filename
 
-from . import audit_service, glossary, jobs, openai_config, state, translation_debug, translation_memory, translation_post_edit, word_layout
+from . import (
+    audit_service,
+    glossary,
+    jobs,
+    openai_config,
+    state,
+    translation_debug,
+    translation_memory,
+    translation_post_edit,
+    translation_providers,
+    word_layout,
+)
 
 logger = logging.getLogger(__name__)
 WORD_JOB_EVENTS: dict[str, threading.Event] = {}
@@ -2950,6 +2961,7 @@ def run_word_translate_job(
     layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
     translate_tables: object = True,
     translation_model: str | None = None,
+    post_edit_model: str | None = None,
     local_model_base_url: str = "",
     local_model_api_key: str = "",
     stage_2_enabled: bool | None = None,
@@ -2975,6 +2987,7 @@ def run_word_translate_job(
         layout_mode=layout_mode,
         translate_tables=translate_tables,
         translation_model=translation_model,
+        post_edit_model=post_edit_model,
         local_model_base_url=local_model_base_url,
         local_model_api_key=local_model_api_key,
         stage_2_enabled=stage_2_enabled,
@@ -3002,6 +3015,7 @@ def _run_word_job(
     layout_mode: str = WORD_LAYOUT_REPLACE_ORIGINAL,
     translate_tables: object = True,
     translation_model: str | None = None,
+    post_edit_model: str | None = None,
     local_model_base_url: str = "",
     local_model_api_key: str = "",
     stage_2_enabled: bool | None = None,
@@ -3050,6 +3064,8 @@ def _run_word_job(
         if translation_model is not None:
             translator_kwargs["translation_model"] = translation_model
             translator_kwargs["post_edit_model"] = translation_model
+        if post_edit_model is not None:
+            translator_kwargs["post_edit_model"] = post_edit_model
         if local_client_factory is not None:
             translator_kwargs["client"] = local_client_factory()
             translator_kwargs["post_edit_client_factory"] = local_client_factory
@@ -3197,6 +3213,8 @@ def enqueue_word_job_from_upload(
     system_prompt: str | None = None,
     layout_mode: str | None = None,
     translate_tables: object = True,
+    translation_provider: object = translation_providers.CLOUD_TRANSLATION_PROVIDER,
+    translation_model: str | None = None,
     department_glossary_context: dict[str, object] | None = None,
     queue_for_worker: bool = True,
 ) -> str:
@@ -3219,6 +3237,19 @@ def enqueue_word_job_from_upload(
     custom_system_prompt = str(system_prompt or "").strip()
     normalized_layout_mode = normalize_word_layout_mode(layout_mode)
     normalized_translate_tables = normalize_translate_tables(translate_tables)
+    normalized_translation_provider = (
+        translation_providers.normalize_translation_provider(translation_provider)
+    )
+    translation_model_snapshot = (
+        str(translation_model or "").strip()
+        or translation_providers.word_translation_model_snapshot(
+            normalized_translation_provider,
+            cloud_model=state.WORD_TRANSLATE_MODEL,
+            local_model=state.LOCAL_WORD_MODEL,
+        )
+    )
+    if not translation_model_snapshot:
+        raise ValueError("Selected Translation Provider has no configured model.")
     owner = str(owner_work_id or "").strip()
     department_glossary_config = glossary.add_department_glossary_context_to_config(
         {},
@@ -3237,6 +3268,8 @@ def enqueue_word_job_from_upload(
         "system_prompt": custom_system_prompt,
         "layout_mode": normalized_layout_mode,
         "translate_tables": normalized_translate_tables,
+        "translation_provider": normalized_translation_provider,
+        "translation_model": translation_model_snapshot,
         "source_filename": safe_name,
         "progress": 0.0,
         **department_glossary_config,
@@ -3250,6 +3283,8 @@ def enqueue_word_job_from_upload(
         "system_prompt": custom_system_prompt,
         "layout_mode": normalized_layout_mode,
         "translate_tables": normalized_translate_tables,
+        "translation_provider": normalized_translation_provider,
+        "translation_model": translation_model_snapshot,
         "source_filename": safe_name,
         "processing_started_at": now_ts,
         "queue_for_worker": bool(queue_for_worker),

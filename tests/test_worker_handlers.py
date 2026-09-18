@@ -325,6 +325,99 @@ def test_word_handler_defaults_and_normalizes_options(
     assert captured["translate_tables"] is expected_translate_tables
 
 
+def test_word_handler_defaults_legacy_job_to_cloud_provider(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    from app.services import job_handlers
+
+    job_id = _job_id()
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    jobs.write_job_meta(job_dir, {"source_filename": "source.docx"})
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(job_handlers.state, "WORD_TRANSLATE_MODEL", "cloud-word-model")
+    monkeypatch.setattr(
+        job_handlers.state,
+        "TRANSLATION_POST_EDIT_MODEL",
+        "cloud-post-edit-model",
+    )
+    monkeypatch.setattr(
+        job_handlers.word_translate,
+        "run_word_translate_job",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    job_handlers.WordTranslateJobHandler().handle(
+        job_handlers.JobContext(
+            job_id=job_id,
+            record=job_store.JobRecord(
+                job_id=job_id,
+                job_type="word_translate",
+                status="running",
+                stage="queued",
+                progress=0.0,
+                target_lang="en",
+            ),
+            job_dir=job_dir,
+            payload={"source_lang": "zh"},
+        )
+    )
+
+    assert captured["translation_model"] == "cloud-word-model"
+    assert captured["post_edit_model"] == "cloud-post-edit-model"
+    assert "local_model_base_url" not in captured
+    assert "local_model_api_key" not in captured
+
+
+def test_word_handler_fails_closed_for_local_provider_before_dispatch_is_available(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    from app.services import job_handlers
+
+    job_id = _job_id()
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    jobs.write_job_meta(job_dir, {"source_filename": "source.docx"})
+    called = False
+
+    def fake_run_word_translate_job(**kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        job_handlers.word_translate,
+        "run_word_translate_job",
+        fake_run_word_translate_job,
+    )
+
+    with pytest.raises(RuntimeError, match="Local Translation Provider"):
+        job_handlers.WordTranslateJobHandler().handle(
+            job_handlers.JobContext(
+                job_id=job_id,
+                record=job_store.JobRecord(
+                    job_id=job_id,
+                    job_type="word_translate",
+                    status="running",
+                    stage="queued",
+                    progress=0.0,
+                    target_lang="en",
+                ),
+                job_dir=job_dir,
+                payload={
+                    "source_lang": "zh",
+                    "translation_provider": "local",
+                    "translation_model": "quality-local-model",
+                },
+            )
+        )
+
+    assert called is False
+
+
 def test_worker_loop_records_orphan_recovery_exception_and_continues(app, monkeypatch):
     _delete_system_errors()
     recovery_calls = {"count": 0}

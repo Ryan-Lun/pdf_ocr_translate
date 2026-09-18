@@ -7,7 +7,19 @@ from uuid import uuid4
 from flask import Blueprint, abort, current_app, redirect, render_template, request, url_for
 from flask_login import current_user
 
-from ...services import audit_service, authz_service, doc_workspace, document_templates, glossary, jobs, pipeline, state, submit_quota, word_translate
+from ...services import (
+    audit_service,
+    authz_service,
+    doc_workspace,
+    document_templates,
+    glossary,
+    jobs,
+    pipeline,
+    state,
+    submit_quota,
+    translation_providers,
+    word_translate,
+)
 
 main_bp = Blueprint(
     "main",
@@ -204,6 +216,9 @@ def word_workspace_page() -> str:
     return render_template(
         "main/word_workspace.html",
         department_glossary_libraries=_active_department_glossary_libraries(),
+        local_word_provider_enabled=bool(
+            current_app.config.get("LOCAL_WORD_PROVIDER_ENABLED", False)
+        ),
     )
 
 
@@ -456,6 +471,29 @@ def upload_word_workspace() -> str:
 
     source_lang = request.form.get("source_lang", "auto").strip() or "auto"
     target_lang = request.form.get("target_lang", "en").strip() or "en"
+    try:
+        translation_provider = translation_providers.normalize_translation_provider(
+            request.form.get("translation_provider")
+        )
+        provider_available = (
+            translation_providers.word_translation_provider_is_available(
+                translation_provider,
+                local_enabled=bool(
+                    current_app.config.get("LOCAL_WORD_PROVIDER_ENABLED", False)
+                ),
+            )
+        )
+    except ValueError as exc:
+        abort(400, str(exc))
+    if not provider_available:
+        abort(400, "Selected Translation Provider is not available.")
+    translation_model = translation_providers.word_translation_model_snapshot(
+        translation_provider,
+        cloud_model=current_app.config.get("WORD_TRANSLATE_MODEL", ""),
+        local_model=current_app.config.get("LOCAL_WORD_MODEL", ""),
+    )
+    if not translation_model:
+        abort(400, "Selected Translation Provider has no configured model.")
     retain_terms = request.form.get("retain_terms", "")
     system_prompt = request.form.get("system_prompt", "").strip()
     layout_mode = word_translate.normalize_word_layout_mode(request.form.get("layout_mode"))
@@ -493,6 +531,8 @@ def upload_word_workspace() -> str:
             system_prompt=system_prompt,
             layout_mode=layout_mode,
             translate_tables=translate_tables,
+            translation_provider=translation_provider,
+            translation_model=translation_model,
             **enqueue_options,
         )
         audit_service.record_audit(
@@ -505,6 +545,8 @@ def upload_word_workspace() -> str:
                 "target_lang": target_lang,
                 "layout_mode": layout_mode,
                 "translate_tables": translate_tables,
+                "translation_provider": translation_provider,
+                "translation_model": translation_model,
             },
             job_id=created_job_id,
         )

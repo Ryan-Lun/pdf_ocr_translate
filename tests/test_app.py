@@ -91,6 +91,28 @@ def test_upload_workspaces_show_blank_active_department_glossary_selector(client
         assert f'<option value="{inactive.library_id}">停用部門 (OFF)</option>' not in html
 
 
+def test_word_workspace_defaults_to_cloud_provider_and_hides_disabled_local(app, client):
+    app.config["LOCAL_WORD_PROVIDER_ENABLED"] = False
+
+    resp = client.get("/workspace/word")
+    html = resp.get_data(as_text=True)
+
+    assert resp.status_code == 200
+    assert 'name="translation_provider"' in html
+    assert '<option value="cloud" selected>雲端模型</option>' in html
+    assert "地端模型（品質文件專用）" not in html
+
+
+def test_word_workspace_shows_local_provider_only_when_enabled(app, client):
+    app.config["LOCAL_WORD_PROVIDER_ENABLED"] = True
+
+    resp = client.get("/workspace/word")
+    html = resp.get_data(as_text=True)
+
+    assert resp.status_code == 200
+    assert '<option value="local">地端模型（品質文件專用）</option>' in html
+
+
 def test_upload_workspaces_reject_missing_department_glossary_selection(client, tmp_path, monkeypatch):
     _clear_department_glossary()
     _create_department_glossary_library()
@@ -2322,6 +2344,149 @@ def test_upload_word_workspace_accepts_doc(client, tmp_path, monkeypatch):
     assert captured[0]["system_prompt"] == "Use concise legal wording."
     assert captured[0]["layout_mode"] == "bilingual_below"
     assert captured[0]["translate_tables"] is False
+
+
+def test_upload_word_workspace_uses_one_local_provider_snapshot_for_all_files(
+    app,
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    app.config.update(
+        LOCAL_WORD_PROVIDER_ENABLED=True,
+        LOCAL_WORD_MODEL="quality-local-model",
+    )
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr(
+        "app.blueprints.main.routes._resolve_department_glossary_submission",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "app.blueprints.main.routes._enforce_submit_quota",
+        lambda creator_name: None,
+    )
+    captured: list[dict[str, object]] = []
+
+    def fake_enqueue(*args, **kwargs):
+        captured.append(dict(kwargs))
+        return "b" * 32
+
+    monkeypatch.setattr(
+        "app.blueprints.main.routes.word_translate.enqueue_word_job_from_upload",
+        fake_enqueue,
+    )
+
+    resp = client.post(
+        "/upload-word-workspace",
+        data={
+            "source_lang": "auto",
+            "target_lang": "en",
+            "translation_provider": "local",
+            "docx": [
+                (io.BytesIO(b"first"), "first.docx"),
+                (io.BytesIO(b"second"), "second.docx"),
+            ],
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 302
+    assert len(captured) == 2
+    assert {
+        (row["translation_provider"], row["translation_model"])
+        for row in captured
+    } == {("local", "quality-local-model")}
+
+
+def test_upload_word_workspace_defaults_provider_to_cloud(
+    app,
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    app.config["WORD_TRANSLATE_MODEL"] = "cloud-word-model"
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr(
+        "app.blueprints.main.routes._resolve_department_glossary_submission",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "app.blueprints.main.routes._enforce_submit_quota",
+        lambda creator_name: None,
+    )
+    captured: dict[str, object] = {}
+    audit_details: list[dict[str, object]] = []
+
+    def fake_enqueue(*args, **kwargs):
+        captured.update(kwargs)
+        return "b" * 32
+
+    monkeypatch.setattr(
+        "app.blueprints.main.routes.word_translate.enqueue_word_job_from_upload",
+        fake_enqueue,
+    )
+    monkeypatch.setattr(
+        "app.blueprints.main.routes.audit_service.record_audit",
+        lambda event, *, detail, **kwargs: audit_details.append(dict(detail)),
+    )
+
+    resp = client.post(
+        "/upload-word-workspace",
+        data={
+            "source_lang": "auto",
+            "target_lang": "en",
+            "endpoint": "https://attacker.example/v1",
+            "api_key": "plaintext-secret",
+            "credential": "plaintext-credential",
+            "docx": (io.BytesIO(b"docx"), "sample.docx"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 302
+    assert captured["translation_provider"] == "cloud"
+    assert captured["translation_model"] == "cloud-word-model"
+    serialized = json.dumps(
+        {"enqueue": captured, "audit": audit_details},
+        ensure_ascii=False,
+    )
+    assert "attacker.example" not in serialized
+    assert "plaintext-secret" not in serialized
+    assert "plaintext-credential" not in serialized
+
+
+def test_upload_word_workspace_rejects_unavailable_provider(
+    app,
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    app.config["LOCAL_WORD_PROVIDER_ENABLED"] = False
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr(
+        "app.blueprints.main.routes._resolve_department_glossary_submission",
+        lambda **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "app.blueprints.main.routes._enforce_submit_quota",
+        lambda creator_name: None,
+    )
+
+    resp = client.post(
+        "/upload-word-workspace",
+        data={
+            "source_lang": "auto",
+            "target_lang": "en",
+            "translation_provider": "local",
+            "docx": (io.BytesIO(b"docx"), "sample.docx"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 400
 
 
 def test_upload_word_workspace_defaults_to_translate_tables(client, tmp_path, monkeypatch):

@@ -171,6 +171,11 @@ DOC_TRANSLATE_MODEL = openai_config.get_doc_translate_deployment()
 PDF_REALTIME_TRANSLATE_MODEL = openai_config.get_pdf_realtime_translate_deployment()
 WORD_TRANSLATE_MODEL = openai_config.get_word_translate_deployment()
 WORD_QUALITY_MODEL = openai_config.get_word_quality_deployment()
+LOCAL_WORD_PROVIDER_ENABLED = (
+    os.getenv("LOCAL_WORD_PROVIDER_ENABLED", "0").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+LOCAL_WORD_MODEL = os.getenv("LOCAL_WORD_MODEL", "").strip()
 TRANSLATION_POST_EDIT_ENABLED = (
     os.getenv("TRANSLATION_POST_EDIT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 )

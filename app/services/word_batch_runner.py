@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from openai import OpenAI
 
-from . import glossary, jobs, word_layout, word_translate
+from . import glossary, jobs, translation_providers, word_layout, word_translate
 
 
 DEFAULT_WORD_BATCH_REPORT_JSON = "word_batch_report.json"
@@ -211,6 +211,8 @@ class SynchronousWordPipelineExecutor:
             system_prompt="",
             layout_mode=word_layout.BILINGUAL_BELOW,
             translate_tables=item.translate_tables,
+            translation_provider=translation_providers.LOCAL_TRANSLATION_PROVIDER,
+            translation_model=item.model,
             department_glossary_context=_department_glossary_context_from_item(item),
             queue_for_worker=False,
         )

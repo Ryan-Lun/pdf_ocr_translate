@@ -18,3 +18,4 @@ backups/
 .agents/
 teams_webhook.py
 glossary/
+translation_output/

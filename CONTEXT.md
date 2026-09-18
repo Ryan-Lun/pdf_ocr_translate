@@ -20,6 +20,18 @@ _Avoid_: Job failure, Debug error, User error
 A final failure state reached after retryable calls to an external dependency can no longer recover within the current job or operation. Single retry attempts are not System Errors unless the operation ultimately fails.
 _Avoid_: Single timeout, Transient warning
 
+**Translation Provider**:
+The approved execution backend selected for a translation job, defining where source content is sent for model inference. It is distinct from the model or deployment name hosted by that backend.
+_Avoid_: Model, Deployment, Endpoint
+
+**Cloud Translation Provider**:
+The existing managed cloud backend used for translation inference when a job selects the cloud option.
+_Avoid_: Cloud model, Default model
+
+**Local Translation Provider**:
+The administrator-configured on-premises OpenAI-compatible backend for quality-document translation. A job using it must not fall back automatically to the Cloud Translation Provider.
+_Avoid_: Local model, User-provided endpoint, Cloud fallback
+
 **Background-Process Failure**:
 A worker or background job orchestration failure that prevents queued work from being claimed, recovered, dispatched, or completed correctly. It is distinct from a user-facing validation failure or cancellation.
 _Avoid_: User cancellation, Upload error

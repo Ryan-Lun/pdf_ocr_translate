@@ -3192,6 +3192,56 @@ def test_enqueue_word_job_from_upload_stores_creator_name(tmp_path, monkeypatch)
     assert "avg_quality" not in captured["payload"]
 
 
+def test_enqueue_word_job_from_upload_stores_safe_translation_provider_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    captured: dict[str, object] = {}
+
+    def fake_create_job(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "app.services.word_translate.jobs.job_store.create_job",
+        fake_create_job,
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.jobs.job_store.register_artifact",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.jobs.notify_jobs_update",
+        lambda: None,
+    )
+
+    source_path = tmp_path / "source.docx"
+    source_path.write_bytes(b"docx")
+
+    job_id = enqueue_word_job_from_upload(
+        source_path,
+        "sample",
+        "auto",
+        "en",
+        translation_provider="local",
+        translation_model="quality-local-model",
+    )
+
+    meta = jobs.load_job_meta(state.JOB_ROOT / job_id)
+    assert meta is not None
+    assert meta["translation_provider"] == "local"
+    assert meta["translation_model"] == "quality-local-model"
+    assert captured["payload"]["translation_provider"] == "local"
+    assert captured["payload"]["translation_model"] == "quality-local-model"
+    serialized = json.dumps(
+        {"meta": meta, "payload": captured["payload"]},
+        ensure_ascii=False,
+    ).lower()
+    assert "endpoint" not in serialized
+    assert "api_key" not in serialized
+    assert "credential" not in serialized
+
+
 def test_enqueue_word_job_from_upload_can_create_non_queued_runner_job(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
     captured: dict[str, object] = {}
@@ -3409,6 +3459,66 @@ def test_run_word_translate_job_passes_translate_tables_to_process_translation(a
 
     assert captured["translate_tables"] is False
     assert captured["layout_mode"] == "replace_original"
+
+
+def test_run_word_translate_job_keeps_stage_models_separate(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    job_id = uuid.uuid4().hex
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    source_path = job_dir / "source.docx"
+    output_path = job_dir / "output" / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("表格內容")
+    source_doc.save(source_path)
+    jobs.create_job_state(
+        job_dir,
+        job_type="word_translate",
+        stage="queued",
+        job_name="sample",
+        target_lang="en",
+        payload={"target_lang": "en"},
+        meta={
+            "job_name": "sample",
+            "job_type": "word_translate",
+            "target_lang": "en",
+            "source_filename": "source.docx",
+        },
+    )
+    init_kwargs: dict[str, object] = {}
+
+    class _CapturingTranslator:
+        def __init__(self, **kwargs):
+            init_kwargs.update(kwargs)
+
+        async def process_translation(self, **kwargs):
+            kwargs["output_path"].parent.mkdir(parents=True, exist_ok=True)
+            docx.Document().save(kwargs["output_path"])
+            yield 100.0, 0.0
+
+    monkeypatch.setattr(
+        "app.services.word_translate.EnhancedWordTranslator",
+        _CapturingTranslator,
+    )
+
+    run_word_translate_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        source_path=source_path,
+        processing_source_path=source_path,
+        output_path=output_path,
+        source_lang="auto",
+        target_lang="en",
+        retain_terms=[],
+        translation_model="cloud-word-model",
+        post_edit_model="cloud-post-edit-model",
+    )
+
+    assert init_kwargs["translation_model"] == "cloud-word-model"
+    assert init_kwargs["post_edit_model"] == "cloud-post-edit-model"
 
 
 def test_run_word_translate_job_does_not_write_avg_quality_metadata(app, tmp_path, monkeypatch):
