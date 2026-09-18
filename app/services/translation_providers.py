@@ -31,6 +31,26 @@ def word_translation_provider_is_available(
     )
 
 
+def local_word_language_direction_is_supported(
+    source_lang: object,
+    target_lang: object,
+) -> bool:
+    normalized_source = str(source_lang or "auto").strip().lower() or "auto"
+    normalized_target = str(target_lang or "en").strip().lower() or "en"
+    return (
+        normalized_source in {"auto", "zh", "zh-tw", "zh-hant"}
+        and normalized_target == "en"
+    )
+
+
+def local_word_request_extra_body(*, enable_thinking: bool) -> dict[str, object]:
+    return {
+        "chat_template_kwargs": {
+            "enable_thinking": bool(enable_thinking),
+        }
+    }
+
+
 def word_translation_model_snapshot(
     provider: object,
     *,

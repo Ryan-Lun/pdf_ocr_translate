@@ -371,7 +371,7 @@ def test_word_handler_defaults_legacy_job_to_cloud_provider(
     assert "local_model_api_key" not in captured
 
 
-def test_word_handler_fails_closed_for_local_provider_before_dispatch_is_available(
+def test_word_handler_dispatches_local_provider_with_server_managed_settings(
     app,
     tmp_path,
     monkeypatch,
@@ -382,11 +382,17 @@ def test_word_handler_fails_closed_for_local_provider_before_dispatch_is_availab
     job_dir = tmp_path / job_id
     job_dir.mkdir()
     jobs.write_job_meta(job_dir, {"source_filename": "source.docx"})
-    called = False
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_BASE_URL", "http://local-model.example:8000/v1")
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_API_KEY", "server-local-key")
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_MODEL", "quality-local-model")
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_STAGE_2_ENABLED", False)
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_REQUEST_CONCURRENCY", 3)
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_REQUESTS_PER_MINUTE", 45)
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_ENABLE_THINKING", True)
 
     def fake_run_word_translate_job(**kwargs):
-        nonlocal called
-        called = True
+        captured.update(kwargs)
 
     monkeypatch.setattr(
         job_handlers.word_translate,
@@ -394,28 +400,86 @@ def test_word_handler_fails_closed_for_local_provider_before_dispatch_is_availab
         fake_run_word_translate_job,
     )
 
-    with pytest.raises(RuntimeError, match="Local Translation Provider"):
-        job_handlers.WordTranslateJobHandler().handle(
-            job_handlers.JobContext(
+    job_handlers.WordTranslateJobHandler().handle(
+        job_handlers.JobContext(
+            job_id=job_id,
+            record=job_store.JobRecord(
                 job_id=job_id,
-                record=job_store.JobRecord(
-                    job_id=job_id,
-                    job_type="word_translate",
-                    status="running",
-                    stage="queued",
-                    progress=0.0,
-                    target_lang="en",
-                ),
-                job_dir=job_dir,
-                payload={
-                    "source_lang": "zh",
-                    "translation_provider": "local",
-                    "translation_model": "quality-local-model",
-                },
-            )
+                job_type="word_translate",
+                status="running",
+                stage="queued",
+                progress=0.0,
+                target_lang="en",
+            ),
+            job_dir=job_dir,
+            payload={
+                "source_lang": "zh",
+                "translation_provider": "local",
+                "translation_model": "quality-local-model",
+            },
         )
+    )
+    assert captured["translation_model"] == "quality-local-model"
+    assert captured["post_edit_model"] == "quality-local-model"
+    assert captured["local_model_base_url"] == "http://local-model.example:8000/v1"
+    assert captured["local_model_api_key"] == "server-local-key"
+    assert captured["stage_2_enabled"] is False
+    assert captured["request_concurrency_limit"] == 3
+    assert captured["requests_per_minute"] == 45
+    assert captured["request_extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": True}
+    }
 
-    assert called is False
+
+def test_word_handler_local_provider_defaults_disable_thinking(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    from app.services import job_handlers
+
+    job_id = _job_id()
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    jobs.write_job_meta(job_dir, {"source_filename": "source.docx"})
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_BASE_URL", "http://local-model.example/v1")
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_API_KEY", "local-key")
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_MODEL", "local-model")
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_STAGE_2_ENABLED", True)
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_REQUEST_CONCURRENCY", 1)
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_REQUESTS_PER_MINUTE", 60)
+    monkeypatch.setattr(job_handlers.state, "LOCAL_WORD_ENABLE_THINKING", False)
+    monkeypatch.setattr(
+        job_handlers.word_translate,
+        "run_word_translate_job",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    job_handlers.WordTranslateJobHandler().handle(
+        job_handlers.JobContext(
+            job_id=job_id,
+            record=job_store.JobRecord(
+                job_id=job_id,
+                job_type="word_translate",
+                status="running",
+                stage="queued",
+                progress=0.0,
+                target_lang="en",
+            ),
+            job_dir=job_dir,
+            payload={"source_lang": "auto", "translation_provider": "local"},
+        )
+    )
+
+    assert captured["translation_model"] == "local-model"
+    assert captured["post_edit_model"] == "local-model"
+    assert captured["stage_2_enabled"] is True
+    assert captured["request_concurrency_limit"] == 1
+    assert captured["requests_per_minute"] == 60
+    assert captured["request_extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
 
 
 def test_worker_loop_records_orphan_recovery_exception_and_continues(app, monkeypatch):

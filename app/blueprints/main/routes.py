@@ -487,6 +487,17 @@ def upload_word_workspace() -> str:
         abort(400, str(exc))
     if not provider_available:
         abort(400, "Selected Translation Provider is not available.")
+    if (
+        translation_provider == translation_providers.LOCAL_TRANSLATION_PROVIDER
+        and not translation_providers.local_word_language_direction_is_supported(
+            source_lang,
+            target_lang,
+        )
+    ):
+        abort(
+            400,
+            "Local Word Translation Provider only supports auto or Traditional Chinese to English.",
+        )
     translation_model = translation_providers.word_translation_model_snapshot(
         translation_provider,
         cloud_model=current_app.config.get("WORD_TRANSLATE_MODEL", ""),

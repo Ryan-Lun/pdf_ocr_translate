@@ -124,17 +124,30 @@ class WordTranslateJobHandler:
             )
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
+        provider_options: dict[str, Any] = {}
         if (
             translation_provider
             == translation_providers.LOCAL_TRANSLATION_PROVIDER
         ):
-            raise RuntimeError(
-                "Local Translation Provider dispatch is not available."
-            )
-        translation_model = str(
-            payload.get("translation_model")
-            or state.WORD_TRANSLATE_MODEL
-        ).strip()
+            translation_model = str(
+                payload.get("translation_model") or state.LOCAL_WORD_MODEL
+            ).strip()
+            post_edit_model = translation_model
+            provider_options = {
+                "local_model_base_url": state.LOCAL_WORD_BASE_URL,
+                "local_model_api_key": state.LOCAL_WORD_API_KEY,
+                "stage_2_enabled": state.LOCAL_WORD_STAGE_2_ENABLED,
+                "request_extra_body": translation_providers.local_word_request_extra_body(
+                    enable_thinking=state.LOCAL_WORD_ENABLE_THINKING,
+                ),
+                "request_concurrency_limit": state.LOCAL_WORD_REQUEST_CONCURRENCY,
+                "requests_per_minute": state.LOCAL_WORD_REQUESTS_PER_MINUTE,
+            }
+        else:
+            translation_model = str(
+                payload.get("translation_model") or state.WORD_TRANSLATE_MODEL
+            ).strip()
+            post_edit_model = state.TRANSLATION_POST_EDIT_MODEL
         source_name = str((jobs.load_job_meta(context.job_dir) or {}).get("source_filename") or "source.docx")
         source_path = context.job_dir / source_name
         processing_source_path = (
@@ -155,7 +168,8 @@ class WordTranslateJobHandler:
             layout_mode=word_translate.normalize_word_layout_mode(payload.get("layout_mode")),
             translate_tables=word_translate.normalize_translate_tables(payload.get("translate_tables")),
             translation_model=translation_model,
-            post_edit_model=state.TRANSLATION_POST_EDIT_MODEL,
+            post_edit_model=post_edit_model,
+            **provider_options,
         )
 
 

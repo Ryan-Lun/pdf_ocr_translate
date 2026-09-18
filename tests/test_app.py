@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import fitz
+import pytest
 
 from app.services import (
     auth_store,
@@ -2487,6 +2488,60 @@ def test_upload_word_workspace_rejects_unavailable_provider(
     )
 
     assert resp.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("source_lang", "target_lang"),
+    [
+        ("en", "zh"),
+        ("zh", "zh-cn"),
+        ("en", "en"),
+    ],
+)
+def test_upload_word_workspace_rejects_unsupported_local_language_direction(
+    app,
+    client,
+    tmp_path,
+    monkeypatch,
+    source_lang,
+    target_lang,
+):
+    app.config.update(
+        LOCAL_WORD_PROVIDER_ENABLED=True,
+        LOCAL_WORD_MODEL="quality-local-model",
+    )
+    monkeypatch.setattr(state, "JOB_ROOT", tmp_path / "jobs")
+    monkeypatch.setattr(state, "UPLOAD_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr(
+        "app.blueprints.main.routes._enforce_submit_quota",
+        lambda creator_name: None,
+    )
+    called = False
+
+    def fake_enqueue(*args, **kwargs):
+        nonlocal called
+        called = True
+        return "b" * 32
+
+    monkeypatch.setattr(
+        "app.blueprints.main.routes.word_translate.enqueue_word_job_from_upload",
+        fake_enqueue,
+    )
+
+    resp = client.post(
+        "/upload-word-workspace",
+        data={
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            "translation_provider": "local",
+            "docx": (io.BytesIO(b"docx"), "sample.docx"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 400
+    assert b"only supports" in resp.data
+    assert called is False
 
 
 def test_upload_word_workspace_defaults_to_translate_tables(client, tmp_path, monkeypatch):

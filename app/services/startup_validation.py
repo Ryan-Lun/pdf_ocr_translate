@@ -99,6 +99,17 @@ def validate_startup_config(config: Any) -> None:
                 "WORD_TRANSLATE_MODEL must not use the implicit development default in production."
             )
 
+    if _is_enabled(config, "LOCAL_WORD_PROVIDER_ENABLED"):
+        for key in (
+            "LOCAL_WORD_BASE_URL",
+            "LOCAL_WORD_API_KEY",
+            "LOCAL_WORD_MODEL",
+        ):
+            if not _clean(config.get(key)):
+                errors.append(
+                    f"{key} is required when LOCAL_WORD_PROVIDER_ENABLED is true."
+                )
+
     table_url = _clean(config.get("TABLE_RECOGNTION_V2_URL"))
     if not table_url:
         errors.append("TABLE_RECOGNTION_V2_URL is required in production.")

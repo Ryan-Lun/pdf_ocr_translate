@@ -176,6 +176,24 @@ LOCAL_WORD_PROVIDER_ENABLED = (
     in {"1", "true", "yes", "on"}
 )
 LOCAL_WORD_MODEL = os.getenv("LOCAL_WORD_MODEL", "").strip()
+LOCAL_WORD_BASE_URL = os.getenv("LOCAL_WORD_BASE_URL", "").strip().rstrip("/")
+LOCAL_WORD_API_KEY = os.getenv("LOCAL_WORD_API_KEY", "").strip()
+LOCAL_WORD_STAGE_2_ENABLED = (
+    os.getenv("LOCAL_WORD_STAGE_2_ENABLED", "1").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+LOCAL_WORD_REQUEST_CONCURRENCY = max(
+    1,
+    int(os.getenv("LOCAL_WORD_REQUEST_CONCURRENCY", "1")),
+)
+LOCAL_WORD_REQUESTS_PER_MINUTE = max(
+    1,
+    int(os.getenv("LOCAL_WORD_REQUESTS_PER_MINUTE", "60")),
+)
+LOCAL_WORD_ENABLE_THINKING = (
+    os.getenv("LOCAL_WORD_ENABLE_THINKING", "0").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 TRANSLATION_POST_EDIT_ENABLED = (
     os.getenv("TRANSLATION_POST_EDIT_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 )

@@ -33,6 +33,10 @@ def _configure_valid_production(monkeypatch):
         ProductionConfig, "PDF_REALTIME_TRANSLATE_MODEL", "realtime-prod-deployment"
     )
     monkeypatch.setattr(ProductionConfig, "WORD_TRANSLATE_MODEL", "word-prod-deployment")
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_PROVIDER_ENABLED", False)
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_BASE_URL", "")
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_API_KEY", "")
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_MODEL", "")
     monkeypatch.setattr(
         ProductionConfig,
         "TABLE_RECOGNTION_V2_URL",
@@ -137,6 +141,45 @@ def test_production_startup_rejects_missing_external_service_settings(
 
     with pytest.raises(RuntimeError, match=message):
         create_app("production")
+
+
+@pytest.mark.parametrize(
+    ("setting", "message"),
+    [
+        ("LOCAL_WORD_BASE_URL", "LOCAL_WORD_BASE_URL"),
+        ("LOCAL_WORD_API_KEY", "LOCAL_WORD_API_KEY"),
+        ("LOCAL_WORD_MODEL", "LOCAL_WORD_MODEL"),
+    ],
+)
+def test_production_startup_rejects_incomplete_enabled_local_word_provider(
+    monkeypatch,
+    setting,
+    message,
+):
+    _configure_valid_production(monkeypatch)
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_PROVIDER_ENABLED", True)
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_BASE_URL", "http://local-model.example/v1")
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_API_KEY", "local-key")
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_MODEL", "local-model")
+    monkeypatch.setattr(ProductionConfig, setting, "")
+
+    with pytest.raises(RuntimeError, match=message):
+        create_app("production")
+
+
+def test_production_startup_accepts_complete_local_word_provider_without_network_request(
+    monkeypatch,
+):
+    _configure_valid_production(monkeypatch)
+    _disable_runtime_initializers(monkeypatch)
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_PROVIDER_ENABLED", True)
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_BASE_URL", "http://local-model.example/v1")
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_API_KEY", "local-key")
+    monkeypatch.setattr(ProductionConfig, "LOCAL_WORD_MODEL", "local-model")
+
+    app = create_app("production")
+
+    assert app.config["LOCAL_WORD_PROVIDER_ENABLED"] is True
 
 
 def test_production_startup_rejects_implicit_default_batch_deployment(monkeypatch):

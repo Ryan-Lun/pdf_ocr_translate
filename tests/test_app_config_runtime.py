@@ -32,6 +32,7 @@ def test_production_does_not_run_startup_schema_mutations(monkeypatch):
             ProductionConfig, "PDF_REALTIME_TRANSLATE_MODEL", "realtime-prod-deployment"
         )
         scoped.setattr(ProductionConfig, "WORD_TRANSLATE_MODEL", "word-prod-deployment")
+        scoped.setattr(ProductionConfig, "LOCAL_WORD_PROVIDER_ENABLED", False)
         scoped.setattr(
             ProductionConfig,
             "TABLE_RECOGNTION_V2_URL",
