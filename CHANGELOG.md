@@ -18,6 +18,30 @@
 - Migration 或人工操作注意事項
 - 人工驗收結果
 
+## 0.9.0 - 2026-09-21
+
+### Added
+
+- 新增 Local Translation Provider 的正式部署設定與 fail-closed 啟動驗收流程。
+- Word 地端翻譯失敗會記錄安全的 provider、model、failure kind、job id 與 component，並可透過既有 Teams Alert 通知。
+- 補充地端 Word provider 的 `.env`、離線 endpoint、Stage 2、併發、RPM、thinking mode 與人工驗收指引。
+
+### Changed
+
+- 地端 Word provider 啟用時，production startup 會檢查 `LOCAL_WORD_BASE_URL`、`LOCAL_WORD_API_KEY` 與 `LOCAL_WORD_MODEL`；停用時不要求這些設定。
+- 擴充 Teams Alert 安全欄位，支援地端 provider 的 `provider`、`model` 與 `component`。
+
+### Security
+
+- 地端 job-level failure 的 System Error、Teams Alert 與 job error 不再保存 endpoint、API key、raw request、原文或譯文。
+- 地端 endpoint 可在 startup 時離線；連線失敗由實際 job fail-closed 處理，且不會 fallback 到 Cloud Translation Provider。
+
+### Validation
+
+- 已通過 local Word fail-closed、單次 System Error、Teams Alert 安全欄位與禁止 cloud client 呼叫的回歸測試。
+- 已通過 Python compile、`git diff --check` 與相關 Word、worker、alert 測試。
+- 完整 pytest collection 仍受 repository 內 PaddleX 範例缺少 optional dependencies 影響，未納入本次功能失敗判定。
+
 ## 0.8.0 - 2026-09-16
 
 ### Added

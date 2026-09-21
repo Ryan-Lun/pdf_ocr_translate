@@ -37,6 +37,14 @@ def test_word_local_batch_runner_manual_covers_operations_and_acceptance():
         "out/word_overlay/<job_id>/",
         "word_stage_2_post_edit.json",
         "單份樣本人工驗收清單",
+        "Local Provider 驗收",
+        "LOCAL_WORD_PROVIDER_ENABLED=0",
+        "LOCAL_WORD_BASE_URL",
+        "LOCAL_WORD_API_KEY",
+        "LOCAL_WORD_MODEL",
+        "不會建立 Cloud client",
+        "word_translation_lifecycle.json",
+        "job metadata",
     ]
 
     for phrase in required_phrases:

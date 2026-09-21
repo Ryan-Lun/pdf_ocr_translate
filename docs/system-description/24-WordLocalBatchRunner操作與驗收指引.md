@@ -199,3 +199,18 @@ Canonical debug artifacts 只在 job root。`output/` 只放輸出成品與必�
 - `.doc` 轉檔跑版：先人工或 LibreOffice 轉成 `.docx`，再重新執行 runner。
 - 部分表格未翻譯：檢查是否為巢狀表格，或是否被 `--exclude-table-index` 排除。
 - 單檔失敗：先從 `word_batch_report.json` 找出 `job_id` 與 `error`，再檢查對應 job 目錄。
+
+## 系統整合後的 Local Provider 驗收
+
+UI 選擇「地端模型（品質文件專用）」時，job payload 與 metadata 應固定保存 provider/model snapshot；同一批多檔文件不可因 worker 重取設定而混用 Cloud。
+
+正式環境部署前，建議依下列順序驗收：
+
+1. 將 `LOCAL_WORD_PROVIDER_ENABLED=0` 啟動 Web 與 worker，確認 Cloud Word job 可正常建立，且不要求 local 設定。
+2. 設為 `1` 但依序移除 `LOCAL_WORD_BASE_URL`、`LOCAL_WORD_API_KEY`、`LOCAL_WORD_MODEL`，確認 startup 每次都 fail fast 並指出缺少欄位。
+3. 補齊設定但讓 endpoint 暫時不可達，確認 Web 與 worker 能啟動；實際 Local job 應 failed，且不會建立 Cloud client。
+4. 執行一份 Local `auto`／`zh` 到 `en` 文件，檢查 Department Glossary、TM、雙語版面、頁首頁尾與 Stage 2 fallback。
+5. 檢查 SQL job payload、job metadata、`word_translation_lifecycle.json`、log、System Error 與 Teams Alert，只允許出現 provider、model、failure kind、job id、component 等安全操作欄位。
+6. 用 Cloud provider 再執行一份文件，確認既有 Cloud 流程與 worker concurrency 沒有回歸。
+
+Local job-level failure 的預期訊息格式為 `Local Word translation failed (<failure_kind>).`；不要把 endpoint、credential、raw exception、原文或譯文貼到工單或 Teams。
