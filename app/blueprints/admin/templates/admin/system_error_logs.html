@@ -20,15 +20,15 @@
 
   <section class="upload-card admin-stack">
     <form method="get" class="admin-search-form admin-search-form--logs">
-      <input class="admin-input" type="search" name="q" value="{{ q }}" placeholder="搜尋位置、訊息、例外或內容" />
-      <input class="admin-input admin-input--compact" type="search" name="component" value="{{ component }}" placeholder="位置" />
+      <input class="admin-input" type="search" name="q" value="{{ q }}" placeholder="搜尋訊息、例外或內容" />
+      <!-- <input class="admin-input admin-input--compact" type="search" name="component" value="{{ component }}" placeholder="位置" /> -->
+      <input class="admin-input admin-input--compact" type="search" name="job_id" value="{{ job_id }}" placeholder="Job ID" />
       <select class="admin-select admin-input--compact" name="level">
         <option value="" {% if not level %}selected{% endif %}>全部等級</option>
         {% for option in ['WARNING', 'ERROR', 'CRITICAL'] %}
         <option value="{{ option }}" {% if level == option %}selected{% endif %}>{{ option }}</option>
         {% endfor %}
       </select>
-      <input class="admin-input admin-input--compact" type="search" name="job_id" value="{{ job_id }}" placeholder="Job ID" />
       <input class="admin-input admin-input--date" type="date" name="start_date" value="{{ start_date }}" />
       <input class="admin-input admin-input--date" type="date" name="end_date" value="{{ end_date }}" />
       <button type="submit" class="ghost">搜尋</button>

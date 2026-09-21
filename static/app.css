@@ -518,8 +518,9 @@ body.has-global-nav:not(.home-hub) .shell {
 
 .admin-input,
 .admin-select {
-  min-height: 42px;
-  border-radius: 12px;
+  /* min-height: 42px; */
+  min-height: 36px;
+  border-radius: 10px;
   border: 1px solid rgba(21, 36, 43, 0.18);
   padding: 0 0.9rem;
   font: inherit;
@@ -788,7 +789,11 @@ body.has-global-nav:not(.home-hub) .shell {
 }
 
 .jobs-filterbar .ghost {
-  min-height: 2.45rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding-block: 0;
 }
 
 .jobs-header h2 {
@@ -1553,6 +1558,14 @@ button.primary:hover {
   flex-wrap: wrap;
 }
 
+.glossary-toolbar-actions button{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding-block: 0;
+}
+
 .glossary-toolbar-buttons {
   display: flex;
   align-items: center;
@@ -1586,7 +1599,11 @@ button.primary:hover {
 }
 
 .glossary-toolbar-buttons button {
-  min-height: 2.45rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding-block: 0;
 }
 
 .glossary-toolbar-toggle {
