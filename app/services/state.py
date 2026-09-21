@@ -307,6 +307,7 @@ LDAP_USER_LOGIN_ATTR = os.getenv("LDAP_USER_LOGIN_ATTR", "sAMAccountName").strip
 LDAP_USER_OBJECT_FILTER = os.getenv("LDAP_USER_OBJECT_FILTER", "(&(objectClass=user)(!(objectClass=computer)))").strip() or "(&(objectClass=user)(!(objectClass=computer)))"
 LDAP_USER_DISPLAY_ATTR = os.getenv("LDAP_USER_DISPLAY_ATTR", "displayName").strip() or "displayName"
 LDAP_USER_EMAIL_ATTR = os.getenv("LDAP_USER_EMAIL_ATTR", "mail").strip() or "mail"
+LDAP_USER_DEPARTMENT_ATTR = os.getenv("LDAP_USER_DEPARTMENT_ATTR", "department").strip() or "department"
 LDAP_USER_SEARCH_SCOPE = os.getenv("LDAP_USER_SEARCH_SCOPE", "SUBTREE").strip() or "SUBTREE"
 LDAP_GROUP_GATE_ENABLED = _env_bool("LDAP_GROUP_GATE_ENABLED", False)
 ALLOWED_GROUP_DN = os.getenv("ALLOWED_GROUP_DN", "").strip()

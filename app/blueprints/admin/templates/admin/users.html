@@ -54,6 +54,7 @@
           <tr>
             <th class="admin-col--workid">工號</th>
             <th class="admin-col--name">顯示名稱</th>
+            <th class="admin-col--department">所屬部門</th>
             <th class="admin-col--email">Email</th>
             <th class="admin-col--status admin-col--center">狀態</th>
             <th class="admin-col--role admin-col--center">角色</th>
@@ -67,6 +68,7 @@
           <tr>
             <td class="admin-cell--ellipsis">{{ user.work_id }}</td>
             <td class="admin-cell--ellipsis">{{ user.display_name }}</td>
+            <td class="admin-cell--ellipsis">{{ ldap_departments.get(user.work_id.casefold(), '-') }}</td>
             <td class="admin-cell--ellipsis">{{ user.email or '-' }}</td>
             <td class="admin-col--center">
               <span class="admin-status{% if user.is_active %} admin-status--active{% endif %}">

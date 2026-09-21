@@ -618,12 +618,16 @@ body.has-global-nav:not(.home-hub) .shell {
   width: 148px;
 }
 
+.admin-col--department {
+  width: 140px;
+}
+
 .admin-col--email {
   width: 240px;
 }
 
 .admin-col--status {
-  width: 72px;
+  width: 70px;
 }
 
 .admin-col--role {

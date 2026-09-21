@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from flask import abort, current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user
 
-from ...services import audit_service, auth_policy, auth_store, authz_service
+from ...services import audit_service, auth_policy, auth_service, auth_store, authz_service
 from .blueprint import admin_bp
 
 
@@ -97,9 +97,15 @@ def enforce_admin_access() -> None:
 @admin_bp.get("/users", endpoint="users")
 def users():
     query = _normalize_text(request.args.get("q"))
+    users = auth_store.list_local_users(query)
+    departments = auth_service.lookup_ldap_departments(
+        current_app.config,
+        [user.work_id for user in users],
+    )
     return render_template(
         "admin/users.html",
-        users=auth_store.list_local_users(query),
+        users=users,
+        ldap_departments=departments,
         query=query,
         role_choices=ROLE_CHOICES,
         format_dt=_format_dt,
