@@ -56,6 +56,7 @@ class LDAPSettings:
     object_filter: str
     display_attr: str
     email_attr: str
+    department_attr: str
     search_scope: Any
 
 
@@ -155,8 +156,57 @@ def _build_ldap_settings(config: Any) -> LDAPSettings:
         ),
         display_attr=_normalize_value(config.get("LDAP_USER_DISPLAY_ATTR"), fallback="displayName"),
         email_attr=_normalize_value(config.get("LDAP_USER_EMAIL_ATTR"), fallback="mail"),
+        department_attr=_normalize_value(config.get("LDAP_USER_DEPARTMENT_ATTR"), fallback="department"),
         search_scope=search_scope,
     )
+
+
+def lookup_ldap_departments(config: Any, work_ids: list[str]) -> dict[str, str]:
+    """Return AD department values for the requested work IDs in one search."""
+    normalized_work_ids = [
+        _normalize_value(work_id)
+        for work_id in work_ids
+        if _normalize_value(work_id)
+    ]
+    if not normalized_work_ids:
+        return {}
+
+    try:
+        settings = _build_ldap_settings(config)
+        server = Server(settings.host, port=settings.port, use_ssl=settings.use_ssl, get_info=ALL)
+        work_id_filter = "".join(
+            f"({settings.login_attr}={escape_filter_chars(work_id)})"
+            for work_id in normalized_work_ids
+        )
+        search_filter = f"(&{settings.object_filter}(|{work_id_filter}))"
+        search_conn = Connection(
+            server,
+            user=settings.bind_dn,
+            password=settings.bind_password,
+            auto_bind=True,
+        )
+        try:
+            search_conn.search(
+                search_base=settings.base_dn,
+                search_filter=search_filter,
+                search_scope=settings.search_scope,
+                attributes=[settings.login_attr, settings.department_attr],
+            )
+            departments: dict[str, str] = {}
+            for entry in search_conn.entries:
+                entry_data = entry.entry_attributes_as_dict
+                work_id = _normalize_value(entry_data.get(settings.login_attr))
+                department = _normalize_value(entry_data.get(settings.department_attr))
+                if work_id and department:
+                    departments[work_id.casefold()] = department
+            return departments
+        finally:
+            try:
+                search_conn.unbind()
+            except Exception:
+                pass
+    except (AuthenticationError, LDAPException, ValueError, TypeError):
+        return {}
 
 
 def authenticate_login(
