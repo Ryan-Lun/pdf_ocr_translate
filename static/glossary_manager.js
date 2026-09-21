@@ -16,6 +16,9 @@ const applySystemGlossaryBtn = document.getElementById("applySystemGlossaryBtn")
 const systemImportStatusEl = document.getElementById("systemImportStatus");
 const systemImportSummaryEl = document.getElementById("systemImportSummary");
 const systemImportPreviewEl = document.getElementById("systemImportPreview");
+const systemImportPreviewContentEl = document.getElementById("systemImportPreviewContent");
+const systemImportTargetEl = document.getElementById("systemImportTarget");
+const glossaryCurrentLibraryTitleEl = document.getElementById("glossaryCurrentLibraryTitle");
 const effectiveCountEl = document.getElementById("effectiveCount");
 const systemCountEl = document.getElementById("systemCount");
 const userCountEl = document.getElementById("userCount");
@@ -39,6 +42,8 @@ const libraryDepartmentCodeEl = document.getElementById("libraryDepartmentCode")
 const saveLibraryBtn = document.getElementById("saveLibraryBtn");
 const activateLibraryBtn = document.getElementById("activateLibraryBtn");
 const disableLibraryBtn = document.getElementById("disableLibraryBtn");
+const glossaryTabEls = Array.from(document.querySelectorAll("[data-glossary-tab]"));
+const glossaryTabPanelEls = Array.from(document.querySelectorAll("[data-glossary-panel]"));
 
 const glossaryState = {
   systemGlossary: [],
@@ -54,16 +59,57 @@ const glossaryState = {
   includeInactiveEntries: false,
   importPreviewLimits: {
     preview: 30,
-    duplicates: 20,
-    invalid: 20,
   },
+  importPreviewStatusFilter: "all",
 };
 
 const importStatusLabelMap = {
   add: "新增",
   update: "更新",
   unchanged: "未變更",
+  duplicate: "重複",
+  invalid: "無效",
 };
+
+const importPreviewStatusPriority = {
+  update: 0,
+  add: 1,
+  unchanged: 2,
+  duplicate: 3,
+  invalid: 4,
+};
+
+function activateGlossaryTab(tabName) {
+  const activeTabName = ["entries", "import", "settings"].includes(tabName) ? tabName : "entries";
+  glossaryTabEls.forEach((tab) => {
+    const isActive = tab.dataset.glossaryTab === activeTabName;
+    tab.classList.toggle("is-active", isActive);
+    tab.setAttribute("aria-selected", String(isActive));
+  });
+  glossaryTabPanelEls.forEach((panel) => {
+    panel.hidden = panel.dataset.glossaryPanel !== activeTabName;
+  });
+}
+
+function sortImportPreviewRows(rows) {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => {
+      const leftPriority = importPreviewStatusPriority[left.row?.status] ?? 99;
+      const rightPriority = importPreviewStatusPriority[right.row?.status] ?? 99;
+      return leftPriority - rightPriority || left.index - right.index;
+    })
+    .map((item) => item.row);
+}
+
+function getImportPreviewStatusCounts(rows) {
+  return rows.reduce((counts, row) => {
+    const status = row?.status || "unknown";
+    counts.all += 1;
+    counts[status] = (counts[status] || 0) + 1;
+    return counts;
+  }, { all: 0, add: 0, update: 0, unchanged: 0 });
+}
 
 function setGlossaryStatus(message, isError = false) {
   if (!glossaryStatusEl) return;
@@ -159,9 +205,8 @@ function syncGlossaryActionState() {
 function resetImportPreviewLimits() {
   glossaryState.importPreviewLimits = {
     preview: 30,
-    duplicates: 20,
-    invalid: 20,
   };
+  glossaryState.importPreviewStatusFilter = "all";
 }
 
 function rebuildEffectiveGlossary() {
@@ -189,15 +234,14 @@ function renderSummary() {
 
 
 function renderSystemImportPreview() {
-  if (!systemImportSummaryEl || !systemImportPreviewEl || !applySystemGlossaryBtn) return;
+  if (!systemImportSummaryEl || !systemImportPreviewEl || !systemImportPreviewContentEl || !applySystemGlossaryBtn) return;
   const payload = glossaryState.pendingSystemImport;
-  const showUnchangedPreviewEl = document.getElementById("showUnchangedPreview");
   if (!payload) {
     setWriteControlState(applySystemGlossaryBtn, { hidden: true, disabled: true });
     systemImportSummaryEl.hidden = true;
     systemImportPreviewEl.hidden = true;
     systemImportSummaryEl.innerHTML = "";
-    systemImportPreviewEl.innerHTML = "";
+    systemImportPreviewContentEl.innerHTML = "";
     setWriteControlState(applySystemGlossaryBtn, { hidden: true, disabled: true });
     return;
   }
@@ -206,11 +250,41 @@ function renderSystemImportPreview() {
   const duplicates = Array.isArray(payload.duplicates) ? payload.duplicates : [];
   const invalidRows = Array.isArray(payload.invalid_rows) ? payload.invalid_rows : [];
   const previewRows = Array.isArray(payload.preview_rows) ? payload.preview_rows : [];
-  const showUnchanged = Boolean(showUnchangedPreviewEl?.checked);
+  const activePreviewStatusFilter = glossaryState.importPreviewStatusFilter || "all";
   const hasBlockingIssues = duplicates.length > 0 || invalidRows.length > 0;
-  const duplicateLimit = glossaryState.importPreviewLimits.duplicates;
-  const invalidLimit = glossaryState.importPreviewLimits.invalid;
   const previewLimit = glossaryState.importPreviewLimits.preview;
+  const unifiedRows = sortImportPreviewRows([
+    ...previewRows.map((row) => ({
+      status: row.status,
+      rowLabel: "-",
+      cn: row.cn,
+      currentEn: row.current_en || "-",
+      nextEn: row.next_en || "",
+      note: "",
+    })),
+    ...duplicates.map((row) => ({
+      status: "duplicate",
+      rowLabel: row.row ? `row ${row.row}` : "-",
+      cn: row.cn,
+      currentEn: row.previous_en || "-",
+      nextEn: row.en || "",
+      note: "重複詞彙，僅匯入一筆",
+    })),
+    ...invalidRows.map((row) => ({
+      status: "invalid",
+      rowLabel: row.row ? `row ${row.row}` : "-",
+      cn: row.cn || "-",
+      currentEn: "-",
+      nextEn: row.en || "-",
+      note: row.reason || "invalid",
+    })),
+  ]);
+  const previewStatusCounts = getImportPreviewStatusCounts(unifiedRows);
+  const filteredPreviewRows = activePreviewStatusFilter === "all"
+    ? unifiedRows
+    : unifiedRows.filter((row) => row.status === activePreviewStatusFilter);
+  const visibleRows = filteredPreviewRows.slice(0, previewLimit);
+
   setWriteControlState(applySystemGlossaryBtn, { hidden: false });
   systemImportSummaryEl.hidden = false;
   systemImportPreviewEl.hidden = false;
@@ -218,154 +292,84 @@ function renderSystemImportPreview() {
     hidden: false,
     disabled: !Array.isArray(payload.items) || payload.items.length === 0 || hasBlockingIssues,
   });
-  systemImportSummaryEl.innerHTML = `
-    <span class="job-badge">匯入筆數 ${summary.incoming || 0}</span>
-    <span class="job-badge job-badge--form">新增 ${summary.additions || 0}</span>
-    <span class="job-badge job-badge--general_force">更新 ${summary.updates || 0}</span>
-    <span class="job-badge">未變更 ${summary.unchanged || 0}</span>
-    <span class="job-badge">重複 ${duplicates.length}</span>
-    <span class="job-badge">無效 ${invalidRows.length}</span>
+
+  const summaryBadges = [
+    ["all", "匯入筆數", summary.incoming || previewStatusCounts.all, ""],
+    ["add", "新增", summary.additions || 0, "job-badge--form"],
+    ["update", "更新", summary.updates || 0, "job-badge--general_force"],
+    ["unchanged", "未變更", summary.unchanged || 0, ""],
+    ["duplicate", "重複", duplicates.length, ""],
+    ["invalid", "無效", invalidRows.length, ""],
+  ];
+  systemImportSummaryEl.innerHTML = summaryBadges.map(([value, label, count, badgeClass]) => `
+    <button class="job-badge glossary-import-summary-badge ${badgeClass}${activePreviewStatusFilter === value ? " is-active" : ""}" type="button" data-preview-status="${value}">${label} ${count}</button>
+  `).join("");
+
+  systemImportPreviewContentEl.innerHTML = visibleRows.length ? `
+    <div class="glossary-import-table-wrap">
+      <table class="glossary-import-table glossary-import-table--preview">
+            <thead>
+              <tr>
+                <th class=''>列號</th>
+                <th>中文詞彙</th>
+                <th>目前系統英文詞彙</th>
+                <th>匯入英文詞彙</th>
+                <th>狀態</th>
+                <th>說明</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${visibleRows.map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.rowLabel || "")}</td>
+                  <td>${escapeHtml(row.cn || "")}</td>
+                  <td>${escapeHtml(row.currentEn || "")}</td>
+                  <td>${escapeHtml(row.nextEn || "")}</td>
+                  <td>
+                    <span class="job-badge ${
+                      row.status === "update"
+                        ? "job-badge--general_force"
+                        : row.status === "add"
+                          ? "job-badge--form"
+                          : row.status === "duplicate" || row.status === "invalid"
+                            ? "glossary-import-badge--warning"
+                            : ""
+                    }">${escapeHtml(importStatusLabelMap[row.status] || row.status)}</span>
+                  </td>
+                  <td>${escapeHtml(row.note || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+      </table>
+    </div>
+    ${filteredPreviewRows.length > visibleRows.length ? `
+      <div class="glossary-import-more">
+        <button class="ghost glossary-import-more__btn" type="button" data-more-target="preview">顯示更多 (${filteredPreviewRows.length - visibleRows.length})</button>
+      </div>
+    ` : ""}
+  ` : `
+    <div class="hint">目前沒有符合此篩選的匯入詞彙。</div>
   `;
 
-  const blocks = [];
-  if (duplicates.length) {
-    const visibleDuplicates = duplicates.slice(0, duplicateLimit);
-    blocks.push(`
-      <div class="glossary-import-block">
-        <h3>重複詞彙列</h3>
-        <div class="glossary-import-table-wrap">
-          <table class="glossary-import-table glossary-import-table--duplicates">
-            <thead>
-              <tr>
-                <th>列號</th>
-                <th>中文詞彙</th>
-                <th>原英文詞彙</th>
-                <th>覆蓋英文詞彙</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${visibleDuplicates.map((row) => `
-                <tr>
-                  <td>row ${row.row}</td>
-                  <td>${escapeHtml(row.cn)}</td>
-                  <td>${escapeHtml(row.previous_en || "-")}</td>
-                  <td>${escapeHtml(row.en || "")}</td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </div>
-        ${duplicates.length > visibleDuplicates.length ? `
-          <div class="glossary-import-more">
-            <button class="ghost glossary-import-more__btn" type="button" data-more-target="duplicates">顯示更多 (${duplicates.length - visibleDuplicates.length})</button>
-          </div>
-        ` : ""}
-      </div>
-    `);
-  }
-  if (invalidRows.length) {
-    const visibleInvalidRows = invalidRows.slice(0, invalidLimit);
-    blocks.push(`
-      <div class="glossary-import-block">
-        <h3>無效列</h3>
-        <div class="glossary-import-table-wrap">
-          <table class="glossary-import-table glossary-import-table--invalid">
-            <thead>
-              <tr>
-                <th>列號</th>
-                <th>中文詞彙</th>
-                <th>英文詞彙</th>
-                <th>原因</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${visibleInvalidRows.map((row) => `
-                <tr>
-                  <td>row ${row.row}</td>
-                  <td>${escapeHtml(row.cn || "-")}</td>
-                  <td>${escapeHtml(row.en || "-")}</td>
-                  <td>${escapeHtml(row.reason || "invalid")}</td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </div>
-        ${invalidRows.length > visibleInvalidRows.length ? `
-          <div class="glossary-import-more">
-            <button class="ghost glossary-import-more__btn" type="button" data-more-target="invalid">顯示更多 (${invalidRows.length - visibleInvalidRows.length})</button>
-          </div>
-        ` : ""}
-      </div>
-    `);
-  }
-  const visibleRows = previewRows
-    .filter((row) => showUnchanged || row.status !== "unchanged")
-    .slice(0, previewLimit);
-  if (previewRows.length) {
-    const filteredPreviewRows = previewRows.filter((row) => showUnchanged || row.status !== "unchanged");
-    blocks.push(`
-      <div class="glossary-import-block">
-        <div class="glossary-import-block__header">
-          <h3>匯入詞彙</h3>
-          <label class="glossary-inline-toggle">
-            <input id="showUnchangedPreview" type="checkbox" ${showUnchanged ? "checked" : ""} />
-            <span>顯示未變更</span>
-          </label>
-        </div>
-        ${visibleRows.length ? `
-          <div class="glossary-import-table-wrap">
-            <table class="glossary-import-table glossary-import-table--preview">
-              <thead>
-                <tr>
-                  <th>中文詞彙</th>
-                  <th>目前系統英文詞彙</th>
-                  <th>匯入英文詞彙</th>
-                  <th>狀態</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${visibleRows.map((row) => `
-                  <tr>
-                    <td>${escapeHtml(row.cn)}</td>
-                    <td>${escapeHtml(row.current_en || "-")}</td>
-                    <td>${escapeHtml(row.next_en || "")}</td>
-                    <td>
-                      <span class="job-badge ${
-                        row.status === "update"
-                          ? "job-badge--general_force"
-                          : row.status === "add"
-                            ? "job-badge--form"
-                            : ""
-                      }">${escapeHtml(importStatusLabelMap[row.status] || row.status)}</span>
-                    </td>
-                  </tr>
-                `).join("")}
-              </tbody>
-            </table>
-          </div>
-          ${filteredPreviewRows.length > visibleRows.length ? `
-            <div class="glossary-import-more">
-              <button class="ghost glossary-import-more__btn" type="button" data-more-target="preview">顯示更多 (${filteredPreviewRows.length - visibleRows.length})</button>
-            </div>
-          ` : ""}
-        ` : `
-          <div class="hint">目前只包含未變更項目，勾選「顯示未變更」即可查看。</div>
-        `}
-      </div>
-    `);
-  }
-  systemImportPreviewEl.innerHTML = blocks.join("");
-  document.getElementById("showUnchangedPreview")?.addEventListener("change", renderSystemImportPreview);
+  systemImportSummaryEl.querySelectorAll("[data-preview-status]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const status = String(button.getAttribute("data-preview-status") || "all");
+      glossaryState.importPreviewStatusFilter = ["all", "add", "update", "unchanged", "duplicate", "invalid"].includes(status) ? status : "all";
+      glossaryState.importPreviewLimits.preview = 30;
+      renderSystemImportPreview();
+    });
+  });
   systemImportPreviewEl.querySelectorAll("[data-more-target]").forEach((button) => {
     button.addEventListener("click", () => {
       const target = String(button.getAttribute("data-more-target") || "");
-      if (target === "preview" || target === "duplicates" || target === "invalid") {
+      if (target === "preview") {
         glossaryState.importPreviewLimits[target] += 30;
         renderSystemImportPreview();
       }
     });
   });
 }
+
 
 function getSelectedLibrary() {
   return glossaryState.libraries.find((library) => Number(library.id) === Number(glossaryState.selectedLibraryId)) || null;
@@ -375,64 +379,47 @@ function renderLibraryList() {
   if (!libraryListEl) return;
   libraryListEl.innerHTML = "";
   const libraries = Array.isArray(glossaryState.libraries) ? glossaryState.libraries : [];
+  libraryListEl.disabled = !libraries.length;
+
   if (!libraries.length) {
-    const empty = document.createElement("div");
-    empty.className = "hint";
-    empty.textContent = "目前沒有部門詞彙庫";
-    libraryListEl.appendChild(empty);
+    const emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = "目前沒有部門詞彙庫";
+    libraryListEl.appendChild(emptyOption);
     return;
   }
+
+  if (glossaryState.libraryMode === "new" || !glossaryState.selectedLibraryId) {
+    const newOption = document.createElement("option");
+    newOption.value = "";
+    newOption.textContent = "新增詞彙庫";
+    libraryListEl.appendChild(newOption);
+  }
+
   libraries.forEach((library) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "glossary-row glossary-library-admin-row";
-    if (Number(library.id) === Number(glossaryState.selectedLibraryId)) {
-      button.classList.add("is-selected");
-    }
-
-    const header = document.createElement("div");
-    header.className = "glossary-row__header";
-
-    const title = document.createElement("div");
-    title.className = "glossary-row__title";
-    title.textContent = library.name || "未命名詞彙庫";
-
-    const meta = document.createElement("div");
-    meta.className = "glossary-row__meta";
-
-    const statusBadge = document.createElement("span");
-    statusBadge.className = `job-badge ${library.is_active ? "job-badge--form" : ""}`;
-    statusBadge.textContent = library.is_active ? "active" : "inactive";
-    meta.appendChild(statusBadge);
-
-    if (library.is_default) {
-      const defaultBadge = document.createElement("span");
-      defaultBadge.className = "job-badge";
-      defaultBadge.textContent = "default";
-      meta.appendChild(defaultBadge);
-    }
-
-    header.appendChild(title);
-    header.appendChild(meta);
-    button.appendChild(header);
-
-    const detail = document.createElement("div");
-    detail.className = "glossary-row__translation";
-    detail.textContent = `${library.department_code || "-"} / ${library.code || "-"}`;
-    button.appendChild(detail);
-
-    button.addEventListener("click", () => {
-      glossaryState.selectedLibraryId = library.id;
-      glossaryState.libraryMode = "edit";
-      glossaryState.selectedCn = null;
-      glossaryState.selectedEntryId = null;
-      glossaryState.mode = "new";
-      glossaryState.pendingSystemImport = null;
-      resetImportPreviewLimits();
-      loadGlossaryLibrary(library.id);
-    });
-    libraryListEl.appendChild(button);
+    const option = document.createElement("option");
+    option.value = String(library.id);
+    const status = library.is_active ? "active" : "inactive";
+    const defaultLabel = library.is_default ? " / default" : "";
+    option.textContent = (library.name || "未命名詞彙庫") + " - " + (library.department_code || "-") + " (" + status + defaultLabel + ")";
+    option.selected = Number(library.id) === Number(glossaryState.selectedLibraryId);
+    libraryListEl.appendChild(option);
   });
+}
+
+function selectLibrary(libraryId) {
+  if (!libraryId) {
+    startNewLibrary();
+    return;
+  }
+  glossaryState.selectedLibraryId = libraryId;
+  glossaryState.libraryMode = "edit";
+  glossaryState.selectedCn = null;
+  glossaryState.selectedEntryId = null;
+  glossaryState.mode = "new";
+  glossaryState.pendingSystemImport = null;
+  resetImportPreviewLimits();
+  loadGlossaryLibrary(libraryId);
 }
 
 function renderLibraryPanel() {
@@ -441,6 +428,8 @@ function renderLibraryPanel() {
   if (!libraryDetailTitleEl || !libraryDetailBadgeEl || !libraryCodeEl || !libraryNameEl || !libraryDepartmentCodeEl || !saveLibraryBtn || !activateLibraryBtn || !disableLibraryBtn) return;
 
   if (isNew) {
+    if (systemImportTargetEl) systemImportTargetEl.textContent = "尚未選取詞彙庫";
+    if (glossaryCurrentLibraryTitleEl) glossaryCurrentLibraryTitleEl.textContent = "尚未選取詞彙庫";
     libraryDetailTitleEl.textContent = "新增詞彙庫";
     libraryDetailBadgeEl.textContent = "new";
     libraryDetailBadgeEl.className = "job-badge job-badge--general";
@@ -456,6 +445,8 @@ function renderLibraryPanel() {
     return;
   }
 
+  if (systemImportTargetEl) systemImportTargetEl.textContent = library.name || "目前選取的部門詞彙庫";
+  if (glossaryCurrentLibraryTitleEl) glossaryCurrentLibraryTitleEl.textContent = library.name || "目前選取的部門詞彙庫";
   libraryDetailTitleEl.textContent = library.name || "詞彙庫";
   libraryDetailBadgeEl.textContent = library.is_active ? "active" : "inactive";
   libraryDetailBadgeEl.className = `job-badge ${library.is_active ? "job-badge--form" : ""}`;
@@ -472,6 +463,7 @@ function renderLibraryPanel() {
 
 function startNewLibrary() {
   if (!requireGlossaryWrite(setLibraryStatus)) return;
+  activateGlossaryTab("settings");
   glossaryState.selectedLibraryId = null;
   glossaryState.libraryMode = "new";
   renderLibraryList();
@@ -797,14 +789,15 @@ async function loadGlossaryLibrary(libraryId = glossaryState.selectedLibraryId) 
 }
 
 
-function startNewGlossaryEntry() {
+function startNewGlossaryEntry(options = {}) {
+  const shouldFocus = options.focus !== false;
   if (!requireGlossaryWrite()) return;
   glossaryState.selectedCn = null;
   glossaryState.selectedEntryId = null;
   glossaryState.mode = "new";
   renderGlossaryList();
   renderDetailPanel();
-  detailCnEl?.focus();
+  if (shouldFocus) detailCnEl?.focus();
 }
 
 function startOverrideEntry() {
@@ -987,6 +980,7 @@ saveGlossaryBtn?.addEventListener("click", saveCurrentGlossary);
 deleteGlossaryBtn?.addEventListener("click", deleteCurrentGlossary);
 overrideGlossaryBtn?.addEventListener("click", startOverrideEntry);
 libraryNewBtn?.addEventListener("click", startNewLibrary);
+libraryListEl?.addEventListener("change", () => selectLibrary(libraryListEl.value));
 saveLibraryBtn?.addEventListener("click", saveCurrentLibrary);
 activateLibraryBtn?.addEventListener("click", activateCurrentLibrary);
 disableLibraryBtn?.addEventListener("click", disableCurrentLibrary);
@@ -994,6 +988,10 @@ previewSystemGlossaryBtn?.addEventListener("click", previewSystemGlossaryImport)
 applySystemGlossaryBtn?.addEventListener("click", applySystemGlossaryImport);
 detailCnEl?.addEventListener("input", syncGlossaryActionState);
 detailEnEl?.addEventListener("input", syncGlossaryActionState);
+glossaryTabEls.forEach((tab) => {
+  tab.addEventListener("click", () => activateGlossaryTab(tab.dataset.glossaryTab));
+});
 
-startNewGlossaryEntry();
+activateGlossaryTab("entries");
+startNewGlossaryEntry({ focus: false });
 loadGlossaryLibrary();
