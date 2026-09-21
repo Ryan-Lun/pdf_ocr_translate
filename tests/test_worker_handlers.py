@@ -369,6 +369,13 @@ def test_word_handler_defaults_legacy_job_to_cloud_provider(
     assert captured["post_edit_model"] == "cloud-post-edit-model"
     assert "local_model_base_url" not in captured
     assert "local_model_api_key" not in captured
+    for local_option in (
+        "header_footer_exclude_patterns",
+        "header_footer_font_size_pt",
+        "excluded_table_indices",
+        "header_footer_fixed_terms",
+    ):
+        assert local_option not in captured
 
 
 def test_word_handler_dispatches_local_provider_with_server_managed_settings(
@@ -429,6 +436,23 @@ def test_word_handler_dispatches_local_provider_with_server_managed_settings(
     assert captured["request_extra_body"] == {
         "chat_template_kwargs": {"enable_thinking": True}
     }
+
+
+    assert captured["header_footer_layout_mode"] == "bilingual_below"
+    assert captured["header_footer_exclude_patterns"] == (
+        "品質作業指導書",
+        "生產作業指導書",
+        "聯合材料規範",
+        "聯合製程規範",
+        "聯合品質規範",
+        "聯合測試規範",
+    )
+    assert captured["header_footer_font_size_pt"] == 10
+    assert captured["excluded_table_indices"] == (1,)
+    assert captured["header_footer_fixed_terms"] == (
+        ("號碼", "No."),
+        ("頁次", "Page"),
+    )
 
 
 def test_word_handler_local_provider_defaults_disable_thinking(

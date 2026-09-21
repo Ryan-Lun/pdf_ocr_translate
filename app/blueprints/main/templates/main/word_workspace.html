@@ -53,7 +53,7 @@
             </label>
             <label>
               <span>翻譯服務</span>
-              <select name="translation_provider">
+              <select id="wordTranslationProvider" name="translation_provider">
                 <option value="cloud" selected>雲端模型</option>
                 {% if local_word_provider_enabled %}
                 <option value="local">地端模型（品質文件專用）</option>
@@ -72,13 +72,13 @@
             <div class="field-stack">
               <label>
                 <span>翻譯輸出版面</span>
-                <select name="layout_mode">
+                <select id="wordLayoutMode" name="layout_mode">
                   <option value="replace_original" selected>譯文取代原文</option>
                   <option value="bilingual_below">保留原文，譯文置於下方</option>
                 </select>
               </label>
               <label class="checkbox-row">
-                <input type="checkbox" name="translate_tables" value="false" />
+                <input id="wordTranslateTables" type="checkbox" name="translate_tables" value="false" />
                 <span>表格內容不翻譯</span>
               </label>
             </div>
@@ -149,11 +149,24 @@
       const wordJobsSearch = document.getElementById("wordJobsSearch");
       const wordJobsStatusFilter = document.getElementById("wordJobsStatusFilter");
       const wordJobsPagination = document.getElementById("wordJobsPagination");
+      const wordTranslationProvider = document.getElementById("wordTranslationProvider");
+      const wordLayoutMode = document.getElementById("wordLayoutMode");
+      const wordTranslateTables = document.getElementById("wordTranslateTables");
       const selectedWordJobs = new Set();
       let allWordJobs = [];
       const wordJobsPageState = { page: 1, pageSize: 3 };
       let wordJobsLoading = false;
       let wordJobsSource = null;
+
+      function syncLocalProviderControls() {
+        const isLocalProvider = wordTranslationProvider?.value === "local";
+        if (isLocalProvider) {
+          wordLayoutMode.value = "bilingual_below";
+          wordTranslateTables.checked = true;
+        }
+        wordLayoutMode.disabled = isLocalProvider;
+        wordTranslateTables.disabled = isLocalProvider;
+      }
 
       function formatDate(ts) {
         if (!ts) return "Unknown";
@@ -480,6 +493,8 @@
         };
       }
 
+      wordTranslationProvider?.addEventListener("change", syncLocalProviderControls);
+      syncLocalProviderControls();
       wordJobsRefresh.addEventListener("click", loadWordJobs);
       wordJobsSelectAll.addEventListener("click", () => setAllWordSelections(true));
       wordJobsSelectNone.addEventListener("click", () => setAllWordSelections(false));

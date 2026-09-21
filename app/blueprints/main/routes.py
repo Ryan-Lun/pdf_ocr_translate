@@ -509,6 +509,9 @@ def upload_word_workspace() -> str:
     system_prompt = request.form.get("system_prompt", "").strip()
     layout_mode = word_translate.normalize_word_layout_mode(request.form.get("layout_mode"))
     translate_tables = word_translate.normalize_translate_tables(request.form.get("translate_tables"))
+    if translation_provider == translation_providers.LOCAL_TRANSLATION_PROVIDER:
+        layout_mode = word_translate.WORD_LAYOUT_BILINGUAL_BELOW
+        translate_tables = False
     creator_name = _current_creator_name()
     owner_work_id = _current_owner_work_id()
     _enforce_submit_quota(creator_name)

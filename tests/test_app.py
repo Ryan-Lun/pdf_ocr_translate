@@ -114,6 +114,11 @@ def test_word_workspace_shows_local_provider_only_when_enabled(app, client):
     assert '<option value="local">地端模型（品質文件專用）</option>' in html
 
 
+    assert 'id="wordTranslationProvider"' in html
+    assert 'id="wordLayoutMode"' in html
+    assert 'id="wordTranslateTables"' in html
+    assert "syncLocalProviderControls" in html
+
 def test_upload_workspaces_reject_missing_department_glossary_selection(client, tmp_path, monkeypatch):
     _clear_department_glossary()
     _create_department_glossary_library()
@@ -2384,6 +2389,8 @@ def test_upload_word_workspace_uses_one_local_provider_snapshot_for_all_files(
             "source_lang": "auto",
             "target_lang": "en",
             "translation_provider": "local",
+            "layout_mode": "replace_original",
+            "translate_tables": "true",
             "docx": [
                 (io.BytesIO(b"first"), "first.docx"),
                 (io.BytesIO(b"second"), "second.docx"),
@@ -2398,6 +2405,8 @@ def test_upload_word_workspace_uses_one_local_provider_snapshot_for_all_files(
         (row["translation_provider"], row["translation_model"])
         for row in captured
     } == {("local", "quality-local-model")}
+    assert {row["layout_mode"] for row in captured} == {"bilingual_below"}
+    assert {row["translate_tables"] for row in captured} == {False}
 
 
 def test_upload_word_workspace_defaults_provider_to_cloud(

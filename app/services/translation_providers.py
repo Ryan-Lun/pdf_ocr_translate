@@ -8,6 +8,21 @@ _SUPPORTED_TRANSLATION_PROVIDERS = {
     LOCAL_TRANSLATION_PROVIDER,
 }
 
+LOCAL_WORD_HEADER_FOOTER_EXCLUDE_PATTERNS = (
+    "品質作業指導書",
+    "生產作業指導書",
+    "聯合材料規範",
+    "聯合製程規範",
+    "聯合品質規範",
+    "聯合測試規範",
+)
+LOCAL_WORD_HEADER_FOOTER_FONT_SIZE_PT = 10.0
+LOCAL_WORD_EXCLUDED_TABLE_INDICES = (1,)
+LOCAL_WORD_HEADER_FOOTER_FIXED_TERMS = (
+    ("號碼", "No."),
+    ("頁次", "Page"),
+)
+
 
 def normalize_translation_provider(value: object) -> str:
     provider = str(value or "").strip().lower() or CLOUD_TRANSLATION_PROVIDER

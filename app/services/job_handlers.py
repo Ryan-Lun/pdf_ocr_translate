@@ -142,6 +142,19 @@ class WordTranslateJobHandler:
                 ),
                 "request_concurrency_limit": state.LOCAL_WORD_REQUEST_CONCURRENCY,
                 "requests_per_minute": state.LOCAL_WORD_REQUESTS_PER_MINUTE,
+                "header_footer_layout_mode": word_translate.WORD_LAYOUT_BILINGUAL_BELOW,
+                "header_footer_exclude_patterns": (
+                    translation_providers.LOCAL_WORD_HEADER_FOOTER_EXCLUDE_PATTERNS
+                ),
+                "header_footer_font_size_pt": (
+                    translation_providers.LOCAL_WORD_HEADER_FOOTER_FONT_SIZE_PT
+                ),
+                "excluded_table_indices": (
+                    translation_providers.LOCAL_WORD_EXCLUDED_TABLE_INDICES
+                ),
+                "header_footer_fixed_terms": (
+                    translation_providers.LOCAL_WORD_HEADER_FOOTER_FIXED_TERMS
+                ),
             }
         else:
             translation_model = str(
