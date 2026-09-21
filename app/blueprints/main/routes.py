@@ -511,7 +511,9 @@ def upload_word_workspace() -> str:
     translate_tables = word_translate.normalize_translate_tables(request.form.get("translate_tables"))
     if translation_provider == translation_providers.LOCAL_TRANSLATION_PROVIDER:
         layout_mode = word_translate.WORD_LAYOUT_BILINGUAL_BELOW
-        translate_tables = False
+        # Local quality-document mode translates tables, while the provider-specific
+        # writeback rule excludes the first body top-level table.
+        translate_tables = True
     creator_name = _current_creator_name()
     owner_work_id = _current_owner_work_id()
     _enforce_submit_quota(creator_name)

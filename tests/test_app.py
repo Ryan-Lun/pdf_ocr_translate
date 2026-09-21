@@ -2407,7 +2407,7 @@ def test_upload_word_workspace_uses_one_local_provider_snapshot_for_all_files(
         for row in captured
     } == {("local", "quality-local-model")}
     assert {row["layout_mode"] for row in captured} == {"bilingual_below"}
-    assert {row["translate_tables"] for row in captured} == {False}
+    assert {row["translate_tables"] for row in captured} == {True}
 
 
 def test_upload_word_workspace_defaults_provider_to_cloud(
