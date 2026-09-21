@@ -28,6 +28,9 @@ SAFE_DETAIL_FIELDS = (
     "external_service",
     "deployment",
     "failure_kind",
+    "provider",
+    "model",
+    "component",
 )
 
 

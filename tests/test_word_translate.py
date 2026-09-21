@@ -4975,3 +4975,111 @@ def test_word_translation_lifecycle_records_glossary_validation(tmp_path):
             }
         ],
     }
+
+
+
+def test_local_word_failure_is_fail_closed_and_records_safe_system_error(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    from app.services import alerts
+
+    job_id = uuid.uuid4().hex
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    source_path = job_dir / "source.docx"
+    output_path = job_dir / "output" / "output.docx"
+    docx.Document().save(source_path)
+    jobs.create_job_state(
+        job_dir,
+        job_type="word_translate",
+        stage="queued",
+        job_name="local-failure",
+        target_lang="en",
+        payload={"target_lang": "en", "translation_provider": "local"},
+        meta={
+            "job_name": "local-failure",
+            "job_type": "word_translate",
+            "target_lang": "en",
+            "source_filename": "source.docx",
+        },
+    )
+    app.config.update(
+        TEAMS_ALERT_ENABLED=True,
+        TEAMS_ALERT_WEBHOOK_URL="https://teams.example/webhook",
+        SYSTEM_ERROR_DB_MIN_LEVEL="ERROR",
+    )
+    alert_calls = []
+
+    def fake_post(url, *, json, timeout):
+        alert_calls.append({"url": url, "json": json, "timeout": timeout})
+        return type("Response", (), {"status_code": 204, "text": ""})()
+
+    monkeypatch.setattr(alerts.requests, "post", fake_post)
+    monkeypatch.setattr(
+        "app.services.word_translate._local_model_async_client_factory",
+        lambda **kwargs: (lambda: object()),
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: pytest.fail("local Word failure must not call the cloud client"),
+    )
+
+    class _FailingTranslator:
+        def __init__(self, **kwargs):
+            pass
+
+        async def process_translation(self, **kwargs):
+            if False:
+                yield 0.0, 0.0
+            raise TimeoutError(
+                "POST http://local.example/v1 key=secret raw source=來源文字"
+            )
+
+    monkeypatch.setattr(
+        "app.services.word_translate.EnhancedWordTranslator",
+        _FailingTranslator,
+    )
+
+    run_word_translate_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        source_path=source_path,
+        processing_source_path=source_path,
+        output_path=output_path,
+        source_lang="zh",
+        target_lang="en",
+        retain_terms=[],
+        translation_model="quality-local-model",
+        post_edit_model="quality-local-model",
+        local_model_base_url="http://local.example/v1",
+        local_model_api_key="secret-local-key",
+    )
+
+    record = job_store.get_job(job_id)
+    assert record is not None
+    assert record.status == "failed"
+    assert record.error_message == "Local Word translation failed (timeout)."
+    with app.app_context():
+        with job_store.session_scope() as session:
+            rows = session.query(job_store.SystemErrorLogRecord).filter_by(job_id=job_id).all()
+    assert len(rows) == 1
+    detail = json.loads(rows[0].detail_json)
+    assert detail == {
+        "provider": "local",
+        "model": "quality-local-model",
+        "failure_kind": "timeout",
+        "job_id": job_id,
+        "component": "word_translate.local",
+    }
+    assert len(alert_calls) == 1
+    alert_payload = alert_calls[0]["json"]
+    assert alert_payload["provider"] == "local"
+    assert alert_payload["model"] == "quality-local-model"
+    assert alert_payload["failure_kind"] == "timeout"
+    assert alert_payload["component"] == "word_translate.local"
+    serialized = json.dumps({"detail": detail, "alert": alert_payload}, ensure_ascii=False)
+    assert "local.example" not in serialized
+    assert "secret-local-key" not in serialized
+    assert "來源文字" not in serialized

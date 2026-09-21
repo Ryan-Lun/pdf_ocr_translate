@@ -27,6 +27,7 @@ from werkzeug.utils import secure_filename
 
 from . import (
     audit_service,
+    external_failures,
     glossary,
     jobs,
     openai_config,
@@ -49,6 +50,7 @@ WORD_FINAL_TRANSLATIONS_ARTIFACT = "word_final_translations.json"
 WORD_WRITEBACK_MAP_ARTIFACT = "word_writeback_map.json"
 WORD_TRANSLATION_LIFECYCLE_ARTIFACT = "word_translation_lifecycle.json"
 WORD_BATCH_RUNNER_WORKER_ID = "word_batch_runner"
+WORD_LOCAL_FAILURE_COMPONENT = "word_translate.local"
 _WORD_STALE_ARTIFACTS = (
     WORD_STAGE_1_TRANSLATIONS_ARTIFACT,
     WORD_FINAL_TRANSLATIONS_ARTIFACT,
@@ -3067,6 +3069,22 @@ def run_word_translate_job(
     )
 
 
+def _local_word_failure_detail(
+    *,
+    job_id: str,
+    model: str | None,
+    exc: Exception,
+) -> dict[str, str]:
+    """Return the only operational fields safe to persist for local failures."""
+    return {
+        "provider": translation_providers.LOCAL_TRANSLATION_PROVIDER,
+        "model": str(model or "").strip() or "unknown",
+        "failure_kind": external_failures.classify_failure_kind(exc),
+        "job_id": job_id,
+        "component": WORD_LOCAL_FAILURE_COMPONENT,
+    }
+
+
 def _run_word_job(
     job_id: str,
     job_dir: Path,
@@ -3266,19 +3284,44 @@ def _run_word_job(
                 extra_meta={"translate_completed_at": time.time()},
             )
             return
-        logger.exception("Word translation failed job_id=%s error=%s", job_id, exc)
-        audit_service.record_system_error(
-            "word_translate",
-            "Word translation failed",
-            exc=exc,
-            job_id=job_id,
-            detail={"job_dir": str(job_dir), "source_path": str(source_path)},
-        )
+        is_local_provider = bool(local_model_base_url or local_model_api_key)
+        if is_local_provider:
+            failure_detail = _local_word_failure_detail(
+                job_id=job_id,
+                model=translation_model or post_edit_model,
+                exc=exc,
+            )
+            logger.error(
+                "Local Word translation failed job_id=%s model=%s failure_kind=%s",
+                job_id,
+                failure_detail["model"],
+                failure_detail["failure_kind"],
+            )
+            audit_service.record_system_error(
+                WORD_LOCAL_FAILURE_COMPONENT,
+                "Local Word translation failed",
+                job_id=job_id,
+                detail=failure_detail,
+            )
+            failure_message = (
+                "Local Word translation failed "
+                f"({failure_detail['failure_kind']})."
+            )
+        else:
+            logger.exception("Word translation failed job_id=%s error=%s", job_id, exc)
+            audit_service.record_system_error(
+                "word_translate",
+                "Word translation failed",
+                exc=exc,
+                job_id=job_id,
+                detail={"job_dir": str(job_dir), "source_path": str(source_path)},
+            )
+            failure_message = str(exc)
         now_ts = time.time()
         jobs.fail_job(
             job_dir,
             stage="failed",
-            error_message=str(exc),
+            error_message=failure_message,
             completed_at=now_ts,
             extra_meta={"translate_completed_at": now_ts},
         )
