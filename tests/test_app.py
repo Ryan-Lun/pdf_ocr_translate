@@ -118,6 +118,7 @@ def test_word_workspace_shows_local_provider_only_when_enabled(app, client):
     assert 'id="wordLayoutMode"' in html
     assert 'id="wordTranslateTables"' in html
     assert "syncLocalProviderControls" in html
+    assert "job.recent_warnings" in html
 
 def test_upload_workspaces_reject_missing_department_glossary_selection(client, tmp_path, monkeypatch):
     _clear_department_glossary()

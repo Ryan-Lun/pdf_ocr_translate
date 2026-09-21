@@ -59,6 +59,7 @@ _WORD_STALE_ARTIFACTS = (
     "tm_matches.json",
     "tm_references.json",
 )
+_SAFE_STAGE_2_FALLBACK_REASON_RE = re.compile(r"post_edit_error:[A-Za-z_][A-Za-z0-9_]{0,79}")
 _CJK_TEXT_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u309F\u30A0-\u30FF]")
 _CJK_BRACKET_SPAN_RE = re.compile(r"【([^】]+)】")
 _DOCUMENT_CODE_RE = re.compile(r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b")
@@ -514,6 +515,64 @@ def _write_word_translation_lifecycle_artifact(
             "discarded_items": discarded_rows,
         },
     )
+
+
+def _word_stage_2_fallback_metadata(
+    job_dir: Path,
+    *,
+    translation_provider: object,
+    translation_model: object,
+) -> dict[str, object]:
+    provider = translation_providers.normalize_translation_provider(translation_provider)
+    if provider != translation_providers.LOCAL_TRANSLATION_PROVIDER:
+        return {}
+
+    try:
+        payload = json.loads(
+            (job_dir / WORD_TRANSLATION_LIFECYCLE_ARTIFACT).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
+    fallback_reasons: set[str] = set()
+    fallback_used = False
+    for item in payload.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        stage_2 = item.get("stage_2")
+        stage_2 = stage_2 if isinstance(stage_2, dict) else {}
+        if (
+            item.get("final_source") != "stage_2_fallback_to_stage_1"
+            and not stage_2.get("used_fallback")
+        ):
+            continue
+        fallback_used = True
+        reason = str(item.get("fallback_reason") or stage_2.get("fallback_reason") or "")
+        if _SAFE_STAGE_2_FALLBACK_REASON_RE.fullmatch(reason):
+            fallback_reasons.add(reason)
+
+    if not fallback_used:
+        return {}
+    if len(fallback_reasons) == 1:
+        fallback_reason = next(iter(fallback_reasons))
+    elif fallback_reasons:
+        fallback_reason = "post_edit_error:MultipleErrors"
+    else:
+        fallback_reason = "post_edit_error:UnknownError"
+
+    model = str(translation_model or "").strip()
+    unsafe_model = model.lower()
+    if not model or "://" in model or "api_key" in unsafe_model or model.startswith("sk-"):
+        model = "unavailable"
+    return {
+        "translation_provider": provider,
+        "translation_model": model,
+        "stage_2_fallback_used": True,
+        "stage_2_fallback_reason": fallback_reason,
+        "translation_final_source": "stage_2_fallback_to_stage_1",
+    }
 
 
 def normalize_word_layout_mode(value: object) -> str:
@@ -2168,12 +2227,18 @@ class EnhancedWordTranslator:
                 request_extra_body=self.request_extra_body,
             )
         except Exception as exc:
-            logger.warning("Word Stage 2 post-edit failed, using Stage 1 drafts error=%s", exc)
+            fallback_reason = f"post_edit_error:{exc.__class__.__name__}"
+            logger.warning(
+                "Word Stage 2 post-edit failed, using Stage 1 drafts error_type=%s",
+                exc.__class__.__name__,
+            )
             if warning_callback is not None:
-                warning_callback(f"Word Stage 2 後編輯失敗，沿用 Stage 1 譯文：{exc}")
+                warning_callback(
+                    f"Word Stage 2 後編輯失敗，沿用 Stage 1 譯文（{fallback_reason}）。"
+                )
             fallback_result = translation_post_edit.build_fallback_result(
                 post_edit_items,
-                reason=f"post_edit_error:{exc.__class__.__name__}",
+                reason=fallback_reason,
             )
             if post_edit_artifact_collector is not None:
                 post_edit_artifact_collector.append((tuple(post_edit_items), fallback_result))
@@ -2190,7 +2255,7 @@ class EnhancedWordTranslator:
                 for source_text, draft_text in translations.items():
                     final_provenance[source_text] = {
                         "final_source": "stage_2_fallback_to_stage_1",
-                        "fallback_reason": f"post_edit_error:{exc.__class__.__name__}",
+                        "fallback_reason": fallback_reason,
                         "post_process_actions": [
                             *list(final_provenance.get(source_text, {}).get("post_process_actions") or []),
                             *_translation_repair_actions(source_text, draft_text, repaired[source_text]),
@@ -3051,6 +3116,15 @@ def _run_word_job(
             jobs.load_job_meta(job_dir),
             jobs.job_store.deserialize_payload(jobs.job_store.get_job(job_id)),
         )
+        job_meta = jobs.load_job_meta(job_dir) or {}
+        job_payload = jobs.job_store.deserialize_payload(jobs.job_store.get_job(job_id))
+        translation_provider = (
+            translation_providers.LOCAL_TRANSLATION_PROVIDER
+            if local_model_base_url or local_model_api_key
+            else job_payload.get("translation_provider")
+            or job_meta.get("translation_provider")
+            or translation_providers.CLOUD_TRANSLATION_PROVIDER
+        )
         glossary.load_execution_department_glossary(
             selected_library_id,
             source_lang=source_lang,
@@ -3081,14 +3155,24 @@ def _run_word_job(
         jobs.set_job_state(job_dir, status="running", stage="translate")
 
         def record_warning(message: str) -> None:
+            if re.fullmatch(
+                (
+                    r"Word Stage 2 後編輯失敗，沿用 Stage 1 譯文"
+                    r"（post_edit_error:[A-Za-z_][A-Za-z0-9_]{0,79}）。"
+                ),
+                message,
+            ):
+                jobs.record_job_warning(
+                    job_dir,
+                    stage="translate",
+                    message=message,
+                )
+                return
             jobs.set_job_state(
                 job_dir,
                 status="running",
                 stage="translate",
-                extra_meta={
-                    "last_warning": message,
-                    "last_warning_at": time.time(),
-                },
+                extra_meta={"last_warning": message, "last_warning_at": time.time()},
             )
 
         async def _runner() -> float:
@@ -3123,6 +3207,15 @@ def _run_word_job(
             return last_progress
 
         last_progress = asyncio.run(_runner())
+        fallback_metadata = _word_stage_2_fallback_metadata(
+            job_dir,
+            translation_provider=translation_provider,
+            translation_model=(
+                translation_model
+                or job_payload.get("translation_model")
+                or job_meta.get("translation_model")
+            ),
+        )
         glossary_context_meta = glossary.department_glossary_context_config_from_mapping(
             jobs.load_job_meta(job_dir) or {}
         )
@@ -3158,6 +3251,7 @@ def _run_word_job(
             completed_at=now_done,
             extra_meta={
                 "translate_completed_at": now_done,
+                **fallback_metadata,
             },
         )
         jobs.job_store.register_artifact(job_id, "docx", "output/output.docx")

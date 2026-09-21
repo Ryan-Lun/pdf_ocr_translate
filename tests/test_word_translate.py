@@ -121,6 +121,7 @@ async def _consume_translation(
     excluded_table_indices: tuple[int, ...] = (),
     header_footer_fixed_terms: tuple[tuple[str, str], ...] = (),
     department_glossary_library_id: object = None,
+    warning_callback=None,
 ) -> None:
     async for _progress, _unused_quality in translator.process_translation(
         source_path=source_path,
@@ -138,6 +139,7 @@ async def _consume_translation(
         excluded_table_indices=excluded_table_indices,
         header_footer_fixed_terms=header_footer_fixed_terms,
         department_glossary_library_id=department_glossary_library_id,
+        warning_callback=warning_callback,
     ):
         pass
 
@@ -1448,7 +1450,7 @@ def test_word_translation_stage_2_error_writes_fallback_artifact(tmp_path, monke
     )
 
     async def fail_post_edit(items, **kwargs):
-        raise TimeoutError("post edit timeout")
+        raise TimeoutError("endpoint=http://local.example api_key=secret source=來源文字 draft=Stage 1 draft.")
 
     monkeypatch.setattr(
         "app.services.word_translate.translation_post_edit.post_edit_texts_batch",
@@ -1462,6 +1464,7 @@ def test_word_translation_stage_2_error_writes_fallback_artifact(tmp_path, monke
     source_doc.save(source_path)
 
     translator = EnhancedWordTranslator()
+    warnings: list[str] = []
     asyncio.run(
         _consume_translation(
             translator,
@@ -1469,6 +1472,7 @@ def test_word_translation_stage_2_error_writes_fallback_artifact(tmp_path, monke
             output_path,
             source_language="zh",
             debug_job_dir=tmp_path,
+            warning_callback=warnings.append,
         )
     )
 
@@ -1477,6 +1481,14 @@ def test_word_translation_stage_2_error_writes_fallback_artifact(tmp_path, monke
     assert artifact["items"][0]["final_text"] == "Stage 1 draft."
     assert artifact["items"][0]["used_fallback"] is True
     assert artifact["items"][0]["fallback_reason"] == "post_edit_error:TimeoutError"
+    assert warnings == [
+        "Word Stage 2 後編輯失敗，沿用 Stage 1 譯文（post_edit_error:TimeoutError）。"
+    ]
+    warning_payload = warnings[0].lower()
+    assert "endpoint" not in warning_payload
+    assert "api_key" not in warning_payload
+    assert "來源文字" not in warnings[0]
+    assert "stage 1 draft" not in warning_payload
 
 
 @pytest.mark.parametrize(
@@ -3519,6 +3531,139 @@ def test_run_word_translate_job_keeps_stage_models_separate(
 
     assert init_kwargs["translation_model"] == "cloud-word-model"
     assert init_kwargs["post_edit_model"] == "cloud-post-edit-model"
+
+
+def test_run_word_translate_job_completes_local_stage_2_fallback_with_safe_metadata(
+    app,
+    tmp_path,
+    monkeypatch,
+):
+    job_id = uuid.uuid4().hex
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    source_path = job_dir / "source.docx"
+    output_path = job_dir / "output" / "output.docx"
+    source_doc = docx.Document()
+    source_doc.add_paragraph("來源文字")
+    source_doc.save(source_path)
+    jobs.create_job_state(
+        job_dir,
+        job_type="word_translate",
+        stage="queued",
+        job_name="local-stage-2-fallback",
+        target_lang="en",
+        payload={
+            "target_lang": "en",
+            "translation_provider": "local",
+            "translation_model": "quality-local-model",
+        },
+        meta={
+            "job_name": "local-stage-2-fallback",
+            "job_type": "word_translate",
+            "target_lang": "en",
+            "source_filename": "source.docx",
+            "translation_provider": "local",
+            "translation_model": "quality-local-model",
+        },
+    )
+
+    class _FallbackTranslator:
+        def __init__(self, **kwargs):
+            pass
+
+        async def process_translation(self, **kwargs):
+            kwargs["warning_callback"](
+                "Word 批次翻譯失敗，改用逐段翻譯：endpoint=http://local.example api_key=secret-local-key"
+            )
+            kwargs["warning_callback"](
+                "Word Stage 2 後編輯失敗，沿用 Stage 1 譯文（post_edit_error:TimeoutError）。"
+            )
+            kwargs["output_path"].parent.mkdir(parents=True, exist_ok=True)
+            docx.Document().save(kwargs["output_path"])
+            (kwargs["debug_job_dir"] / "word_translation_lifecycle.json").write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": "item_0001",
+                                "source_text": "來源文字",
+                                "stage_1_translation": "Stage 1 draft.",
+                                "stage_2": {
+                                    "result": None,
+                                    "used_fallback": True,
+                                    "fallback_reason": "post_edit_error:TimeoutError",
+                                },
+                                "final_translation": "Stage 1 draft.",
+                                "final_source": "stage_2_fallback_to_stage_1",
+                                "fallback_reason": "post_edit_error:TimeoutError",
+                            }
+                        ],
+                        "discarded_items": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            yield 100.0, 0.0
+
+    monkeypatch.setattr(
+        "app.services.word_translate.EnhancedWordTranslator",
+        _FallbackTranslator,
+    )
+    monkeypatch.setattr(
+        "app.services.word_translate.openai_config.create_async_client",
+        lambda: pytest.fail("local Stage 2 fallback must not call the cloud client"),
+    )
+
+    run_word_translate_job(
+        job_id=job_id,
+        job_dir=job_dir,
+        source_path=source_path,
+        processing_source_path=source_path,
+        output_path=output_path,
+        source_lang="zh",
+        target_lang="en",
+        retain_terms=[],
+        translation_model="quality-local-model",
+        post_edit_model="quality-local-model",
+        local_model_base_url="http://local.example/v1",
+        local_model_api_key="secret-local-key",
+    )
+
+    record = job_store.get_job(job_id)
+    payload = job_store.deserialize_payload(record)
+    meta = jobs.load_job_meta(job_dir)
+    assert record is not None
+    assert record.status == "completed"
+    assert output_path.exists()
+    assert meta is not None
+    expected_metadata = {
+        "translation_provider": "local",
+        "translation_model": "quality-local-model",
+        "stage_2_fallback_used": True,
+        "stage_2_fallback_reason": "post_edit_error:TimeoutError",
+        "translation_final_source": "stage_2_fallback_to_stage_1",
+    }
+    assert {key: payload.get(key) for key in expected_metadata} == expected_metadata
+    assert {key: meta.get(key) for key in expected_metadata} == expected_metadata
+
+    with app.test_request_context():
+        listed_jobs = jobs.build_jobs_list(job_type="word_translate", include_all=True)
+    listed_job = next(item for item in listed_jobs if item["job_id"] == job_id)
+    assert listed_job["last_warning"] is None
+    assert [warning["message"] for warning in listed_job["recent_warnings"]] == [
+        "Word Stage 2 後編輯失敗，沿用 Stage 1 譯文（post_edit_error:TimeoutError）。"
+    ]
+
+    operational_record = json.dumps(
+        {**expected_metadata, "recent_warnings": listed_job["recent_warnings"]},
+        ensure_ascii=False,
+    ).lower()
+    assert "http://local.example" not in operational_record
+    assert "secret-local-key" not in operational_record
+    assert "來源文字" not in operational_record
+    assert "stage 1 draft" not in operational_record
+
 
 
 def test_run_word_translate_job_does_not_write_avg_quality_metadata(app, tmp_path, monkeypatch):
